@@ -3,19 +3,24 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Planificación Mano de Obra — Personal (prueba Supabase)</title>
+  <link rel="icon" href="data:,">
+  <title>Planificación Mano de Obra</title>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; background: #F7F6F2; color: #2C2C2A; margin: 0; padding: 24px; }
-    .wrap { max-width: 880px; margin: 0 auto; }
+    .wrap { max-width: 940px; margin: 0 auto; }
     h1 { font-size: 22px; font-weight: 600; margin: 0 0 2px; }
-    .sub { font-size: 13px; color: #888780; margin: 0 0 18px; }
-    .estado { font-size: 12.5px; padding: 8px 12px; border-radius: 8px; margin-bottom: 16px; }
+    .sub { font-size: 13px; color: #888780; margin: 0 0 16px; }
+    .tabs { display: flex; gap: 4px; border-bottom: 1px solid #E6E4DC; margin-bottom: 0; }
+    .tab { background: transparent; border: 1px solid transparent; border-bottom: none; border-radius: 10px 10px 0 0; padding: 9px 18px; font-size: 14px; color: #888780; cursor: pointer; margin-bottom: -1px; }
+    .tab.active { background: #fff; border-color: #E6E4DC; color: #2C2C2A; font-weight: 600; }
+    .panel { background: #fff; border: 1px solid #E6E4DC; border-top: none; border-radius: 0 0 14px 14px; padding: 18px; }
+    .estado { font-size: 12.5px; padding: 8px 12px; border-radius: 8px; margin-bottom: 14px; }
     .ok { background: #E1F5EE; color: #0F6E56; }
     .err { background: #FCEBEB; color: #A32D2D; }
     .cargando { background: #F1EFE8; color: #5F5E5A; }
-    table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #E6E4DC; border-radius: 12px; overflow: hidden; font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; border: 1px solid #E6E4DC; border-radius: 12px; overflow: hidden; font-size: 13px; }
     thead tr { background: #F1EFE8; }
     th { text-align: left; padding: 9px 12px; font-weight: 600; color: #5F5E5A; font-size: 12px; }
     td { padding: 6px 10px; border-top: 1px solid #F1EFE8; }
@@ -25,86 +30,116 @@
     .btn-add { background: transparent; border: 1px dashed #E6E4DC; color: #185FA5; padding: 8px 14px; border-radius: 10px; font-size: 13px; cursor: pointer; margin-top: 12px; }
     .btn-del { border: none; background: transparent; color: #A8A69E; cursor: pointer; font-size: 16px; }
     .row-actions { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+    .card { border: 1px solid #E6E4DC; border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+    .card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+    .lbl { font-size: 11.5px; color: #888780; }
+    .lbl input, .lbl select { margin-top: 3px; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Personal y tarifas</h1>
-    <p class="sub">Etapa 1 — Prueba de conexión a Supabase. Lo que cargues acá se guarda de verdad en la base.</p>
-    <div id="estado" class="estado cargando">Conectando con Supabase…</div>
-    <div id="contenido"></div>
+    <h1>Planificación de mano de obra</h1>
+    <p class="sub">Administración y planificación del personal de taller · conectado a Supabase</p>
+    <div class="tabs">
+      <button class="tab active" id="tab-personal" onclick="cambiarTab('personal')">Personal y tarifas</button>
+      <button class="tab" id="tab-proyectos" onclick="cambiarTab('proyectos')">Proyectos</button>
+    </div>
+    <div class="panel">
+      <div id="estado" class="estado cargando">Conectando…</div>
+      <div id="contenido"></div>
+    </div>
   </div>
 
   <script>
-    // --- Credenciales de tu proyecto Supabase ---
     const SUPABASE_URL = "https://lppceugnfuzuvzclhlce.supabase.co";
     const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxwcGNldWduZnV6dXZ6Y2xobGNlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDYwNjUsImV4cCI6MjA5NjA4MjA2NX0.R8EHV_jYyFmozaeAInYYwsmPzSJA3gRsZZbsixF0W0c";
-
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+
     const estado = document.getElementById("estado");
     const contenido = document.getElementById("contenido");
-    let personas = [];
+    let tab = "personal";
+    let personas = [], proyectos = [];
 
     function setEstado(msg, clase) { estado.textContent = msg; estado.className = "estado " + clase; }
 
-    async function cargar() {
-      setEstado("Conectando con Supabase…", "cargando");
-      let { data, error } = await sb.from("personal").select("*");
-      if (error) {
-        setEstado("Error al leer: " + error.message, "err");
-        console.error("Error de lectura Supabase:", error);
-        return;
-      }
-      // ordenar en el cliente: directos primero por legajo, luego contratistas
-      personas = (data || []).sort((a, b) => {
-        if (a.tipo !== b.tipo) return a.tipo === "Directo" ? -1 : 1;
-        return (parseInt(a.legajo) || 9999) - (parseInt(b.legajo) || 9999);
-      });
-      setEstado("✓ Conectado. " + personas.length + " persona(s) en la base.", "ok");
-      render();
+    function cambiarTab(t) {
+      tab = t;
+      document.getElementById("tab-personal").className = "tab" + (t === "personal" ? " active" : "");
+      document.getElementById("tab-proyectos").className = "tab" + (t === "proyectos" ? " active" : "");
+      cargar();
     }
 
-    function render() {
-      let html = '<table><thead><tr><th>Legajo</th><th>Nombre</th><th>Especialidad</th><th>Tipo</th><th style="text-align:right">Costo hora</th><th></th></tr></thead><tbody>';
-      if (personas.length === 0) {
-        html += '<tr><td colspan="6" style="color:#A8A69E;padding:14px">Sin personas todavía. Agregá una para probar.</td></tr>';
+    async function cargar() {
+      setEstado("Cargando…", "cargando");
+      if (tab === "personal") {
+        const { data, error } = await sb.from("personal").select("*");
+        if (error) { setEstado("Error: " + error.message, "err"); console.error(error); return; }
+        personas = (data || []).sort((a, b) => { if (a.tipo !== b.tipo) return a.tipo === "Directo" ? -1 : 1; return (parseInt(a.legajo) || 9999) - (parseInt(b.legajo) || 9999); });
+        setEstado("\u2713 " + personas.length + " persona(s) en la base.", "ok");
+        renderPersonal();
+      } else {
+        const { data, error } = await sb.from("proyectos").select("*");
+        if (error) { setEstado("Error: " + error.message, "err"); console.error(error); return; }
+        proyectos = data || [];
+        setEstado("\u2713 " + proyectos.length + " proyecto(s) en la base.", "ok");
+        renderProyectos();
       }
+    }
+
+    function renderPersonal() {
+      let html = '<table><thead><tr><th>Legajo</th><th>Nombre</th><th>Especialidad</th><th>Tipo</th><th style="text-align:right">Costo hora</th><th></th></tr></thead><tbody>';
+      if (personas.length === 0) html += '<tr><td colspan="6" style="color:#A8A69E;padding:14px">Sin personas todavía.</td></tr>';
       personas.forEach(p => {
+        const costoCell = p.tipo === "Contratista"
+          ? '<span style="font-size:11px;color:#A8A69E;font-style:italic">s/valor (Compras)</span>'
+          : '<input type="number" value="' + (p.costo_hora||0) + '" onchange="editarP(\'' + p.id + '\',\'costo_hora\',Number(this.value))" style="text-align:right">';
         html += '<tr>'
           + '<td style="width:80px">' + (p.legajo || '—') + '</td>'
-          + '<td><input value="' + (p.nombre||'') + '" onchange="editar(\'' + p.id + '\',\'nombre\',this.value)"></td>'
-          + '<td><input value="' + (p.especialidad||'') + '" onchange="editar(\'' + p.id + '\',\'especialidad\',this.value)"></td>'
-          + '<td style="width:120px"><select onchange="editar(\'' + p.id + '\',\'tipo\',this.value)"><option ' + (p.tipo==='Directo'?'selected':'') + '>Directo</option><option ' + (p.tipo==='Contratista'?'selected':'') + '>Contratista</option></select></td>'
-          + '<td style="width:110px"><input type="number" value="' + (p.costo_hora||0) + '" onchange="editar(\'' + p.id + '\',\'costo_hora\',Number(this.value))" style="text-align:right"></td>'
-          + '<td style="width:30px"><button class="btn-del" onclick="eliminar(\'' + p.id + '\')">×</button></td>'
+          + '<td><input value="' + (p.nombre||'') + '" onchange="editarP(\'' + p.id + '\',\'nombre\',this.value)"></td>'
+          + '<td><input value="' + (p.especialidad||'') + '" onchange="editarP(\'' + p.id + '\',\'especialidad\',this.value)"></td>'
+          + '<td style="width:120px"><select onchange="editarP(\'' + p.id + '\',\'tipo\',this.value)"><option ' + (p.tipo==='Directo'?'selected':'') + '>Directo</option><option ' + (p.tipo==='Contratista'?'selected':'') + '>Contratista</option></select></td>'
+          + '<td style="width:120px">' + costoCell + '</td>'
+          + '<td style="width:30px"><button class="btn-del" onclick="eliminarP(\'' + p.id + '\')">×</button></td>'
           + '</tr>';
       });
       html += '</tbody></table>';
-      html += '<div class="row-actions"><button class="btn-add" onclick="agregar()">+ Agregar persona</button>'
-        + '<button class="btn btn-primary" onclick="cargar()">↻ Recargar desde la base</button></div>';
-      html += '<p style="font-size:12px;color:#A8A69E;margin-top:14px">Probá: agregá una persona, después recargá esta página entera (F5). Si sigue ahí, la persistencia funciona. Podés verla también en el Table Editor de Supabase.</p>';
+      html += '<div class="row-actions"><button class="btn-add" onclick="agregarP()">+ Agregar persona</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
       contenido.innerHTML = html;
     }
+    async function agregarP() { const { error } = await sb.from("personal").insert({ nombre: "Nueva persona", tipo: "Directo", costo_hora: 0 }); if (error) return setEstado("Error: " + error.message, "err"); cargar(); }
+    async function editarP(id, c, v) { const u = {}; u[c] = v; const { error } = await sb.from("personal").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const p = personas.find(x => x.id === id); if (p) p[c] = v; setEstado("\u2713 Guardado.", "ok"); }
+    async function eliminarP(id) { const { error } = await sb.from("personal").delete().eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); cargar(); }
 
-    async function agregar() {
-      const { error } = await sb.from("personal").insert({ nombre: "Nueva persona", tipo: "Directo", costo_hora: 0 });
-      if (error) { setEstado("Error al agregar: " + error.message, "err"); return; }
-      await cargar();
+    function renderProyectos() {
+      let html = '';
+      if (proyectos.length === 0) html += '<p style="color:#A8A69E;font-size:13px">Sin proyectos todavía. Agregá uno.</p>';
+      proyectos.forEach((pr, i) => {
+        html += '<div class="card"><div class="card-head"><span style="font-size:13px;font-weight:600;color:#185FA5">Proyecto ' + (i+1) + '</span>'
+          + '<div style="display:flex;gap:8px;align-items:center">'
+          + '<select onchange="editarPr(\'' + pr.id + '\',\'estado\',this.value)" style="width:auto;color:' + (pr.estado==='Cerrado'?'#888780':'#3B6D11') + '"><option ' + (pr.estado!=='Cerrado'?'selected':'') + '>Vigente</option><option ' + (pr.estado==='Cerrado'?'selected':'') + '>Cerrado</option></select>'
+          + '<button class="btn-del" onclick="eliminarPr(\'' + pr.id + '\')">×</button></div></div>'
+          + '<div class="grid">'
+          + lblInput(pr.id, 'nombre', 'Nombre', pr.nombre)
+          + lblInput(pr.id, 'codigo', 'Código', pr.codigo)
+          + '<label class="lbl" style="grid-column:1/-1">Descripción<input value="' + (pr.descripcion||'') + '" onchange="editarPr(\'' + pr.id + '\',\'descripcion\',this.value)"></label>'
+          + lblInputNum(pr.id, 'cant_modulos', 'Cantidad de módulos', pr.cant_modulos)
+          + lblInput(pr.id, 'tam_modulos', 'Tamaño de módulos', pr.tam_modulos)
+          + lblInputDate(pr.id, 'fecha_entrega', 'Fecha de entrega', pr.fecha_entrega)
+          + lblInputDate(pr.id, 'fecha_montaje', 'Fecha de montaje', pr.fecha_montaje)
+          + lblInputNum(pr.id, 'presupuesto_mo', 'Presupuesto mano de obra', pr.presupuesto_mo)
+          + lblInput(pr.id, 'planos', 'Planos (link o ref.)', pr.planos)
+          + '</div></div>';
+      });
+      html += '<button class="btn-add" onclick="agregarPr()">+ Agregar proyecto</button>';
+      contenido.innerHTML = html;
     }
-
-    async function editar(id, campo, valor) {
-      const upd = {}; upd[campo] = valor;
-      const { error } = await sb.from("personal").update(upd).eq("id", id);
-      if (error) { setEstado("Error al guardar: " + error.message, "err"); return; }
-      const p = personas.find(x => x.id === id); if (p) p[campo] = valor;
-      setEstado("✓ Guardado.", "ok");
-    }
-
-    async function eliminar(id) {
-      const { error } = await sb.from("personal").delete().eq("id", id);
-      if (error) { setEstado("Error al eliminar: " + error.message, "err"); return; }
-      await cargar();
-    }
+    function lblInput(id, c, label, val) { return '<label class="lbl">' + label + '<input value="' + (val||'') + '" onchange="editarPr(\'' + id + '\',\'' + c + '\',this.value)"></label>'; }
+    function lblInputNum(id, c, label, val) { return '<label class="lbl">' + label + '<input type="number" value="' + (val||0) + '" onchange="editarPr(\'' + id + '\',\'' + c + '\',Number(this.value))"></label>'; }
+    function lblInputDate(id, c, label, val) { return '<label class="lbl">' + label + '<input type="date" value="' + (val||'') + '" onchange="editarPr(\'' + id + '\',\'' + c + '\',this.value)"></label>'; }
+    async function agregarPr() { const { error } = await sb.from("proyectos").insert({ nombre: "Nuevo proyecto", estado: "Vigente" }); if (error) return setEstado("Error: " + error.message, "err"); cargar(); }
+    async function editarPr(id, c, v) { const u = {}; u[c] = v; const { error } = await sb.from("proyectos").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const p = proyectos.find(x => x.id === id); if (p) p[c] = v; setEstado("\u2713 Guardado.", "ok"); }
+    async function eliminarPr(id) { const { error } = await sb.from("proyectos").delete().eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); cargar(); }
 
     cargar();
   </script>
