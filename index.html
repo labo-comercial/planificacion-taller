@@ -9,17 +9,15 @@
   <style>
     * { box-sizing: border-box; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; background: #F7F6F2; color: #2C2C2A; margin: 0; padding: 24px; }
-    .wrap { max-width: 940px; margin: 0 auto; }
+    .wrap { max-width: 980px; margin: 0 auto; }
     h1 { font-size: 22px; font-weight: 600; margin: 0 0 2px; }
     .sub { font-size: 13px; color: #888780; margin: 0 0 16px; }
-    .tabs { display: flex; gap: 4px; border-bottom: 1px solid #E6E4DC; }
-    .tab { background: transparent; border: 1px solid transparent; border-bottom: none; border-radius: 10px 10px 0 0; padding: 9px 16px; font-size: 13.5px; color: #888780; cursor: pointer; margin-bottom: -1px; white-space: nowrap; }
+    .tabs { display: flex; gap: 4px; border-bottom: 1px solid #E6E4DC; overflow-x: auto; }
+    .tab { background: transparent; border: 1px solid transparent; border-bottom: none; border-radius: 10px 10px 0 0; padding: 9px 15px; font-size: 13.5px; color: #888780; cursor: pointer; margin-bottom: -1px; white-space: nowrap; }
     .tab.active { background: #fff; border-color: #E6E4DC; color: #2C2C2A; font-weight: 600; }
     .panel { background: #fff; border: 1px solid #E6E4DC; border-top: none; border-radius: 0 0 14px 14px; padding: 18px; }
     .estado { font-size: 12.5px; padding: 8px 12px; border-radius: 8px; margin-bottom: 14px; }
-    .ok { background: #E1F5EE; color: #0F6E56; }
-    .err { background: #FCEBEB; color: #A32D2D; }
-    .cargando { background: #F1EFE8; color: #5F5E5A; }
+    .ok { background: #E1F5EE; color: #0F6E56; } .err { background: #FCEBEB; color: #A32D2D; } .cargando { background: #F1EFE8; color: #5F5E5A; }
     table { width: 100%; border-collapse: collapse; border: 1px solid #E6E4DC; border-radius: 12px; overflow: hidden; font-size: 13px; }
     thead tr { background: #F1EFE8; }
     th { text-align: left; padding: 9px 12px; font-weight: 600; color: #5F5E5A; font-size: 12px; }
@@ -27,14 +25,18 @@
     input, select { border: 1px solid #E6E4DC; border-radius: 6px; padding: 5px 7px; font-size: 12.5px; width: 100%; }
     .btn { border: none; border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
     .btn-primary { background: #185FA5; color: #fff; }
-    .btn-add { background: transparent; border: 1px dashed #E6E4DC; color: #185FA5; padding: 8px 14px; border-radius: 10px; font-size: 13px; cursor: pointer; margin-top: 12px; }
+    .btn-add { background: transparent; border: 1px dashed #E6E4DC; color: #185FA5; padding: 8px 14px; border-radius: 10px; font-size: 13px; cursor: pointer; }
     .btn-del { border: none; background: transparent; color: #A8A69E; cursor: pointer; font-size: 16px; }
-    .row-actions { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+    .row-actions { display: flex; gap: 8px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
     .card { border: 1px solid #E6E4DC; border-radius: 12px; padding: 14px; margin-bottom: 12px; }
     .card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
-    .lbl { font-size: 11.5px; color: #888780; }
-    .lbl input, .lbl select { margin-top: 3px; }
+    .lbl { font-size: 11.5px; color: #888780; } .lbl input, .lbl select { margin-top: 3px; }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    .chip { border: 1px solid #E6E4DC; background: #fff; color: #888780; border-radius: 16px; padding: 4px 10px; font-size: 11.5px; cursor: pointer; }
+    .chip.on { border-color: #185FA5; background: #E6F1FB; color: #185FA5; }
+    .estpill { padding: 3px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; }
+    .pl-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   </style>
 </head>
 <body>
@@ -45,6 +47,7 @@
       <button class="tab active" id="tab-personal" onclick="cambiarTab('personal')">Personal y tarifas</button>
       <button class="tab" id="tab-proyectos" onclick="cambiarTab('proyectos')">Proyectos</button>
       <button class="tab" id="tab-dispo" onclick="cambiarTab('dispo')">Disponibilidad</button>
+      <button class="tab" id="tab-plani" onclick="cambiarTab('plani')">Planificación General</button>
     </div>
     <div class="panel">
       <div id="estado" class="estado cargando">Conectando…</div>
@@ -57,106 +60,165 @@
     const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxwcGNldWduZnV6dXZ6Y2xobGNlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDYwNjUsImV4cCI6MjA5NjA4MjA2NX0.R8EHV_jYyFmozaeAInYYwsmPzSJA3gRsZZbsixF0W0c";
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
+    const STATIONS = {
+      corte_hierros:{label:"Corte de hierros",color:"#854F0B",bg:"#FAEEDA",subs:["Corte para bastidor de piso","Corte para bastidor de techo","Corte de columnas","Corte para bastidor de muro","Corte para armado de puerta","Corte para extras de herrería"]},
+      taller_herreria:{label:"Taller de herrería",color:"#7A4708",bg:"#FBE9D4",subs:["Armado de bastidor de muro","Armado de puertas","Rigidizadores de columna","Mecanizados de vigas","Armado de patas","Armado de placas de izajes"]},
+      taller_carpinteria:{label:"Taller de carpintería",color:"#6B4A1F",bg:"#F2E8D8",subs:["Armado de puerta interior","Armado de puerta exterior","Corte y buña para placa de muro","Corte y buña para placa de cielorraso","Procesamiento y armado de placas de muro madera maciza","Procesamiento y armado de placas de cielorraso madera maciza","Armado de calles para cielorraso","Armado de tirador para puerta"]},
+      bastidor_piso:{label:"Bastidor de piso",color:"#5F5E5A",bg:"#F1EFE8",subs:["Armado bastidor de piso"]},
+      bastidor_techo:{label:"Bastidor de techo",color:"#6E6D68",bg:"#EEEDE6",subs:["Armado bastidor de techo"]},
+      ensamble:{label:"Ensamble",color:"#3C3489",bg:"#E8E5FA",subs:["Ensamble de módulo"]},
+      extras_herreria:{label:"Extras de herrería",color:"#8A5410",bg:"#FBE9D4",subs:["Colocación de bastidor de muro","Colocación de plegado perimetral","Colocación de refuerzo para mesada","Colocación de presilla","Colocación de ángulo inferior para revestimiento"]},
+      arenado:{label:"Arenado",color:"#5F5E5A",bg:"#F1EFE8",subs:["Arenado de modulo","Arenado de puerta","Arenado de plegado"]},
+      pintura:{label:"Pintura",color:"#993556",bg:"#FBEAF0",subs:["Pintura primera mano","Pintura segunda mano","Pintura de plegado","Pintura de fenólico","Pintura de panel"]},
+      pre_revest:{label:"Pre Revestimiento",color:"#3B6D11",bg:"#E8F3DE",subs:["Panelizado de cubierta","Panelizado de muro","Colocación de fenólico en piso (3 capas)","Colocación de fenólico en muro"]},
+      sanitaria:{label:"Instalación Sanitaria",color:"#185FA5",bg:"#E6F1FB",subs:["Colocación de desagües","Colocación de caños agua fría/caliente","Colocación de grifería","Prueba hidráulica","Colocación de artefacto"]},
+      electrica:{label:"Instalación Eléctrica",color:"#993C1D",bg:"#FAECE7",subs:["Colocación de caño de pvc con cajas","Cableado","Colocación de tablero","Colocación de artefacto"]},
+      termomecanica:{label:"Instalación Termomecánica",color:"#0F6E56",bg:"#E1F5EE",subs:["Colocación de equipo","Colocación de desagüe","Colocación de cañería","Cableado"]},
+      revest_humedo:{label:"Revestimiento húmedo",color:"#085041",bg:"#D9F0E6",subs:["Colocación de Webertec","Colocación de piso","Colocación de muro","Colocación de pastina"]},
+      revestimiento:{label:"Revestimiento",color:"#107A5F",bg:"#E1F5EE",subs:["Colocación de placa de muro interior","Colocación de placa de muro exterior","Colocación de cielorraso (MDF)","Colocación de cielorraso (Macizo)","Colocación de puerta"]},
+      terminaciones:{label:"Terminaciones",color:"#7A4708",bg:"#F7ECDA",subs:["Sellado","Embalaje","Trincado","Aceitado de placa"]},
+      impermeabilizacion:{label:"Impermeabilización",color:"#2C6E8F",bg:"#DEEEF5",subs:["Colocación de membrana"]},
+      maquinista:{label:"Maquinista",color:"#55544F",bg:"#EEEDE6",subs:["Movimiento interno de producción","Movimiento externo de rental","Movimiento externo otros"]},
+      rental:{label:"Rental",color:"#185FA5",bg:"#E6F1FB",subs:["General"]},
+      mantenimiento:{label:"Mantenimiento",color:"#5F5E5A",bg:"#F1EFE8",subs:["Orden y limpieza","Corte de pasto","Clasificación de residuo","Mantenimiento eléctrico"]}
+    };
+    const STKEYS = Object.keys(STATIONS);
+
     const estado = document.getElementById("estado");
     const contenido = document.getElementById("contenido");
     const TIPOS = ["Vacaciones", "Licencia", "Parte médico"];
     let tab = "personal";
-    let personas = [], proyectos = [], dispo = [];
+    let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {};
 
-    function setEstado(msg, clase) { estado.textContent = msg; estado.className = "estado " + clase; }
+    function setEstado(m, c) { estado.textContent = m; estado.className = "estado " + c; }
+    function errLoad(e) { setEstado("Error: " + e.message, "err"); console.error(e); }
     function nombrePersona(id) { const p = personas.find(x => x.id === id); return p ? p.nombre : "—"; }
+    function nombreProy(id) { const p = proyectos.find(x => x.id === id); return p ? p.nombre : "(sin proyecto)"; }
 
-    function cambiarTab(t) {
-      tab = t;
-      ["personal","proyectos","dispo"].forEach(x => document.getElementById("tab-"+x).className = "tab" + (x===t?" active":""));
-      cargar();
-    }
+    function cambiarTab(t) { tab = t; ["personal","proyectos","dispo","plani"].forEach(x => document.getElementById("tab-"+x).className = "tab" + (x===t?" active":"")); cargar(); }
 
-    async function asegurarPersonas() {
-      if (personas.length) return;
-      const { data } = await sb.from("personal").select("id,nombre,tipo,legajo,costo_hora,especialidad");
-      personas = (data || []).sort((a, b) => { if (a.tipo !== b.tipo) return a.tipo === "Directo" ? -1 : 1; return (parseInt(a.legajo) || 9999) - (parseInt(b.legajo) || 9999); });
+    async function asegurarBase() {
+      if (!personas.length) { const { data } = await sb.from("personal").select("*"); personas = (data||[]).sort((a,b)=>{if(a.tipo!==b.tipo)return a.tipo==="Directo"?-1:1;return (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999);}); }
+      if (!proyectos.length) { const { data } = await sb.from("proyectos").select("*"); proyectos = data || []; }
     }
 
     async function cargar() {
       setEstado("Cargando…", "cargando");
       if (tab === "personal") {
-        const { data, error } = await sb.from("personal").select("*");
-        if (error) return errLoad(error);
-        personas = (data || []).sort((a, b) => { if (a.tipo !== b.tipo) return a.tipo === "Directo" ? -1 : 1; return (parseInt(a.legajo) || 9999) - (parseInt(b.legajo) || 9999); });
+        const { data, error } = await sb.from("personal").select("*"); if (error) return errLoad(error);
+        personas = (data||[]).sort((a,b)=>{if(a.tipo!==b.tipo)return a.tipo==="Directo"?-1:1;return (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999);});
         setEstado("\u2713 " + personas.length + " persona(s).", "ok"); renderPersonal();
       } else if (tab === "proyectos") {
-        const { data, error } = await sb.from("proyectos").select("*");
-        if (error) return errLoad(error);
+        const { data, error } = await sb.from("proyectos").select("*"); if (error) return errLoad(error);
         proyectos = data || []; setEstado("\u2713 " + proyectos.length + " proyecto(s).", "ok"); renderProyectos();
+      } else if (tab === "dispo") {
+        await asegurarBase();
+        const { data, error } = await sb.from("no_disponibilidad").select("*"); if (error) return errLoad(error);
+        dispo = data || []; setEstado("\u2713 " + dispo.length + " período(s).", "ok"); renderDispo();
       } else {
-        await asegurarPersonas();
-        const { data, error } = await sb.from("no_disponibilidad").select("*");
-        if (error) return errLoad(error);
-        dispo = data || []; setEstado("\u2713 " + dispo.length + " período(s) cargado(s).", "ok"); renderDispo();
+        await asegurarBase();
+        const { data, error } = await sb.from("planificacion").select("*"); if (error) return errLoad(error);
+        plani = data || [];
+        const { data: pp, error: e2 } = await sb.from("planificacion_personal").select("*"); if (e2) return errLoad(e2);
+        planiPers = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) planiPers[r.planificacion_id] = []; planiPers[r.planificacion_id].push(r.persona_id); });
+        setEstado("\u2713 " + plani.length + " estación(es) planificada(s).", "ok"); renderPlani();
       }
     }
-    function errLoad(error) { setEstado("Error: " + error.message, "err"); console.error(error); }
 
+    /* ---- PERSONAL ---- */
     function renderPersonal() {
-      let html = '<table><thead><tr><th>Legajo</th><th>Nombre</th><th>Especialidad</th><th>Tipo</th><th style="text-align:right">Costo hora</th><th></th></tr></thead><tbody>';
-      if (!personas.length) html += '<tr><td colspan="6" style="color:#A8A69E;padding:14px">Sin personas.</td></tr>';
-      personas.forEach(p => {
-        const costoCell = p.tipo === "Contratista" ? '<span style="font-size:11px;color:#A8A69E;font-style:italic">s/valor (Compras)</span>' : '<input type="number" value="' + (p.costo_hora||0) + '" onchange="editarP(\'' + p.id + '\',\'costo_hora\',Number(this.value))" style="text-align:right">';
-        html += '<tr><td style="width:80px">' + (p.legajo||'—') + '</td><td><input value="' + (p.nombre||'') + '" onchange="editarP(\'' + p.id + '\',\'nombre\',this.value)"></td><td><input value="' + (p.especialidad||'') + '" onchange="editarP(\'' + p.id + '\',\'especialidad\',this.value)"></td><td style="width:120px"><select onchange="editarP(\'' + p.id + '\',\'tipo\',this.value)"><option ' + (p.tipo==='Directo'?'selected':'') + '>Directo</option><option ' + (p.tipo==='Contratista'?'selected':'') + '>Contratista</option></select></td><td style="width:120px">' + costoCell + '</td><td style="width:30px"><button class="btn-del" onclick="eliminarP(\'' + p.id + '\')">×</button></td></tr>';
+      let h = '<table><thead><tr><th>Legajo</th><th>Nombre</th><th>Especialidad</th><th>Tipo</th><th style="text-align:right">Costo hora</th><th></th></tr></thead><tbody>';
+      if (!personas.length) h += '<tr><td colspan="6" style="color:#A8A69E;padding:14px">Sin personas.</td></tr>';
+      personas.forEach(p => { const cc = p.tipo==="Contratista"?'<span style="font-size:11px;color:#A8A69E;font-style:italic">s/valor (Compras)</span>':'<input type="number" value="'+(p.costo_hora||0)+'" onchange="editarP(\''+p.id+'\',\'costo_hora\',Number(this.value))" style="text-align:right">';
+        h += '<tr><td style="width:80px">'+(p.legajo||'—')+'</td><td><input value="'+(p.nombre||'')+'" onchange="editarP(\''+p.id+'\',\'nombre\',this.value)"></td><td><input value="'+(p.especialidad||'')+'" onchange="editarP(\''+p.id+'\',\'especialidad\',this.value)"></td><td style="width:120px"><select onchange="editarP(\''+p.id+'\',\'tipo\',this.value)"><option '+(p.tipo==='Directo'?'selected':'')+'>Directo</option><option '+(p.tipo==='Contratista'?'selected':'')+'>Contratista</option></select></td><td style="width:120px">'+cc+'</td><td style="width:30px"><button class="btn-del" onclick="eliminarP(\''+p.id+'\')">×</button></td></tr>';
       });
-      html += '</tbody></table><div class="row-actions"><button class="btn-add" onclick="agregarP()">+ Agregar persona</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
-      contenido.innerHTML = html;
+      h += '</tbody></table><div class="row-actions"><button class="btn-add" onclick="agregarP()">+ Agregar persona</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
+      contenido.innerHTML = h;
     }
-    async function agregarP() { const { error } = await sb.from("personal").insert({ nombre: "Nueva persona", tipo: "Directo", costo_hora: 0 }); if (error) return setEstado("Error: " + error.message, "err"); cargar(); }
-    async function editarP(id, c, v) { const u = {}; u[c] = v; const { error } = await sb.from("personal").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); setEstado("\u2713 Guardado.", "ok"); }
-    async function eliminarP(id) { const { error } = await sb.from("personal").delete().eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); cargar(); }
+    async function agregarP(){const{error}=await sb.from("personal").insert({nombre:"Nueva persona",tipo:"Directo",costo_hora:0});if(error)return setEstado("Error: "+error.message,"err");cargar();}
+    async function editarP(id,c,v){const u={};u[c]=v;const{error}=await sb.from("personal").update(u).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");setEstado("\u2713 Guardado.","ok");}
+    async function eliminarP(id){const{error}=await sb.from("personal").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");cargar();}
 
+    /* ---- PROYECTOS ---- */
     function renderProyectos() {
-      let html = '';
-      if (!proyectos.length) html += '<p style="color:#A8A69E;font-size:13px">Sin proyectos.</p>';
-      proyectos.forEach((pr, i) => {
-        html += '<div class="card"><div class="card-head"><span style="font-size:13px;font-weight:600;color:#185FA5">Proyecto ' + (i+1) + '</span><div style="display:flex;gap:8px;align-items:center"><select onchange="editarPr(\'' + pr.id + '\',\'estado\',this.value)" style="width:auto;color:' + (pr.estado==='Cerrado'?'#888780':'#3B6D11') + '"><option ' + (pr.estado!=='Cerrado'?'selected':'') + '>Vigente</option><option ' + (pr.estado==='Cerrado'?'selected':'') + '>Cerrado</option></select><button class="btn-del" onclick="eliminarPr(\'' + pr.id + '\')">×</button></div></div><div class="grid">'
-          + lblInput(pr.id,'nombre','Nombre',pr.nombre) + lblInput(pr.id,'codigo','Código',pr.codigo)
-          + '<label class="lbl" style="grid-column:1/-1">Descripción<input value="' + (pr.descripcion||'') + '" onchange="editarPr(\'' + pr.id + '\',\'descripcion\',this.value)"></label>'
-          + lblInputNum(pr.id,'cant_modulos','Cantidad de módulos',pr.cant_modulos) + lblInput(pr.id,'tam_modulos','Tamaño de módulos',pr.tam_modulos)
-          + lblInputDate(pr.id,'fecha_entrega','Fecha de entrega',pr.fecha_entrega) + lblInputDate(pr.id,'fecha_montaje','Fecha de montaje',pr.fecha_montaje)
-          + lblInputNum(pr.id,'presupuesto_mo','Presupuesto mano de obra',pr.presupuesto_mo) + lblInput(pr.id,'planos','Planos (link o ref.)',pr.planos)
-          + '</div></div>';
+      let h = '';
+      if (!proyectos.length) h += '<p style="color:#A8A69E;font-size:13px">Sin proyectos.</p>';
+      proyectos.forEach((pr,i)=>{ h += '<div class="card"><div class="card-head"><span style="font-size:13px;font-weight:600;color:#185FA5">Proyecto '+(i+1)+'</span><div style="display:flex;gap:8px;align-items:center"><select onchange="editarPr(\''+pr.id+'\',\'estado\',this.value)" style="width:auto;color:'+(pr.estado==='Cerrado'?'#888780':'#3B6D11')+'"><option '+(pr.estado!=='Cerrado'?'selected':'')+'>Vigente</option><option '+(pr.estado==='Cerrado'?'selected':'')+'>Cerrado</option></select><button class="btn-del" onclick="eliminarPr(\''+pr.id+'\')">×</button></div></div><div class="grid">'
+        + li(pr.id,'nombre','Nombre',pr.nombre) + li(pr.id,'codigo','Código',pr.codigo)
+        + '<label class="lbl" style="grid-column:1/-1">Descripción<input value="'+(pr.descripcion||'')+'" onchange="editarPr(\''+pr.id+'\',\'descripcion\',this.value)"></label>'
+        + ln(pr.id,'cant_modulos','Cantidad de módulos',pr.cant_modulos) + li(pr.id,'tam_modulos','Tamaño de módulos',pr.tam_modulos)
+        + ld(pr.id,'fecha_entrega','Fecha de entrega',pr.fecha_entrega) + ld(pr.id,'fecha_montaje','Fecha de montaje',pr.fecha_montaje)
+        + ln(pr.id,'presupuesto_mo','Presupuesto mano de obra',pr.presupuesto_mo) + li(pr.id,'planos','Planos (link o ref.)',pr.planos) + '</div></div>';
       });
-      html += '<button class="btn-add" onclick="agregarPr()">+ Agregar proyecto</button>';
-      contenido.innerHTML = html;
+      h += '<button class="btn-add" onclick="agregarPr()">+ Agregar proyecto</button>';
+      contenido.innerHTML = h;
     }
-    function lblInput(id,c,label,val){return '<label class="lbl">'+label+'<input value="'+(val||'')+'" onchange="editarPr(\''+id+'\',\''+c+'\',this.value)"></label>';}
-    function lblInputNum(id,c,label,val){return '<label class="lbl">'+label+'<input type="number" value="'+(val||0)+'" onchange="editarPr(\''+id+'\',\''+c+'\',Number(this.value))"></label>';}
-    function lblInputDate(id,c,label,val){return '<label class="lbl">'+label+'<input type="date" value="'+(val||'')+'" onchange="editarPr(\''+id+'\',\''+c+'\',this.value)"></label>';}
-    async function agregarPr(){const {error}=await sb.from("proyectos").insert({nombre:"Nuevo proyecto",estado:"Vigente"});if(error)return setEstado("Error: "+error.message,"err");cargar();}
-    async function editarPr(id,c,v){const u={};u[c]=v;const {error}=await sb.from("proyectos").update(u).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");setEstado("\u2713 Guardado.","ok");}
-    async function eliminarPr(id){const {error}=await sb.from("proyectos").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");cargar();}
+    function li(id,c,l,v){return '<label class="lbl">'+l+'<input value="'+(v||'')+'" onchange="editarPr(\''+id+'\',\''+c+'\',this.value)"></label>';}
+    function ln(id,c,l,v){return '<label class="lbl">'+l+'<input type="number" value="'+(v||0)+'" onchange="editarPr(\''+id+'\',\''+c+'\',Number(this.value))"></label>';}
+    function ld(id,c,l,v){return '<label class="lbl">'+l+'<input type="date" value="'+(v||'')+'" onchange="editarPr(\''+id+'\',\''+c+'\',this.value)"></label>';}
+    async function agregarPr(){const{error}=await sb.from("proyectos").insert({nombre:"Nuevo proyecto",estado:"Vigente"});if(error)return setEstado("Error: "+error.message,"err");cargar();}
+    async function editarPr(id,c,v){const u={};u[c]=v;const{error}=await sb.from("proyectos").update(u).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");setEstado("\u2713 Guardado.","ok");}
+    async function eliminarPr(id){const{error}=await sb.from("proyectos").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");cargar();}
 
+    /* ---- DISPONIBILIDAD ---- */
     function renderDispo() {
-      const opcionesPersona = (sel) => personas.map(p => '<option value="' + p.id + '" ' + (p.id===sel?'selected':'') + '>' + p.nombre + '</option>').join('');
-      const opcionesTipo = (sel) => TIPOS.map(t => '<option ' + (t===sel?'selected':'') + '>' + t + '</option>').join('');
-      let html = '<p style="font-size:13px;color:#888780;margin-top:0">Períodos en que una persona no está disponible. En esos días no se le exige asignación en la planificación.</p>';
-      html += '<table><thead><tr><th>Persona</th><th>Tipo</th><th>Desde</th><th>Hasta</th><th></th></tr></thead><tbody>';
-      if (!dispo.length) html += '<tr><td colspan="5" style="color:#A8A69E;padding:14px">Sin períodos cargados. Todo el plantel se considera disponible.</td></tr>';
-      dispo.forEach(d => {
-        html += '<tr><td style="width:34%"><select onchange="editarD(\'' + d.id + '\',\'persona_id\',this.value)">' + opcionesPersona(d.persona_id) + '</select></td>'
-          + '<td style="width:22%"><select onchange="editarD(\'' + d.id + '\',\'tipo\',this.value)">' + opcionesTipo(d.tipo) + '</select></td>'
-          + '<td><input type="date" value="' + (d.desde||'') + '" onchange="editarD(\'' + d.id + '\',\'desde\',this.value)"></td>'
-          + '<td><input type="date" value="' + (d.hasta||'') + '" onchange="editarD(\'' + d.id + '\',\'hasta\',this.value)"></td>'
-          + '<td style="width:30px"><button class="btn-del" onclick="eliminarD(\'' + d.id + '\')">×</button></td></tr>';
-      });
-      html += '</tbody></table><div class="row-actions"><button class="btn-add" onclick="agregarD()">+ Agregar período</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
-      contenido.innerHTML = html;
+      const oP=(s)=>personas.map(p=>'<option value="'+p.id+'" '+(p.id===s?'selected':'')+'>'+p.nombre+'</option>').join('');
+      const oT=(s)=>TIPOS.map(t=>'<option '+(t===s?'selected':'')+'>'+t+'</option>').join('');
+      let h='<p style="font-size:13px;color:#888780;margin-top:0">Períodos en que una persona no está disponible.</p><table><thead><tr><th>Persona</th><th>Tipo</th><th>Desde</th><th>Hasta</th><th></th></tr></thead><tbody>';
+      if(!dispo.length) h+='<tr><td colspan="5" style="color:#A8A69E;padding:14px">Sin períodos cargados.</td></tr>';
+      dispo.forEach(d=>{h+='<tr><td style="width:34%"><select onchange="editarD(\''+d.id+'\',\'persona_id\',this.value)">'+oP(d.persona_id)+'</select></td><td style="width:22%"><select onchange="editarD(\''+d.id+'\',\'tipo\',this.value)">'+oT(d.tipo)+'</select></td><td><input type="date" value="'+(d.desde||'')+'" onchange="editarD(\''+d.id+'\',\'desde\',this.value)"></td><td><input type="date" value="'+(d.hasta||'')+'" onchange="editarD(\''+d.id+'\',\'hasta\',this.value)"></td><td style="width:30px"><button class="btn-del" onclick="eliminarD(\''+d.id+'\')">×</button></td></tr>';});
+      h+='</tbody></table><div class="row-actions"><button class="btn-add" onclick="agregarD()">+ Agregar período</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
+      contenido.innerHTML=h;
     }
-    async function agregarD() {
-      if (!personas.length) { setEstado("Cargá personal primero.", "err"); return; }
-      const { error } = await sb.from("no_disponibilidad").insert({ persona_id: personas[0].id, tipo: "Vacaciones", desde: new Date().toISOString().slice(0,10), hasta: new Date().toISOString().slice(0,10) });
+    async function agregarD(){if(!personas.length){setEstado("Cargá personal primero.","err");return;}const t=new Date().toISOString().slice(0,10);const{error}=await sb.from("no_disponibilidad").insert({persona_id:personas[0].id,tipo:"Vacaciones",desde:t,hasta:t});if(error)return setEstado("Error: "+error.message,"err");cargar();}
+    async function editarD(id,c,v){const u={};u[c]=v;const{error}=await sb.from("no_disponibilidad").update(u).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");setEstado("\u2713 Guardado.","ok");}
+    async function eliminarD(id){const{error}=await sb.from("no_disponibilidad").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");cargar();}
+
+    /* ---- PLANIFICACIÓN ---- */
+    function diasHabiles(a,b){const o=[];if(!a||!b)return o;let d=new Date(a+"T00:00:00");const e=new Date(b+"T00:00:00");while(d<=e){const w=d.getDay();if(w!==0&&w!==6)o.push(d.toISOString().slice(0,10));d=new Date(d.getTime()+86400000);}return o;}
+    function renderPlani() {
+      let h = '<p style="font-size:13px;color:#888780;margin-top:0">Agregá estaciones, asignalas a un proyecto, elegí tarea, fechas y gente. Todo se guarda en Supabase. (La validación de cobertura llega en el próximo paso.)</p>';
+      if (!proyectos.length) h += '<div class="estado err">No hay proyectos. Creá al menos uno en la pestaña Proyectos antes de planificar.</div>';
+      plani.forEach(b => {
+        const st = STATIONS[b.estacion]; if (!st) return;
+        const gente = planiPers[b.id] || [];
+        h += '<div class="card"><div class="pl-row"><span class="estpill" style="background:'+st.bg+';color:'+st.color+';min-width:130px;display:inline-block;text-align:center">'+st.label+'</span>'
+          + '<select onchange="editarPl(\''+b.id+'\',\'subtarea\',this.value)" style="min-width:230px">'+st.subs.map(s=>'<option '+(s===b.subtarea?'selected':'')+'>'+s+'</option>').join('')+'</select>'
+          + '<select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px">'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>'
+          + '<button class="btn-del" style="margin-left:auto" onclick="eliminarPl(\''+b.id+'\')">×</button></div>'
+          + '<div class="pl-row"><input type="date" value="'+(b.fecha_desde||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(b.fecha_hasta||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+diasHabiles(b.fecha_desde,b.fecha_hasta).length+' días háb.</span></div>'
+          + '<div class="chips">'+personas.map(p=>{const on=gente.includes(p.id);return '<button class="chip'+(on?' on':'')+'" onclick="toggleGente(\''+b.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+'</button>';}).join('')+'</div>'
+          + '</div>';
+      });
+      h += '<div class="row-actions"><select id="selAgregar" style="width:auto;color:#185FA5"><option value="">+ Agregar estación…</option>'+STKEYS.map(k=>'<option value="'+k+'">'+STATIONS[k].label+'</option>').join('')+'</select>';
+      h += '<button class="btn btn-primary" onclick="agregarEstacionDefault()">Cargar las 20 estaciones</button>';
+      h += '<button class="btn btn-add" onclick="cargar()">\u21bb Recargar</button></div>';
+      contenido.innerHTML = h;
+      document.getElementById("selAgregar").onchange = function(){ if(this.value){ agregarEstacion(this.value); } };
+    }
+    async function agregarEstacion(estKey) {
+      if (!proyectos.length) { setEstado("Creá un proyecto primero.", "err"); return; }
+      const st = STATIONS[estKey];
+      const { error } = await sb.from("planificacion").insert({ estacion: estKey, subtarea: st.subs[0], proyecto_id: proyectos[0].id, modo: "nombre", fecha_desde: null, fecha_hasta: null });
       if (error) return setEstado("Error: " + error.message, "err"); cargar();
     }
-    async function editarD(id, c, v) { const u = {}; u[c] = v; const { error } = await sb.from("no_disponibilidad").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); setEstado("\u2713 Guardado.", "ok"); }
-    async function eliminarD(id) { const { error } = await sb.from("no_disponibilidad").delete().eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); cargar(); }
+    async function agregarEstacionDefault() {
+      if (!proyectos.length) { setEstado("Creá un proyecto primero.", "err"); return; }
+      const filas = STKEYS.map(k => ({ estacion: k, subtarea: STATIONS[k].subs[0], proyecto_id: proyectos[0].id, modo: "nombre" }));
+      const { error } = await sb.from("planificacion").insert(filas);
+      if (error) return setEstado("Error: " + error.message, "err"); cargar();
+    }
+    async function editarPl(id, c, v) { const u = {}; u[c] = (v === "" ? null : v); const { error } = await sb.from("planificacion").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const b = plani.find(x=>x.id===id); if(b) b[c]=u[c]; setEstado("\u2713 Guardado.", "ok"); if(c==="fecha_desde"||c==="fecha_hasta") renderPlani(); }
+    async function eliminarPl(id) { const { error } = await sb.from("planificacion").delete().eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); cargar(); }
+    async function toggleGente(planiId, personaId, estaba) {
+      if (estaba) { const { error } = await sb.from("planificacion_personal").delete().eq("planificacion_id", planiId).eq("persona_id", personaId); if (error) return setEstado("Error: " + error.message, "err"); }
+      else { const { error } = await sb.from("planificacion_personal").insert({ planificacion_id: planiId, persona_id: personaId }); if (error) return setEstado("Error: " + error.message, "err"); }
+      // actualizar en memoria y re-render
+      if (!planiPers[planiId]) planiPers[planiId] = [];
+      if (estaba) planiPers[planiId] = planiPers[planiId].filter(x => x !== personaId);
+      else planiPers[planiId].push(personaId);
+      setEstado("\u2713 Guardado.", "ok"); renderPlani();
+    }
 
     cargar();
   </script>
