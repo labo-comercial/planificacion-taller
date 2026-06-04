@@ -91,6 +91,7 @@
     let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {};
 
     function setEstado(m, c) { estado.textContent = m; estado.className = "estado " + c; }
+    function fechaStr(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
     function errLoad(e) { setEstado("Error: " + e.message, "err"); console.error(e); }
     function nombrePersona(id) { const p = personas.find(x => x.id === id); return p ? p.nombre : "—"; }
     function nombreProy(id) { const p = proyectos.find(x => x.id === id); return p ? p.nombre : "(sin proyecto)"; }
@@ -100,6 +101,7 @@
     async function asegurarBase() {
       if (!personas.length) { const { data } = await sb.from("personal").select("*"); personas = (data||[]).sort((a,b)=>{if(a.tipo!==b.tipo)return a.tipo==="Directo"?-1:1;return (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999);}); }
       if (!proyectos.length) { const { data } = await sb.from("proyectos").select("*"); proyectos = data || []; }
+      { const { data } = await sb.from("no_disponibilidad").select("*"); dispo = data || []; }
     }
 
     async function cargar() {
@@ -170,12 +172,12 @@
       h+='</tbody></table><div class="row-actions"><button class="btn-add" onclick="agregarD()">+ Agregar período</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
       contenido.innerHTML=h;
     }
-    async function agregarD(){if(!personas.length){setEstado("Cargá personal primero.","err");return;}const t=new Date().toISOString().slice(0,10);const{error}=await sb.from("no_disponibilidad").insert({persona_id:personas[0].id,tipo:"Vacaciones",desde:t,hasta:t});if(error)return setEstado("Error: "+error.message,"err");cargar();}
+    async function agregarD(){if(!personas.length){setEstado("Cargá personal primero.","err");return;}const t=fechaStr(new Date());const{error}=await sb.from("no_disponibilidad").insert({persona_id:personas[0].id,tipo:"Vacaciones",desde:t,hasta:t});if(error)return setEstado("Error: "+error.message,"err");cargar();}
     async function editarD(id,c,v){const u={};u[c]=v;const{error}=await sb.from("no_disponibilidad").update(u).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");setEstado("\u2713 Guardado.","ok");}
     async function eliminarD(id){const{error}=await sb.from("no_disponibilidad").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");cargar();}
 
     /* ---- PLANIFICACIÓN ---- */
-    function diasHabiles(a,b){const o=[];if(!a||!b)return o;let d=new Date(a+"T00:00:00");const e=new Date(b+"T00:00:00");while(d<=e){const w=d.getDay();if(w!==0&&w!==6)o.push(d.toISOString().slice(0,10));d=new Date(d.getTime()+86400000);}return o;}
+    function diasHabiles(a,b){const o=[];if(!a||!b)return o;let d=new Date(a+"T12:00:00");const e=new Date(b+"T12:00:00");while(d<=e){const w=d.getDay();if(w!==0&&w!==6)o.push(fechaStr(d));d=new Date(d.getTime()+86400000);}return o;}
 
     function noDispoEn(personaId, fecha) { return dispo.some(n => n.persona_id === personaId && fecha >= n.desde && fecha <= n.hasta); }
 
