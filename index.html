@@ -49,12 +49,17 @@
 
     async function cargar() {
       setEstado("Conectando con Supabase…", "cargando");
-      const { data, error } = await sb.from("personal").select("*").order("creado_en", { ascending: true });
+      let { data, error } = await sb.from("personal").select("*");
       if (error) {
-        setEstado("Error al leer: " + error.message + " (revisá las políticas de acceso / RLS)", "err");
+        setEstado("Error al leer: " + error.message, "err");
+        console.error("Error de lectura Supabase:", error);
         return;
       }
-      personas = data || [];
+      // ordenar en el cliente: directos primero por legajo, luego contratistas
+      personas = (data || []).sort((a, b) => {
+        if (a.tipo !== b.tipo) return a.tipo === "Directo" ? -1 : 1;
+        return (parseInt(a.legajo) || 9999) - (parseInt(b.legajo) || 9999);
+      });
       setEstado("✓ Conectado. " + personas.length + " persona(s) en la base.", "ok");
       render();
     }
