@@ -180,6 +180,7 @@
     function diasHabiles(a,b){const o=[];if(!a||!b)return o;let d=new Date(a+"T12:00:00");const e=new Date(b+"T12:00:00");while(d<=e){const w=d.getDay();if(w!==0&&w!==6)o.push(fechaStr(d));d=new Date(d.getTime()+86400000);}return o;}
 
     function noDispoEn(personaId, fecha) { return dispo.some(n => n.persona_id === personaId && fecha >= n.desde && fecha <= n.hasta); }
+    function tipoNoDispoEn(personaId, fecha) { const n = dispo.find(x => x.persona_id === personaId && fecha >= x.desde && fecha <= x.hasta); return n ? n.tipo : null; }
 
     function validarCobertura() {
       // rango total de fechas planificadas
@@ -221,7 +222,14 @@
           + '<select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px">'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>'
           + '<button class="btn-del" style="margin-left:auto" onclick="eliminarPl(\''+b.id+'\')">×</button></div>'
           + '<div class="pl-row"><input type="date" value="'+(b.fecha_desde||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(b.fecha_hasta||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+diasHabiles(b.fecha_desde,b.fecha_hasta).length+' días háb.</span></div>'
-          + '<div class="chips">'+personas.map(p=>{const on=gente.includes(p.id);return '<button class="chip'+(on?' on':'')+'" onclick="toggleGente(\''+b.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+'</button>';}).join('')+'</div>'
+          + '<div class="chips">'+personas.map(p=>{
+              const on=gente.includes(p.id);
+              const dias=diasHabiles(b.fecha_desde,b.fecha_hasta);
+              const diasNoDispo=dias.filter(d=>noDispoEn(p.id,d));
+              const todoNoDispo=dias.length>0 && diasNoDispo.length===dias.length;
+              if(todoNoDispo){ const tipo=tipoNoDispoEn(p.id,dias[0])||"No disp."; return '<button class="chip" disabled title="No disponible ('+tipo+') en todo el período" style="text-decoration:line-through;opacity:0.45;cursor:not-allowed">'+p.nombre+'</button>'; }
+              return '<button class="chip'+(on?' on':'')+'" onclick="toggleGente(\''+b.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+'</button>';
+            }).join('')+'</div>'
           + '</div>';
       });
       h += '<div class="row-actions"><select id="selAgregar" style="width:auto;color:#185FA5"><option value="">+ Agregar estación…</option>'+STKEYS.map(k=>'<option value="'+k+'">'+STATIONS[k].label+'</option>').join('')+'</select>';
