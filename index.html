@@ -176,9 +176,41 @@
 
     /* ---- PLANIFICACIÓN ---- */
     function diasHabiles(a,b){const o=[];if(!a||!b)return o;let d=new Date(a+"T00:00:00");const e=new Date(b+"T00:00:00");while(d<=e){const w=d.getDay();if(w!==0&&w!==6)o.push(d.toISOString().slice(0,10));d=new Date(d.getTime()+86400000);}return o;}
+
+    function noDispoEn(personaId, fecha) { return dispo.some(n => n.persona_id === personaId && fecha >= n.desde && fecha <= n.hasta); }
+
+    function validarCobertura() {
+      // rango total de fechas planificadas
+      const todas = [];
+      plani.forEach(b => diasHabiles(b.fecha_desde, b.fecha_hasta).forEach(d => todas.push(d)));
+      const fechas = [...new Set(todas)].sort();
+      // carga por persona/día (cada bloque modo nombre asigna jornada completa)
+      const carga = {};
+      plani.forEach(b => { (planiPers[b.id]||[]).forEach(g => diasHabiles(b.fecha_desde, b.fecha_hasta).forEach(d => { const k = g+"|"+d; carga[k] = (carga[k]||0) + 8; })); });
+      const directos = personas.filter(p => p.tipo !== "Contratista");
+      const faltantes = [], excesos = [];
+      fechas.forEach(d => {
+        directos.forEach(p => {
+          if (noDispoEn(p.id, d)) return;
+          const h = carga[p.id+"|"+d] || 0;
+          if (h < 8) faltantes.push(nombrePersona(p.id) + " · " + d.slice(5));
+          else if (h > 8) excesos.push(nombrePersona(p.id) + " · " + d.slice(5));
+        });
+      });
+      return { fechas, faltantes: [...new Set(faltantes)], excesos: [...new Set(excesos)], ok: faltantes.length===0 && excesos.length===0 && fechas.length>0 };
+    }
     function renderPlani() {
-      let h = '<p style="font-size:13px;color:#888780;margin-top:0">Agregá estaciones, asignalas a un proyecto, elegí tarea, fechas y gente. Todo se guarda en Supabase. (La validación de cobertura llega en el próximo paso.)</p>';
+      let h = '<p style="font-size:13px;color:#888780;margin-top:0">Agregá estaciones, asignalas a un proyecto, elegí tarea, fechas y gente. Para generar el detalle, cada día todo el personal directo disponible debe estar asignado a su jornada.</p>';
       if (!proyectos.length) h += '<div class="estado err">No hay proyectos. Creá al menos uno en la pestaña Proyectos antes de planificar.</div>';
+      const val = validarCobertura();
+      if (plani.length > 0 && !val.ok) {
+        h += '<div class="estado err" style="margin-bottom:12px"><b>⚠ No se puede generar el detalle todavía.</b> Cada día, todo el personal directo disponible debe estar asignado a su jornada (los de vacaciones/licencia y los contratistas se excluyen).';
+        if (val.faltantes.length) h += '<div style="margin-top:4px">Sin asignar: ' + val.faltantes.slice(0,10).join(" · ") + (val.faltantes.length>10?(" … y "+(val.faltantes.length-10)+" más"):"") + '</div>';
+        if (val.excesos.length) h += '<div style="margin-top:4px">Sobreasignados (+8h): ' + val.excesos.slice(0,8).join(" · ") + '</div>';
+        h += '</div>';
+      } else if (plani.length > 0 && val.ok) {
+        h += '<div class="estado ok" style="margin-bottom:12px">✓ Cobertura completa. Todo el personal directo disponible está asignado cada día.</div>';
+      }
       plani.forEach(b => {
         const st = STATIONS[b.estacion]; if (!st) return;
         const gente = planiPers[b.id] || [];
@@ -191,8 +223,10 @@
           + '</div>';
       });
       h += '<div class="row-actions"><select id="selAgregar" style="width:auto;color:#185FA5"><option value="">+ Agregar estación…</option>'+STKEYS.map(k=>'<option value="'+k+'">'+STATIONS[k].label+'</option>').join('')+'</select>';
-      h += '<button class="btn btn-primary" onclick="agregarEstacionDefault()">Cargar las 20 estaciones</button>';
-      h += '<button class="btn btn-add" onclick="cargar()">\u21bb Recargar</button></div>';
+      h += '<button class="btn btn-add" onclick="agregarEstacionDefault()">Cargar las 20 estaciones</button>';
+      h += '<button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button>';
+      h += '<button class="btn btn-primary" style="background:'+(val.ok?'#185FA5':'#A8A69E')+';cursor:'+(val.ok?'pointer':'not-allowed')+'" '+(val.ok?'':'disabled')+' onclick="generarDetalle()">Generar detalle diario →</button>';
+      h += '</div>';
       contenido.innerHTML = h;
       document.getElementById("selAgregar").onchange = function(){ if(this.value){ agregarEstacion(this.value); } };
     }
@@ -210,6 +244,11 @@
     }
     async function editarPl(id, c, v) { const u = {}; u[c] = (v === "" ? null : v); const { error } = await sb.from("planificacion").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const b = plani.find(x=>x.id===id); if(b) b[c]=u[c]; setEstado("\u2713 Guardado.", "ok"); if(c==="fecha_desde"||c==="fecha_hasta") renderPlani(); }
     async function eliminarPl(id) { const { error } = await sb.from("planificacion").delete().eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); cargar(); }
+    function generarDetalle() {
+      const val = validarCobertura();
+      if (!val.ok) { setEstado("Todavía hay días sin cubrir.", "err"); return; }
+      setEstado("\u2713 Cobertura validada. La generación del detalle diario se conecta en la próxima etapa.", "ok");
+    }
     async function toggleGente(planiId, personaId, estaba) {
       if (estaba) { const { error } = await sb.from("planificacion_personal").delete().eq("planificacion_id", planiId).eq("persona_id", personaId); if (error) return setEstado("Error: " + error.message, "err"); }
       else { const { error } = await sb.from("planificacion_personal").insert({ planificacion_id: planiId, persona_id: personaId }); if (error) return setEstado("Error: " + error.message, "err"); }
