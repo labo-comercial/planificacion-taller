@@ -355,17 +355,18 @@
       return tot;
     }
     async function editarHoras(planiId, personaId, horas) {
-      // validar que no supere 8h en ningún día del rango de esta estación
-      const b = plani.find(x => x.id === planiId);
-      const dias = diasHabiles(b.fecha_desde, b.fecha_hasta);
-      for (const d of dias) {
-        const otras = horasPersonaDia(personaId, d, planiId);
-        if (otras + horas > 8) { setEstado("⚠ " + nombrePersona(personaId) + " superaría 8h el " + d.slice(5) + " (ya tiene " + otras + "h en otras estaciones ese día). Ajustá las horas.", "err"); renderPlani(); return; }
-      }
+      // guardar siempre; avisar (sin bloquear) si algún día supera 8h entre estaciones
       const { error } = await sb.from("planificacion_personal").update({ horas }).eq("planificacion_id", planiId).eq("persona_id", personaId);
       if (error) return setEstado("Error: " + error.message, "err");
       if (!planiHoras[planiId]) planiHoras[planiId] = {}; planiHoras[planiId][personaId] = horas;
-      setEstado("\u2713 Guardado.", "ok"); renderPlani();
+      // chequear si ahora hay algún día con más de 8h
+      const b = plani.find(x => x.id === planiId);
+      const dias = diasHabiles(b.fecha_desde, b.fecha_hasta);
+      let aviso = null;
+      for (const d of dias) { const tot = horasPersonaDia(personaId, d, null); if (tot > 8) { aviso = d.slice(5) + " (" + tot + "h)"; break; } }
+      if (aviso) setEstado("\u26a0 " + nombrePersona(personaId) + " queda con más de 8h el " + aviso + ". Ajustá el reparto antes de generar el detalle.", "err");
+      else setEstado("\u2713 Guardado.", "ok");
+      renderPlani();
     }
 
     cargar();
