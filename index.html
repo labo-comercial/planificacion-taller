@@ -89,7 +89,7 @@
     const contenido = document.getElementById("contenido");
     const TIPOS = ["Vacaciones", "Licencia", "Parte médico"];
     let tab = "personal";
-    let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, detalle = [];
+    let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, planiHoras = {}, detalle = [];
 
     function setEstado(m, c) { estado.textContent = m; estado.className = "estado " + c; }
     function fechaStr(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
@@ -123,7 +123,7 @@
         const { data, error } = await sb.from("planificacion").select("*"); if (error) return errLoad(error);
         plani = data || [];
         const { data: pp, error: e2 } = await sb.from("planificacion_personal").select("*"); if (e2) return errLoad(e2);
-        planiPers = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) planiPers[r.planificacion_id] = []; planiPers[r.planificacion_id].push(r.persona_id); });
+        planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); });
         setEstado("\u2713 " + plani.length + " estación(es) planificada(s).", "ok"); renderPlani();
       } else {
         await asegurarBase();
@@ -195,7 +195,7 @@
       const fechas = [...new Set(todas)].sort();
       // carga por persona/día (cada bloque modo nombre asigna jornada completa)
       const carga = {};
-      plani.forEach(b => { (planiPers[b.id]||[]).forEach(g => diasHabiles(b.fecha_desde, b.fecha_hasta).forEach(d => { const k = g+"|"+d; carga[k] = (carga[k]||0) + 8; })); });
+      plani.forEach(b => { (planiPers[b.id]||[]).forEach(g => { const hrs = (planiHoras[b.id] && planiHoras[b.id][g]!=null) ? planiHoras[b.id][g] : 8; diasHabiles(b.fecha_desde, b.fecha_hasta).forEach(d => { const k = g+"|"+d; carga[k] = (carga[k]||0) + hrs; }); }); });
       const directos = personas.filter(p => p.tipo !== "Contratista");
       const faltantes = [], excesos = [];
       fechas.forEach(d => {
@@ -232,9 +232,12 @@
               const on=gente.includes(p.id);
               const dias=diasHabiles(b.fecha_desde,b.fecha_hasta);
               const diasNoDispo=dias.filter(d=>noDispoEn(p.id,d));
-              const todoNoDispo=dias.length>0 && diasNoDispo.length===dias.length;
-              if(todoNoDispo){ const tipo=tipoNoDispoEn(p.id,dias[0])||"No disp."; return '<button class="chip" disabled title="No disponible ('+tipo+') en todo el período" style="text-decoration:line-through;opacity:0.45;cursor:not-allowed">'+p.nombre+'</button>'; }
-              return '<button class="chip'+(on?' on':'')+'" onclick="toggleGente(\''+b.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+'</button>';
+              const algoNoDispo=diasNoDispo.length>0;
+              if(algoNoDispo && !on){ const tipo=tipoNoDispoEn(p.id,diasNoDispo[0])||"No disp."; return '<button class="chip" disabled title="No disponible ('+tipo+') en '+diasNoDispo.length+' día(s) del rango" style="text-decoration:line-through;opacity:0.45;cursor:not-allowed">'+p.nombre+'</button>'; }
+              const horas = (planiHoras[b.id] && planiHoras[b.id][p.id]!=null) ? planiHoras[b.id][p.id] : 8;
+              const chipBtn = '<button class="chip'+(on?' on':'')+'" onclick="toggleGente(\''+b.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+(algoNoDispo?' \u26a0':'')+'</button>';
+              if(!on) return chipBtn;
+              return '<span style="display:inline-flex;align-items:center;gap:3px">'+chipBtn+'<input type="number" value="'+horas+'" min="0" max="8" onchange="editarHoras(\''+b.id+'\',\''+p.id+'\',Number(this.value))" title="Horas en esta estación" style="width:42px;padding:2px 4px;font-size:11px;text-align:center">h</span>';
             }).join('')+'</div>'
           + '</div>';
       });
@@ -282,7 +285,8 @@
         const gente = planiPers[b.id] || [];
         gente.forEach(g => dias.forEach(fecha => {
           if (noDispoEn(g, fecha)) return; // no genera filas para días no disponibles
-          filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, horas_normales: 8, horas_extra: 0, ausente: false });
+          const hrs = (planiHoras[b.id] && planiHoras[b.id][g]!=null) ? planiHoras[b.id][g] : 8;
+          filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, horas_normales: hrs, horas_extra: 0, ausente: false });
         }));
       });
       if (filas.length > 0) {
@@ -333,11 +337,34 @@
     async function toggleAusente(id, val) { const u = val ? { ausente: true, horas_normales: 0, horas_extra: 0 } : { ausente: false, horas_normales: 8 }; const { error } = await sb.from("detalle_diario").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const f = detalle.find(x=>x.id===id); if(f) Object.assign(f,u); setEstado("\u2713 Guardado.", "ok"); renderDetalle(); }
     async function toggleGente(planiId, personaId, estaba) {
       if (estaba) { const { error } = await sb.from("planificacion_personal").delete().eq("planificacion_id", planiId).eq("persona_id", personaId); if (error) return setEstado("Error: " + error.message, "err"); }
-      else { const { error } = await sb.from("planificacion_personal").insert({ planificacion_id: planiId, persona_id: personaId }); if (error) return setEstado("Error: " + error.message, "err"); }
-      // actualizar en memoria y re-render
-      if (!planiPers[planiId]) planiPers[planiId] = [];
-      if (estaba) planiPers[planiId] = planiPers[planiId].filter(x => x !== personaId);
-      else planiPers[planiId].push(personaId);
+      else { const { error } = await sb.from("planificacion_personal").insert({ planificacion_id: planiId, persona_id: personaId, horas: 8 }); if (error) return setEstado("Error: " + error.message, "err"); }
+      if (!planiPers[planiId]) { planiPers[planiId] = []; planiHoras[planiId] = {}; }
+      if (estaba) { planiPers[planiId] = planiPers[planiId].filter(x => x !== personaId); delete planiHoras[planiId][personaId]; }
+      else { planiPers[planiId].push(personaId); if(!planiHoras[planiId]) planiHoras[planiId]={}; planiHoras[planiId][personaId] = 8; }
+      setEstado("\u2713 Guardado.", "ok"); renderPlani();
+    }
+    // suma de horas de una persona en un día dado, entre todas las estaciones cuyo rango incluye ese día
+    function horasPersonaDia(personaId, fecha, exceptoPlaniId) {
+      let tot = 0;
+      plani.forEach(b => {
+        if (b.id === exceptoPlaniId) return;
+        if (!(planiPers[b.id]||[]).includes(personaId)) return;
+        if (!diasHabiles(b.fecha_desde, b.fecha_hasta).includes(fecha)) return;
+        tot += (planiHoras[b.id] && planiHoras[b.id][personaId] != null) ? planiHoras[b.id][personaId] : 8;
+      });
+      return tot;
+    }
+    async function editarHoras(planiId, personaId, horas) {
+      // validar que no supere 8h en ningún día del rango de esta estación
+      const b = plani.find(x => x.id === planiId);
+      const dias = diasHabiles(b.fecha_desde, b.fecha_hasta);
+      for (const d of dias) {
+        const otras = horasPersonaDia(personaId, d, planiId);
+        if (otras + horas > 8) { setEstado("⚠ " + nombrePersona(personaId) + " superaría 8h el " + d.slice(5) + " (ya tiene " + otras + "h en otras estaciones ese día). Ajustá las horas.", "err"); renderPlani(); return; }
+      }
+      const { error } = await sb.from("planificacion_personal").update({ horas }).eq("planificacion_id", planiId).eq("persona_id", personaId);
+      if (error) return setEstado("Error: " + error.message, "err");
+      if (!planiHoras[planiId]) planiHoras[planiId] = {}; planiHoras[planiId][personaId] = horas;
       setEstado("\u2713 Guardado.", "ok"); renderPlani();
     }
 
