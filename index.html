@@ -29,8 +29,9 @@
     h1 { font-size: 22px; font-weight: 600; margin: 0 0 2px; }
     .sub { font-size: 13px; color: #888780; margin: 0 0 16px; }
     .tabs { display: flex; gap: 4px; border-bottom: 1px solid #E6E4DC; overflow-x: auto; }
-    .tab { background: transparent; border: 1px solid transparent; border-bottom: none; border-radius: 10px 10px 0 0; padding: 9px 15px; font-size: 13.5px; color: #888780; cursor: pointer; margin-bottom: -1px; white-space: nowrap; }
-    .tab.active { background: #fff; border-color: #E6E4DC; color: #2C2C2A; font-weight: 600; }
+    .tab { background: var(--c, transparent); opacity: 0.55; border: 1px solid transparent; border-bottom: none; border-radius: 10px 10px 0 0; padding: 9px 15px; font-size: 13.5px; color: #5F5E5A; cursor: pointer; margin-bottom: -1px; white-space: nowrap; transition: opacity .15s; }
+    .tab:hover { opacity: 0.8; }
+    .tab.active { background: var(--c, #fff); opacity: 1; border-color: #E6E4DC; border-bottom-color: var(--c, #fff); color: #2C2C2A; font-weight: 600; }
     .panel { background: #fff; border: 1px solid #E6E4DC; border-top: none; border-radius: 0 0 14px 14px; padding: 18px; }
     .estado { font-size: 12.5px; padding: 8px 12px; border-radius: 8px; margin-bottom: 14px; }
     .ok { background: #E1F5EE; color: #0F6E56; } .err { background: #FCEBEB; color: #A32D2D; } .cargando { background: #F1EFE8; color: #5F5E5A; }
@@ -81,15 +82,16 @@
     </div>
     <p class="sub">Administración y planificación del personal de taller · conectado a Supabase</p>
     <div class="tabs">
-      <button class="tab active" id="tab-personal" onclick="cambiarTab('personal')">Personal y tarifas</button>
-      <button class="tab" id="tab-proyectos" onclick="cambiarTab('proyectos')">Proyectos</button>
-      <button class="tab" id="tab-dispo" onclick="cambiarTab('dispo')">Disponibilidad</button>
-      <button class="tab" id="tab-plani" onclick="cambiarTab('plani')">Planificación General</button>
-      <button class="tab" id="tab-detalle" onclick="cambiarTab('detalle')">Detalle diario</button>
-      <button class="tab" id="tab-dash" onclick="cambiarTab('dash')">Dashboard</button>
-      <button class="tab" id="tab-gantt" onclick="cambiarTab('gantt')">Gantt</button>
-      <button class="tab" id="tab-histo" onclick="cambiarTab('histo')">Histograma</button>
-      <button class="tab" id="tab-parte" onclick="cambiarTab('parte')">Parte diario</button>
+      <button class="tab active" id="tab-dash" onclick="cambiarTab('dash')" style="--c:#E6F1FB">Dashboard</button>
+      <button class="tab" id="tab-proyectos" onclick="cambiarTab('proyectos')" style="--c:#E8E5FA">Proyectos</button>
+      <button class="tab" id="tab-personal" onclick="cambiarTab('personal')" style="--c:#FAEEDA">Personal y tarifas</button>
+      <button class="tab" id="tab-dispo" onclick="cambiarTab('dispo')" style="--c:#FBEAF0">Disponibilidad</button>
+      <button class="tab" id="tab-plani" onclick="cambiarTab('plani')" style="--c:#E8F3DE">Planificación General</button>
+      <button class="tab" id="tab-detalle" onclick="cambiarTab('detalle')" style="--c:#E1F5EE">Detalle diario</button>
+      <button class="tab" id="tab-gantt" onclick="cambiarTab('gantt')" style="--c:#DEEEF5">Gantt</button>
+      <button class="tab" id="tab-histo" onclick="cambiarTab('histo')" style="--c:#F2E8D8">Histograma</button>
+      <button class="tab" id="tab-parte" onclick="cambiarTab('parte')" style="--c:#D9F0E6">Parte diario</button>
+      <button class="tab" id="tab-informe" onclick="cambiarTab('informe')" style="--c:#F7ECDA">Informe de cierre</button>
     </div>
     <div class="panel">
       <div id="estado" class="estado cargando">Conectando…</div>
@@ -151,7 +153,7 @@
     function nombrePersona(id) { const p = personas.find(x => x.id === id); return p ? p.nombre : "—"; }
     function nombreProy(id) { const p = proyectos.find(x => x.id === id); return p ? p.nombre : "(sin proyecto)"; }
 
-    function cambiarTab(t) { tab = t; ["personal","proyectos","dispo","plani","detalle","dash","gantt","histo","parte"].forEach(x => { const el = document.getElementById("tab-"+x); if(el) el.className = "tab" + (x===t?" active":""); }); cargar(); }
+    function cambiarTab(t) { tab = t; ["personal","proyectos","dispo","plani","detalle","dash","gantt","histo","parte","informe"].forEach(x => { const el = document.getElementById("tab-"+x); if(el) el.className = "tab" + (x===t?" active":""); }); cargar(); }
 
     async function asegurarBase() {
       if (!personas.length) { const { data } = await sb.from("personal").select("*"); personas = (data||[]).sort((a,b)=>{if(a.tipo!==b.tipo)return a.tipo==="Directo"?-1:1;return (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999);}); }
@@ -197,6 +199,7 @@
         else if (tab === "gantt") renderGantt();
         else if (tab === "histo") renderHisto();
         else if (tab === "parte") renderParte();
+        else if (tab === "informe") renderInforme();
       }
     }
 
@@ -531,6 +534,106 @@
     }
     function setParte(campo,val){ if(campo==='fecha')parteFecha=val; else if(campo==='proy')parteProy=val; else if(campo==='est')parteEst=val; else if(campo==='pers')partePersona=val; renderParte(); }
     function copiarParte(){ const t=document.getElementById("parteTexto"); t.select(); try{ navigator.clipboard.writeText(t.value); setEstado("\u2713 Parte copiado. Pegalo en WhatsApp.","ok"); }catch(e){ document.execCommand("copy"); setEstado("\u2713 Parte copiado.","ok"); } }
+
+    /* ---- INFORME DE CIERRE ---- */
+    let informeProy = "";
+    function renderInforme() {
+      const proySel = informeProy || (proyectos[0] && proyectos[0].id) || "";
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px">';
+      h+='<label style="font-size:12px;color:#888780">Proyecto<br><select onchange="setInformeProy(this.value)" style="margin-top:3px;min-width:220px">'+(proyectos.length?proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===proySel?'selected':'')+'>'+p.nombre+(p.estado==='Cerrado'?' (cerrado)':'')+'</option>').join(''):'<option>Sin proyectos</option>')+'</select></label>';
+      h+=botonesExport("informe-print","informe_cierre")+'</div>';
+
+      if(!proySel){ h+='<p style="font-size:13px;color:#888780">No hay proyectos.</p>'; contenido.innerHTML=h; return; }
+      const pr = proyectos.find(p=>p.id===proySel);
+      const blo = plani.filter(b=>b.proyecto_id===proySel);
+      const det = detalle.filter(f=>f.proyecto_id===proySel);
+
+      // --- TIEMPOS ---
+      // planificado: rango de fechas de las estaciones del proyecto
+      let planDias=[], realDias=[];
+      blo.forEach(b=>diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>planDias.push(d)));
+      det.forEach(f=>{ if(!f.ausente) realDias.push(f.fecha); });
+      planDias=[...new Set(planDias)].sort(); realDias=[...new Set(realDias)].sort();
+      const planIni=planDias[0], planFin=planDias[planDias.length-1];
+      const realIni=realDias[0], realFin=realDias[realDias.length-1];
+      const planDur=planDias.length, realDur=realDias.length;
+      const desvDias=realDur-planDur;
+
+      // --- COSTOS ---
+      const presup=Number(pr.presupuesto_mo)||0;
+      let jornal=0, extra=0, hsExtra=0, ausencias=0;
+      det.forEach(f=>{ if(f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*2; hsExtra+=(Number(f.horas_extra)||0); });
+      const real=jornal+extra;
+      const desvCosto=real-presup;
+      const desvPct=presup?(desvCosto/presup*100):0;
+
+      // --- POR ESTACIÓN ---
+      const est={};
+      blo.forEach(b=>{ const dP=diasHabiles(b.fecha_desde,b.fecha_hasta); if(!est[b.estacion])est[b.estacion]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0}; dP.forEach(d=>est[b.estacion].planD.add(d)); });
+      det.forEach(f=>{ if(!est[f.estacion_real])est[f.estacion_real]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0}; if(!f.ausente){est[f.estacion_real].realD.add(f.fecha); const ch=costoHora(f.persona_real); est[f.estacion_real].costo+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*2; est[f.estacion_real].hsExtra+=(Number(f.horas_extra)||0);} });
+
+      const fmt=(n)=>'$'+Math.round(n).toLocaleString("es-AR");
+      const fdate=(d)=>d?d.split("-").reverse().join("/"):"—";
+
+      h+='<div id="informe-print">';
+      h+='<div style="border:1px solid #E6E4DC;border-radius:14px;padding:20px;background:#fff">';
+      h+='<div style="font-size:20px;font-weight:700">Informe de cierre</div><div style="font-size:15px;color:#185FA5;font-weight:600;margin-bottom:2px">'+pr.nombre+(pr.codigo?' · '+pr.codigo:'')+'</div><div style="font-size:12px;color:#A8A69E;margin-bottom:16px">Estado: '+(pr.estado||'Vigente')+(pr.cant_modulos?' · '+pr.cant_modulos+' módulos':'')+'</div>';
+
+      if(det.length===0){ h+='<div class="estado err" style="margin:0">Este proyecto no tiene detalle diario registrado todavía. El informe necesita datos reales cargados para comparar.</div></div></div>'; contenido.innerHTML=h; return; }
+
+      // resumen general
+      h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px">';
+      const kpi=(l,v,s,col)=>'<div style="flex:1;min-width:140px;background:#F9F8F4;border-radius:12px;padding:12px 14px"><div style="font-size:11.5px;color:#888780">'+l+'</div><div style="font-size:19px;font-weight:600;color:'+(col||'#2C2C2A')+';margin-top:2px">'+v+'</div>'+(s?'<div style="font-size:11px;color:#A8A69E;margin-top:1px">'+s+'</div>':'')+'</div>';
+      h+=kpi("Costo real",fmt(real),"jornales + extra");
+      h+=kpi("Presupuesto MO",presup?fmt(presup):"s/dato",null);
+      h+=kpi("Desvío de costo",(desvCosto>=0?"+":"")+fmt(desvCosto),presup?(desvPct>=0?"+":"")+desvPct.toFixed(0)+"%":null,desvCosto>0?'#A32D2D':'#3B6D11');
+      h+=kpi("Desvío de tiempo",(desvDias>=0?"+":"")+desvDias+" días",planDur+" plan / "+realDur+" real",desvDias>0?'#A32D2D':desvDias<0?'#3B6D11':'#888780');
+      h+='</div>';
+
+      // tiempos
+      h+='<div style="font-size:14px;font-weight:600;margin-bottom:8px">⏱ Tiempos</div>';
+      h+='<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:8px 10px"></th><th style="text-align:center;padding:8px 10px">Inicio</th><th style="text-align:center;padding:8px 10px">Fin</th><th style="text-align:center;padding:8px 10px">Días hábiles</th></tr></thead><tbody>';
+      h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 10px;font-weight:500">Planificado</td><td style="text-align:center">'+fdate(planIni)+'</td><td style="text-align:center">'+fdate(planFin)+'</td><td style="text-align:center">'+planDur+'</td></tr>';
+      h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 10px;font-weight:500">Real</td><td style="text-align:center">'+fdate(realIni)+'</td><td style="text-align:center">'+fdate(realFin)+'</td><td style="text-align:center">'+realDur+'</td></tr>';
+      h+='<tr style="border-top:1px solid #F1EFE8;background:'+(desvDias>0?'#FCEBEB':'#F1F8EC')+'"><td style="padding:8px 10px;font-weight:600">Desvío</td><td></td><td></td><td style="text-align:center;font-weight:600;color:'+(desvDias>0?'#A32D2D':'#3B6D11')+'">'+(desvDias>=0?"+":"")+desvDias+' días</td></tr>';
+      h+='</tbody></table>';
+
+      // costos
+      h+='<div style="font-size:14px;font-weight:600;margin-bottom:8px">💰 Costos</div>';
+      h+='<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:8px"><tbody>';
+      h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px">Jornales (horas normales)</td><td style="text-align:right;padding:7px 10px">'+fmt(jornal)+'</td></tr>';
+      h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px">Horas extra ('+hsExtra+'h, x2)</td><td style="text-align:right;padding:7px 10px;color:#BA7517">'+fmt(extra)+'</td></tr>';
+      h+='<tr style="border-top:1px solid #F1EFE8;font-weight:600"><td style="padding:7px 10px">Costo real total</td><td style="text-align:right;padding:7px 10px">'+fmt(real)+'</td></tr>';
+      h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px">Presupuesto MO</td><td style="text-align:right;padding:7px 10px">'+(presup?fmt(presup):"s/dato")+'</td></tr>';
+      h+='<tr style="border-top:1px solid #F1EFE8;background:'+(desvCosto>0?'#FCEBEB':'#F1F8EC')+';font-weight:600"><td style="padding:7px 10px">Desvío de costo</td><td style="text-align:right;padding:7px 10px;color:'+(desvCosto>0?'#A32D2D':'#3B6D11')+'">'+(desvCosto>=0?"+":"")+fmt(desvCosto)+(presup?' ('+(desvPct>=0?"+":"")+desvPct.toFixed(0)+'%)':'')+'</td></tr>';
+      h+='</tbody></table>';
+
+      // desglose por estación
+      const estArr=Object.entries(est).filter(([,v])=>v.realD.size>0||v.planD.size>0).sort((a,b)=>b[1].costo-a[1].costo);
+      h+='<div style="font-size:14px;font-weight:600;margin:18px 0 8px">📊 Desglose por estación</div>';
+      h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:8px 10px">Estación</th><th style="text-align:center;padding:8px 10px">Días plan</th><th style="text-align:center;padding:8px 10px">Días real</th><th style="text-align:center;padding:8px 10px">Desvío</th><th style="text-align:right;padding:8px 10px">Costo real</th><th style="text-align:center;padding:8px 10px">Hs extra</th></tr></thead><tbody>';
+      estArr.forEach(([k,v])=>{ const dp=v.planD.size, dr=v.realD.size, dv=dr-dp; h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px"><span style="background:'+(STATIONS[k]?STATIONS[k].bg:'#eee')+';color:'+(STATIONS[k]?STATIONS[k].color:'#555')+';padding:2px 7px;border-radius:6px">'+nombreEstacion(k)+'</span></td><td style="text-align:center">'+dp+'</td><td style="text-align:center">'+dr+'</td><td style="text-align:center;color:'+(dv>0?'#A32D2D':dv<0?'#3B6D11':'#888780')+'">'+(dv>=0?"+":"")+dv+'</td><td style="text-align:right">'+fmt(v.costo)+'</td><td style="text-align:center;color:'+(v.hsExtra>0?'#BA7517':'#A8A69E')+'">'+(v.hsExtra||0)+'h</td></tr>'; });
+      h+='</tbody></table></div>';
+
+      // lectura del desvío (descriptiva, basada en datos)
+      h+='<div style="font-size:14px;font-weight:600;margin:18px 0 8px">📝 Lectura del desvío</div><div style="font-size:13px;color:#5F5E5A;line-height:1.6;background:#F9F8F4;border-radius:12px;padding:14px 16px">';
+      const obs=[];
+      if(presup){ if(desvCosto>0)obs.push("El costo real superó el presupuesto en "+fmt(desvCosto)+" ("+desvPct.toFixed(0)+"%)."); else obs.push("El costo real quedó "+fmt(Math.abs(desvCosto))+" por debajo del presupuesto ("+Math.abs(desvPct).toFixed(0)+"%)."); } else obs.push("No hay presupuesto de mano de obra cargado para comparar el costo.");
+      if(hsExtra>0){ const pctExtra=real?(extra/real*100):0; obs.push("Las horas extra ("+hsExtra+"h) representan "+pctExtra.toFixed(0)+"% del costo real ("+fmt(extra)+")."); }
+      if(ausencias>0)obs.push("Se registraron "+ausencias+" jornada(s) de ausencia en el período.");
+      if(desvDias>0)obs.push("El proyecto se extendió "+desvDias+" día(s) hábil(es) más de lo planificado."); else if(desvDias<0)obs.push("El proyecto se completó en "+Math.abs(desvDias)+" día(s) hábil(es) menos de lo planificado."); else obs.push("La duración real coincidió con la planificada.");
+      const peor=estArr.filter(([,v])=>v.realD.size-v.planD.size>0).sort((a,b)=>(b[1].realD.size-b[1].planD.size)-(a[1].realD.size-a[1].planD.size))[0];
+      if(peor)obs.push("La estación con mayor desvío de tiempo fue "+nombreEstacion(peor[0])+" (+"+(peor[1].realD.size-peor[1].planD.size)+" días).");
+      const caroExtra=estArr.filter(([,v])=>v.hsExtra>0).sort((a,b)=>b[1].hsExtra-a[1].hsExtra)[0];
+      if(caroExtra)obs.push("La mayor concentración de horas extra se dio en "+nombreEstacion(caroExtra[0])+" ("+caroExtra[1].hsExtra+"h).");
+      h+=obs.map(o=>'• '+o).join('<br>');
+      h+='<div style="font-size:11px;color:#A8A69E;margin-top:10px">Las fechas reales se infieren del detalle diario cargado (primer y último día con trabajo registrado por estación). La precisión depende de cuán completo esté el registro.</div>';
+      h+='</div>';
+
+      h+='</div></div>';
+      contenido.innerHTML=h;
+    }
+    function setInformeProy(v){ informeProy=v; renderInforme(); }
     async function toggleGente(planiId, personaId, estaba) {
       if (estaba) { const { error } = await sb.from("planificacion_personal").delete().eq("planificacion_id", planiId).eq("persona_id", personaId); if (error) return setEstado("Error: " + error.message, "err"); }
       else { const { error } = await sb.from("planificacion_personal").insert({ planificacion_id: planiId, persona_id: personaId, horas: 8 }); if (error) return setEstado("Error: " + error.message, "err"); }
