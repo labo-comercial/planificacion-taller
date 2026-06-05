@@ -317,10 +317,11 @@
       plani.forEach(b => {
         const st = STATIONS[b.estacion]; if (!st) return;
         const gente = planiPers[b.id] || [];
+        const subsSel = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
         h += '<div class="card"><div class="pl-row"><span class="estpill" style="background:'+st.bg+';color:'+st.color+';min-width:130px;display:inline-block;text-align:center">'+st.label+'</span>'
-          + '<select onchange="editarPl(\''+b.id+'\',\'subtarea\',this.value)" style="min-width:230px">'+st.subs.map(s=>'<option '+(s===b.subtarea?'selected':'')+'>'+s+'</option>').join('')+'</select>'
           + '<select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px">'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>'
           + '<button class="btn-del" style="margin-left:auto" onclick="eliminarPl(\''+b.id+'\')">×</button></div>'
+          + '<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Tareas (tildá una o varias):</div><div class="chips">'+st.subs.map(s=>{const on=subsSel.includes(s);return '<button class="chip'+(on?' on':'')+'" onclick="toggleSub(\''+b.id+'\',\''+s.replace(/'/g,"\\\\'")+'\','+(on?'true':'false')+')">'+s+'</button>';}).join('')+'</div></div>'
           + '<div class="pl-row"><input type="date" value="'+(b.fecha_desde||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(b.fecha_hasta||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+diasHabiles(b.fecha_desde,b.fecha_hasta).length+' días háb.</span></div>'
           + '<div class="chips">'+personas.map(p=>{
               const on=gente.includes(p.id);
@@ -356,6 +357,15 @@
       if (error) return setEstado("Error: " + error.message, "err"); cargar();
     }
     async function editarPl(id, c, v) { const u = {}; u[c] = (v === "" ? null : v); const { error } = await sb.from("planificacion").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const b = plani.find(x=>x.id===id); if(b) b[c]=u[c]; setEstado("\u2713 Guardado.", "ok"); if(c==="fecha_desde"||c==="fecha_hasta") renderPlani(); }
+    async function toggleSub(id, sub, estaba) {
+      const b = plani.find(x=>x.id===id); if(!b) return;
+      let subs = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
+      if (estaba) subs = subs.filter(s=>s!==sub); else if(!subs.includes(sub)) subs.push(sub);
+      const nuevo = subs.join(", ");
+      const { error } = await sb.from("planificacion").update({ subtarea: nuevo }).eq("id", id);
+      if (error) return setEstado("Error: " + error.message, "err");
+      b.subtarea = nuevo; setEstado("\u2713 Guardado.", "ok"); renderPlani();
+    }
     async function eliminarPl(id) { const { error } = await sb.from("planificacion").delete().eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); cargar(); }
     async function generarDetalle() {
       const val = validarCobertura();
@@ -401,7 +411,7 @@
       const exceso = (f) => !f.ausente && horasDia[f.persona_real + "|" + f.fecha] > 8;
       const opcPersona = (sel) => personas.map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
       const opcEst = (sel) => STKEYS.map(k => '<option value="'+k+'" '+(k===sel?'selected':'')+'>'+STATIONS[k].label+'</option>').join('');
-      const opcSub = (est, sel) => (STATIONS[est]?STATIONS[est].subs:[]).map(s => '<option '+(s===sel?'selected':'')+'>'+s+'</option>').join('');
+      const opcSub = (est, sel) => { const base = STATIONS[est]?STATIONS[est].subs.slice():[]; if(sel && !base.includes(sel)) base.unshift(sel); return base.map(s => '<option '+(s===sel?'selected':'')+'>'+s+'</option>').join(''); };
 
       let h = '<p style="font-size:13px;color:#888780;margin-top:0">Registro real día por día. Editá lo que pasó: reasignar persona/estación/tarea, marcar ausente, cargar horas extra. Los días anteriores a hoy son historia.</p>';
       const conf = Object.entries(horasDia).filter(([,v])=>v>8);
