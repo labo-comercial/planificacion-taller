@@ -86,6 +86,7 @@
       <button class="tab" id="tab-proyectos" onclick="cambiarTab('proyectos')" style="--c:#E8E5FA">Proyectos</button>
       <button class="tab" id="tab-personal" onclick="cambiarTab('personal')" style="--c:#FAEEDA">Personal y tarifas</button>
       <button class="tab" id="tab-dispo" onclick="cambiarTab('dispo')" style="--c:#FBEAF0">Disponibilidad</button>
+      <button class="tab" id="tab-feriados" onclick="cambiarTab('feriados')" style="--c:#FCEBEB">Feriados</button>
       <button class="tab" id="tab-plani" onclick="cambiarTab('plani')" style="--c:#E8F3DE">Planificación General</button>
       <button class="tab" id="tab-detalle" onclick="cambiarTab('detalle')" style="--c:#E1F5EE">Detalle diario</button>
       <button class="tab" id="tab-gantt" onclick="cambiarTab('gantt')" style="--c:#DEEEF5">Gantt</button>
@@ -133,10 +134,12 @@
     const contenido = document.getElementById("contenido");
     const TIPOS = ["Vacaciones", "Licencia", "Parte médico"];
     let tab = "personal";
-    let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, planiHoras = {}, detalle = [];
+    let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, planiHoras = {}, detalle = [], feriados = [];
 
     function setEstado(m, c) { estado.textContent = m; estado.className = "estado " + c; }
     function fechaStr(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+    function dmy(iso){ if(!iso) return "—"; const p=iso.slice(0,10).split("-"); return p[2]+"/"+p[1]+"/"+p[0]; }
+    function dm(iso){ if(!iso) return "—"; const p=iso.slice(0,10).split("-"); return p[2]+"/"+p[1]; }
     function exportarPDF(){ window.print(); }
     async function exportarJPEG(elId, nombre){
       try {
@@ -153,12 +156,13 @@
     function nombrePersona(id) { const p = personas.find(x => x.id === id); return p ? p.nombre : "—"; }
     function nombreProy(id) { const p = proyectos.find(x => x.id === id); return p ? p.nombre : "(sin proyecto)"; }
 
-    function cambiarTab(t) { tab = t; ["personal","proyectos","dispo","plani","detalle","dash","gantt","histo","parte","informe"].forEach(x => { const el = document.getElementById("tab-"+x); if(el) el.className = "tab" + (x===t?" active":""); }); cargar(); }
+    function cambiarTab(t) { tab = t; ["personal","proyectos","dispo","feriados","plani","detalle","dash","gantt","histo","parte","informe"].forEach(x => { const el = document.getElementById("tab-"+x); if(el) el.className = "tab" + (x===t?" active":""); }); cargar(); }
 
     async function asegurarBase() {
       if (!personas.length) { const { data } = await sb.from("personal").select("*"); personas = (data||[]).sort((a,b)=>{if(a.tipo!==b.tipo)return a.tipo==="Directo"?-1:1;return (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999);}); }
       if (!proyectos.length) { const { data } = await sb.from("proyectos").select("*"); proyectos = data || []; }
       { const { data } = await sb.from("no_disponibilidad").select("*"); dispo = data || []; }
+      { const { data } = await sb.from("feriados").select("*"); feriados = data || []; }
     }
 
     async function cargar() {
@@ -175,6 +179,9 @@
         await asegurarBase();
         const { data, error } = await sb.from("no_disponibilidad").select("*"); if (error) return errLoad(error);
         dispo = data || []; setEstado("\u2713 " + dispo.length + " período(s).", "ok"); renderDispo();
+      } else if (tab === "feriados") {
+        const { data, error } = await sb.from("feriados").select("*"); if (error) return errLoad(error);
+        feriados = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : 1); setEstado("\u2713 " + feriados.length + " feriado(s).", "ok"); renderFeriados();
       } else if (tab === "plani") {
         await asegurarBase();
         const { data, error } = await sb.from("planificacion").select("*"); if (error) return errLoad(error);
@@ -252,8 +259,25 @@
     async function editarD(id,c,v){const u={};u[c]=v;const{error}=await sb.from("no_disponibilidad").update(u).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");setEstado("\u2713 Guardado.","ok");}
     async function eliminarD(id){const{error}=await sb.from("no_disponibilidad").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");cargar();}
 
+    /* ---- FERIADOS ---- */
+    function renderFeriados() {
+      let h='<p style="font-size:13px;color:#888780;margin-top:0">Días feriados. No se cuentan como días hábiles ni se planifica en ellos, salvo que marques "Se trabaja" (excepción de dirección).</p>';
+      h+='<table><thead><tr><th>Fecha</th><th>Nombre</th><th style="text-align:center">¿Se trabaja?</th><th></th></tr></thead><tbody>';
+      if(!feriados.length) h+='<tr><td colspan="4" style="color:#A8A69E;padding:14px">Sin feriados cargados.</td></tr>';
+      feriados.forEach(f=>{ h+='<tr'+(f.se_trabaja?' style="background:#F1F8EC"':'')+'><td style="width:130px"><input type="date" value="'+(f.fecha||'')+'" onchange="editarFer(\''+f.id+'\',\'fecha\',this.value)"></td>'
+        +'<td><input value="'+(f.nombre||'')+'" onchange="editarFer(\''+f.id+'\',\'nombre\',this.value)"></td>'
+        +'<td style="text-align:center;width:110px"><input type="checkbox" '+(f.se_trabaja?'checked':'')+' onchange="editarFer(\''+f.id+'\',\'se_trabaja\',this.checked)"> '+(f.se_trabaja?'<span style="font-size:11px;color:#3B6D11">sí</span>':'<span style="font-size:11px;color:#A8A69E">no</span>')+'</td>'
+        +'<td style="width:30px"><button class="btn-del" onclick="eliminarFer(\''+f.id+'\')">×</button></td></tr>'; });
+      h+='</tbody></table><div class="row-actions"><button class="btn-add" onclick="agregarFer()">+ Agregar feriado</button><button class="btn btn-primary" onclick="cargar()">↻ Recargar</button></div>';
+      contenido.innerHTML=h;
+    }
+    async function agregarFer(){ const t=fechaStr(new Date()); const{error}=await sb.from("feriados").insert({fecha:t,nombre:"Nuevo feriado",se_trabaja:false}); if(error)return setEstado("Error: "+error.message,"err"); cargar(); }
+    async function editarFer(id,c,v){ const u={};u[c]=v; const{error}=await sb.from("feriados").update(u).eq("id",id); if(error)return setEstado("Error: "+error.message,"err"); const f=feriados.find(x=>x.id===id); if(f)f[c]=v; setEstado("\u2713 Guardado.","ok"); renderFeriados(); }
+    async function eliminarFer(id){ const{error}=await sb.from("feriados").delete().eq("id",id); if(error)return setEstado("Error: "+error.message,"err"); cargar(); }
+
     /* ---- PLANIFICACIÓN ---- */
-    function diasHabiles(a,b){const o=[];if(!a||!b)return o;let d=new Date(a+"T12:00:00");const e=new Date(b+"T12:00:00");while(d<=e){const w=d.getDay();if(w!==0&&w!==6)o.push(fechaStr(d));d=new Date(d.getTime()+86400000);}return o;}
+    function esFeriado(f){ return feriados.some(h => h.fecha === f && !h.se_trabaja); }
+    function diasHabiles(a,b){const o=[];if(!a||!b)return o;let d=new Date(a+"T12:00:00");const e=new Date(b+"T12:00:00");while(d<=e){const w=d.getDay();const f=fechaStr(d);if(w!==0&&w!==6&&!esFeriado(f))o.push(f);d=new Date(d.getTime()+86400000);}return o;}
 
     function noDispoEn(personaId, fecha) { return dispo.some(n => n.persona_id === personaId && fecha >= n.desde && fecha <= n.hasta); }
     function tipoNoDispoEn(personaId, fecha) { const n = dispo.find(x => x.persona_id === personaId && fecha >= x.desde && fecha <= x.hasta); return n ? n.tipo : null; }
@@ -272,8 +296,8 @@
         directos.forEach(p => {
           if (noDispoEn(p.id, d)) return;
           const h = carga[p.id+"|"+d] || 0;
-          if (h < 8) faltantes.push(nombrePersona(p.id) + " · " + d.slice(5));
-          else if (h > 8) excesos.push(nombrePersona(p.id) + " · " + d.slice(5));
+          if (h < 8) faltantes.push(nombrePersona(p.id) + " · " + dm(d));
+          else if (h > 8) excesos.push(nombrePersona(p.id) + " · " + dm(d));
         });
       });
       return { fechas, faltantes: [...new Set(faltantes)], excesos: [...new Set(excesos)], ok: faltantes.length===0 && excesos.length===0 && fechas.length>0 };
@@ -381,7 +405,7 @@
 
       let h = '<p style="font-size:13px;color:#888780;margin-top:0">Registro real día por día. Editá lo que pasó: reasignar persona/estación/tarea, marcar ausente, cargar horas extra. Los días anteriores a hoy son historia.</p>';
       const conf = Object.entries(horasDia).filter(([,v])=>v>8);
-      if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación:</b> '+conf.map(([k,v])=>{const [pid,f]=k.split("|");return nombrePersona(pid)+" ("+f.slice(5)+"): "+v+"h";}).join(" · ")+'</div>';
+      if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación:</b> '+conf.map(([k,v])=>{const [pid,f]=k.split("|");return nombrePersona(pid)+" ("+dm(f)+"): "+v+"h";}).join(" · ")+'</div>';
       h += '<div style="overflow-x:auto"><table style="min-width:920px"><thead><tr><th>Fecha</th><th>Persona</th><th>Estación</th><th>Tarea</th><th style="text-align:center">Aus.</th><th style="text-align:center">Hs</th><th style="text-align:center">Ext.</th></tr></thead><tbody>';
       detalle.forEach(f => {
         const pasado = f.fecha < hoy;
@@ -389,7 +413,7 @@
         const bg = f.ausente ? 'background:#FCEBEB' : reasig ? 'background:#FBFAF5' : '';
         const dis = pasado ? 'disabled' : '';
         h += '<tr style="'+bg+'">'
-          + '<td style="white-space:nowrap;color:#888780">'+f.fecha.slice(5)+(pasado?' 🔒':'')+'</td>'
+          + '<td style="white-space:nowrap;color:#888780">'+dm(f.fecha)+(pasado?' 🔒':'')+'</td>'
           + '<td><select '+dis+' onchange="editarDet(\''+f.id+'\',\'persona_real\',this.value)">'+opcPersona(f.persona_real)+'</select></td>'
           + '<td>'+(f.ausente?'<span style="color:#A32D2D;font-size:11.5px">— ausente —</span>':'<select '+dis+' onchange="cambiarEstDet(\''+f.id+'\',this.value)" style="'+(f.estacion_real!==f.estacion_plan?'border-color:#BA7517;background:#FAEEDA':'')+'">'+opcEst(f.estacion_real)+'</select>')+'</td>'
           + '<td>'+(f.ausente?'<span style="color:#A8A69E">—</span>':'<select '+dis+' onchange="editarDet(\''+f.id+'\',\'subtarea_real\',this.value)">'+opcSub(f.estacion_real,f.subtarea_real)+'</select>')+'</td>'
@@ -456,7 +480,7 @@
           + card("Personal utilizado", usados.size+"/"+personas.filter(p=>p.tipo!=='Contratista').length, "asignados / plantel")
           + '</div>';
         // agenda
-        const ag=(titulo,fch,lista)=>{ let x='<div style="flex:1;min-width:260px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">'+titulo+(fch?' ('+fch.slice(8)+'/'+fch.slice(5,7)+')':'')+'</div>'; if(!lista.length)x+='<div style="font-size:12.5px;color:#A8A69E">Sin tareas.</div>'; lista.forEach((t,i)=>{x+='<div style="padding:6px 0;border-top:'+(i?'1px solid #F1EFE8':'none')+';font-size:12.5px"><span style="background:'+STATIONS[t.est].bg+';color:'+STATIONS[t.est].color+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+STATIONS[t.est].label+'</span> <span style="color:#888780">'+t.sub+'</span><div style="font-size:11px;color:#A8A69E;margin-top:2px">'+t.g.join(", ")+'</div></div>';}); return x+'</div>'; };
+        const ag=(titulo,fch,lista)=>{ let x='<div style="flex:1;min-width:260px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">'+titulo+(fch?' ('+dm(fch)+')':'')+'</div>'; if(!lista.length)x+='<div style="font-size:12.5px;color:#A8A69E">Sin tareas.</div>'; lista.forEach((t,i)=>{x+='<div style="padding:6px 0;border-top:'+(i?'1px solid #F1EFE8':'none')+';font-size:12.5px"><span style="background:'+STATIONS[t.est].bg+';color:'+STATIONS[t.est].color+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+STATIONS[t.est].label+'</span> <span style="color:#888780">'+t.sub+'</span><div style="font-size:11px;color:#A8A69E;margin-top:2px">'+t.g.join(", ")+'</div></div>';}); return x+'</div>'; };
         h+='<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">'+ag("📋 Tareas de hoy",diaHoy,tareasDe(diaHoy))+ag("⏭️ Preparar para mañana",diaMan,tareasDe(diaMan))+'</div>';
       }
       // gráfico de barras costo por estación (común a ambas vistas)
@@ -478,7 +502,7 @@
       const fechas=[...new Set(todas)].sort();
       if(!fechas.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">Las estaciones no tienen fechas cargadas.</p>'; return; }
       let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Barra clara: planificado. Barra sólida: real (de las fechas reales del detalle).</p>'+botonesExport("gantt-print","gantt")+'</div><div id="gantt-print"><div style="overflow-x:auto"><table style="min-width:'+(200+fechas.length*42)+'px;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Estación</th>';
-      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:40px">'+d.slice(8)+'/'+d.slice(5,7)+'</th>');
+      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:40px">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
       plani.forEach(b=>{ const st=STATIONS[b.estacion]; if(!st)return; const dP=diasHabiles(b.fecha_desde,b.fecha_hasta); const dR=(b.fecha_real_desde&&b.fecha_real_hasta)?diasHabiles(b.fecha_real_desde,b.fecha_real_hasta):[];
         h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+st.label+'<div style="font-size:9.5px;color:#A8A69E">'+(b.subtarea||'')+'</div></td>';
@@ -496,7 +520,7 @@
       const pers=[...new Set(detalle.map(f=>f.persona_real))];
       const cell={}; detalle.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?"__aus":f.estacion_real; });
       let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por estación.</p>'+botonesExport("histo-print","histograma")+'</div><div id="histo-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
-      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:50px">'+d.slice(8)+'/'+d.slice(5,7)+'</th>');
+      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:50px">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
       pers.forEach(pid=>{ h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+nombrePersona(pid)+'</td>';
         fechas.forEach(d=>{ const t=cell[pid+"|"+d]; let c='<span style="color:#D3D1C7">—</span>'; if(t==="__aus")c='<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>'; else if(t&&STATIONS[t])c='<span style="display:inline-block;width:100%;background:'+STATIONS[t].bg+';color:'+STATIONS[t].color+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+STATIONS[t].label.slice(0,8)+'</span>'; h+='<td style="padding:4px;text-align:center">'+c+'</td>'; });
@@ -516,16 +540,16 @@
       if(parteEst) rows=rows.filter(f=>f.estacion_real===parteEst);
       if(partePersona) rows=rows.filter(f=>f.persona_real===partePersona);
       const proyNom = parteProy ? nombreProy(parteProy) : "Todos los proyectos";
-      const texto = "*Parte diario "+(fSel?fSel.split("-").reverse().join("/"):"")+"*\n"+proyNom+"\n\n"+rows.map(f=>"• "+nombrePersona(f.persona_real)+" → "+nombreEstacion(f.estacion_real)+": "+f.subtarea_real+(f.horas_extra>0?" (+"+f.horas_extra+"h extra)":"")).join("\n");
+      const texto = "*Parte diario "+(fSel?dmy(fSel):"")+"*\n"+proyNom+"\n\n"+rows.map(f=>"• "+nombrePersona(f.persona_real)+" → "+nombreEstacion(f.estacion_real)+": "+f.subtarea_real+(f.horas_extra>0?" (+"+f.horas_extra+"h extra)":"")).join("\n");
       let h='<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">';
-      h+='<label style="font-size:11.5px;color:#888780">Fecha<br><select onchange="setParte(\'fecha\',this.value)" style="margin-top:3px">'+(fechas.length?fechas.map(d=>'<option value="'+d+'" '+(d===fSel?'selected':'')+'>'+d.split("-").reverse().join("/")+'</option>').join(''):'<option>—</option>')+'</select></label>';
+      h+='<label style="font-size:11.5px;color:#888780">Fecha<br><select onchange="setParte(\'fecha\',this.value)" style="margin-top:3px">'+(fechas.length?fechas.map(d=>'<option value="'+d+'" '+(d===fSel?'selected':'')+'>'+dmy(d)+'</option>').join(''):'<option>—</option>')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Proyecto<br><select onchange="setParte(\'proy\',this.value)" style="margin-top:3px"><option value="">Todos</option>'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===parteProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Estación<br><select onchange="setParte(\'est\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+STKEYS.map(k=>'<option value="'+k+'" '+(k===parteEst?'selected':'')+'>'+STATIONS[k].label+'</option>').join('')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Persona<br><select onchange="setParte(\'pers\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+personas.map(p=>'<option value="'+p.id+'" '+(p.id===partePersona?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
       h+='<button class="btn" style="background:#25D366;color:#fff" onclick="copiarParte()">Copiar para WhatsApp</button>';
       h+=botonesExport("parteBox","parte_diario");
       h+='</div>';
-      h+='<div id="parteBox" style="border:1px solid #E6E4DC;border-radius:12px;padding:18px 20px;max-width:480px"><div style="font-size:16px;font-weight:600">Parte diario '+(fSel?fSel.split("-").reverse().join("/"):"")+'</div><div style="font-size:12.5px;color:#888780;margin-bottom:6px">'+proyNom+(parteEst?' · '+STATIONS[parteEst].label:'')+(partePersona?' · '+nombrePersona(partePersona):'')+'</div><div style="border-top:1px solid #F1EFE8;margin-top:6px;padding-top:6px">';
+      h+='<div id="parteBox" style="border:1px solid #E6E4DC;border-radius:12px;padding:18px 20px;max-width:480px"><div style="font-size:16px;font-weight:600">Parte diario '+(fSel?dmy(fSel):"")+'</div><div style="font-size:12.5px;color:#888780;margin-bottom:6px">'+proyNom+(parteEst?' · '+STATIONS[parteEst].label:'')+(partePersona?' · '+nombrePersona(partePersona):'')+'</div><div style="border-top:1px solid #F1EFE8;margin-top:6px;padding-top:6px">';
       if(!rows.length) h+='<div style="font-size:13px;color:#A8A69E;padding:8px 0">'+(detalle.length?'Sin asignaciones para este filtro.':'Generá el detalle diario primero.')+'</div>';
       rows.forEach(f=>{ h+='<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #F1EFE8;font-size:13px"><span style="font-weight:600;min-width:140px">'+nombrePersona(f.persona_real)+'</span><span><span style="background:'+STATIONS[f.estacion_real].bg+';color:'+STATIONS[f.estacion_real].color+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(f.estacion_real)+'</span> <span style="color:#888780">'+f.subtarea_real+'</span>'+(f.horas_extra>0?' <span style="color:#BA7517;font-size:11px">+'+f.horas_extra+'h</span>':'')+'</span></div>'; });
       h+='</div></div>';
@@ -573,7 +597,7 @@
       det.forEach(f=>{ if(!est[f.estacion_real])est[f.estacion_real]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0}; if(!f.ausente){est[f.estacion_real].realD.add(f.fecha); const ch=costoHora(f.persona_real); est[f.estacion_real].costo+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*2; est[f.estacion_real].hsExtra+=(Number(f.horas_extra)||0);} });
 
       const fmt=(n)=>'$'+Math.round(n).toLocaleString("es-AR");
-      const fdate=(d)=>d?d.split("-").reverse().join("/"):"—";
+      const fdate=(d)=>d?dmy(d):"—";
 
       h+='<div id="informe-print">';
       h+='<div style="border:1px solid #E6E4DC;border-radius:14px;padding:20px;background:#fff">';
@@ -662,7 +686,7 @@
       const b = plani.find(x => x.id === planiId);
       const dias = diasHabiles(b.fecha_desde, b.fecha_hasta);
       let aviso = null;
-      for (const d of dias) { const tot = horasPersonaDia(personaId, d, null); if (tot > 8) { aviso = d.slice(5) + " (" + tot + "h)"; break; } }
+      for (const d of dias) { const tot = horasPersonaDia(personaId, d, null); if (tot > 8) { aviso = dm(d) + " (" + tot + "h)"; break; } }
       if (aviso) setEstado("\u26a0 " + nombrePersona(personaId) + " queda con más de 8h el " + aviso + ". Ajustá el reparto antes de generar el detalle.", "err");
       else setEstado("\u2713 Guardado.", "ok");
       renderPlani();
