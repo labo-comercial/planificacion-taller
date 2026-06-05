@@ -145,6 +145,7 @@
     async function cargar() {
       setEstado("Cargando…", "cargando");
       if (tab === "personal") {
+        if (!puedeVerSueldos()) { contenido.innerHTML = '<p style="font-size:13px;color:#A8A69E">No tenés permiso para ver esta sección.</p>'; setEstado("Acceso restringido.", "cargando"); return; }
         const { data, error } = await sb.from("personal").select("*"); if (error) return errLoad(error);
         personas = (data||[]).sort((a,b)=>{if(a.tipo!==b.tipo)return a.tipo==="Directo"?-1:1;return (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999);});
         setEstado("\u2713 " + personas.length + " persona(s).", "ok"); renderPersonal();
@@ -416,11 +417,29 @@
       mostrarApp(data.user);
     }
     async function cerrarSesion() { await sb.auth.signOut(); document.getElementById("app").style.display = "none"; document.getElementById("login").style.display = "flex"; }
-    function mostrarApp(user) {
+    let miPerfil = { rol: "coordinador", ve_sueldos: false };
+    async function mostrarApp(user) {
       document.getElementById("login").style.display = "none";
       document.getElementById("app").style.display = "block";
       document.getElementById("userEmail").textContent = user.email;
+      // leer perfil (rol y permisos)
+      const { data: perf } = await sb.from("perfiles").select("*").eq("id", user.id).maybeSingle();
+      miPerfil = perf || { rol: "coordinador", ve_sueldos: false };
+      aplicarPermisos();
+      // tab inicial: si no ve sueldos y estaba en personal, mandarlo a proyectos
+      if (tab === "personal" && !puedeVerSueldos()) tab = "plani";
       cargar();
+    }
+    function puedeVerSueldos() { return miPerfil.rol === "admin" || miPerfil.rol === "pm" ? (miPerfil.ve_sueldos !== false) : (miPerfil.ve_sueldos === true); }
+    function esAdmin() { return miPerfil.rol === "admin"; }
+    function aplicarPermisos() {
+      // Solapa Personal (sueldos): solo si ve_sueldos
+      const tp = document.getElementById("tab-personal");
+      if (tp) tp.style.display = puedeVerSueldos() ? "" : "none";
+      // Solapa Proyectos: PM y admin la editan; coordinador la ve. (visible para todos por ahora)
+      // mostrar rol en la barra
+      const ue = document.getElementById("userEmail");
+      if (ue && miPerfil.rol) ue.textContent = ue.textContent + " · " + miPerfil.rol;
     }
     async function initAuth() {
       const { data } = await sb.auth.getSession();
