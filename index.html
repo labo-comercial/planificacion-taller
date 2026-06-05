@@ -37,11 +37,31 @@
     .chip.on { border-color: #185FA5; background: #E6F1FB; color: #185FA5; }
     .estpill { padding: 3px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; }
     .pl-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+    #login { position: fixed; inset: 0; background: #F7F6F2; display: flex; align-items: center; justify-content: center; z-index: 1000; }
+    .login-card { background: #fff; border: 1px solid #E6E4DC; border-radius: 16px; padding: 32px 28px; max-width: 360px; width: 100%; text-align: center; }
+    .login-card input { margin: 6px 0; padding: 10px 12px; font-size: 14px; }
+    #app { display: none; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
   </style>
 </head>
 <body>
+  <div id="login">
+    <div class="login-card">
+      <div style="font-size:26px;margin-bottom:6px">🔒</div>
+      <h2 style="font-size:18px;font-weight:600;margin:0 0 4px">Planificación de mano de obra</h2>
+      <p style="font-size:13px;color:#888780;margin:0 0 16px">Ingresá con tu cuenta corporativa.</p>
+      <input id="loginEmail" type="email" placeholder="Email" autocomplete="username" />
+      <input id="loginPass" type="password" placeholder="Contraseña" autocomplete="current-password" onkeydown="if(event.key==='Enter')hacerLogin()" />
+      <div id="loginError" style="color:#A32D2D;font-size:12px;margin:6px 0;display:none"></div>
+      <button class="btn btn-primary" style="width:100%;margin-top:8px" onclick="hacerLogin()">Ingresar</button>
+    </div>
+  </div>
+  <div id="app">
   <div class="wrap">
-    <h1>Planificación de mano de obra</h1>
+    <div class="topbar">
+      <h1>Planificación de mano de obra</h1>
+      <div style="display:flex;align-items:center;gap:10px"><span id="userEmail" style="font-size:12px;color:#888780"></span><button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#888780;padding:6px 12px" onclick="cerrarSesion()">Cerrar sesión</button></div>
+    </div>
     <p class="sub">Administración y planificación del personal de taller · conectado a Supabase</p>
     <div class="tabs">
       <button class="tab active" id="tab-personal" onclick="cambiarTab('personal')">Personal y tarifas</button>
@@ -54,6 +74,7 @@
       <div id="estado" class="estado cargando">Conectando…</div>
       <div id="contenido"></div>
     </div>
+  </div>
   </div>
 
   <script>
@@ -369,7 +390,27 @@
       renderPlani();
     }
 
-    cargar();
-  </script>
+    async function hacerLogin() {
+      const email = document.getElementById("loginEmail").value.trim();
+      const pass = document.getElementById("loginPass").value;
+      const errDiv = document.getElementById("loginError");
+      errDiv.style.display = "none";
+      const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
+      if (error) { errDiv.textContent = "Email o contraseña incorrectos."; errDiv.style.display = "block"; return; }
+      mostrarApp(data.user);
+    }
+    async function cerrarSesion() { await sb.auth.signOut(); document.getElementById("app").style.display = "none"; document.getElementById("login").style.display = "flex"; }
+    function mostrarApp(user) {
+      document.getElementById("login").style.display = "none";
+      document.getElementById("app").style.display = "block";
+      document.getElementById("userEmail").textContent = user.email;
+      cargar();
+    }
+    async function initAuth() {
+      const { data } = await sb.auth.getSession();
+      if (data.session) mostrarApp(data.session.user);
+      else { document.getElementById("login").style.display = "flex"; document.getElementById("app").style.display = "none"; }
+    }
+    initAuth();
 </body>
 </html>
