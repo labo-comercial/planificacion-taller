@@ -58,6 +58,7 @@
     .login-card input { margin: 6px 0; padding: 10px 12px; font-size: 14px; }
     #app { display: none; }
     .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+    @media print { .no-print { display: none !important; } body { background: #fff; padding: 0; } .tabs { display: none !important; } .topbar button { display: none; } }
   </style>
 </head>
 <body>
@@ -134,6 +135,18 @@
 
     function setEstado(m, c) { estado.textContent = m; estado.className = "estado " + c; }
     function fechaStr(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+    function exportarPDF(){ window.print(); }
+    async function exportarJPEG(elId, nombre){
+      try {
+        const el = document.getElementById(elId);
+        if(!el){ window.print(); return; }
+        if(!window.html2canvas){ await new Promise((res,rej)=>{ const s=document.createElement("script"); s.src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"; s.onload=res; s.onerror=rej; document.body.appendChild(s); }); }
+        const canvas = await window.html2canvas(el, { backgroundColor:"#ffffff", scale:2 });
+        const a=document.createElement("a"); a.download=(nombre||"export")+".jpg"; a.href=canvas.toDataURL("image/jpeg",0.92); a.click();
+        setEstado("\u2713 Imagen descargada.","ok");
+      } catch(e){ setEstado("No se pudo generar la imagen acá; probá Exportar PDF.","err"); }
+    }
+    function botonesExport(elId, nombre){ return '<div class="no-print" style="display:flex;gap:8px"><button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#2C2C2A;padding:6px 12px" onclick="exportarPDF()">📄 PDF</button><button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#2C2C2A;padding:6px 12px" onclick="exportarJPEG(\''+elId+'\',\''+nombre+'\')">🖼️ JPEG</button></div>'; }
     function errLoad(e) { setEstado("Error: " + e.message, "err"); console.error(e); }
     function nombrePersona(id) { const p = personas.find(x => x.id === id); return p ? p.nombre : "—"; }
     function nombreProy(id) { const p = proyectos.find(x => x.id === id); return p ? p.nombre : "(sin proyecto)"; }
@@ -420,8 +433,10 @@
       const card=(l,v,s,col)=>'<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 16px"><div style="font-size:12px;color:#888780">'+l+'</div><div style="font-size:22px;font-weight:600;color:'+(col||'#2C2C2A')+';margin-top:2px">'+v+'</div>'+(s?'<div style="font-size:11.5px;color:#A8A69E;margin-top:2px">'+s+'</div>':'')+'</div>';
       let h='<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">';
       h+='<div style="display:flex;border:1px solid #E6E4DC;border-radius:8px;overflow:hidden"><button onclick="setVista(\'pm\')" style="border:none;padding:7px 16px;font-size:13px;cursor:pointer;background:'+(vistaDash==='pm'?'#185FA5':'transparent')+';color:'+(vistaDash==='pm'?'#fff':'#888780')+'">Vista PM</button><button onclick="setVista(\'coord\')" style="border:none;padding:7px 16px;font-size:13px;cursor:pointer;background:'+(vistaDash==='coord'?'#185FA5':'transparent')+';color:'+(vistaDash==='coord'?'#fff':'#888780')+'">Vista Coordinador</button></div>';
-      h+='<select onchange="setDashProy(this.value)" style="width:auto"><option value="">Todos los vigentes</option>'+proyVig.map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+'</option>').join('')+(proyectos.filter(p=>p.estado==='Cerrado').length?('<optgroup label="Cerrados">'+proyectos.filter(p=>p.estado==='Cerrado').map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+' (cerrado)</option>').join('')+'</optgroup>'):'')+'</select></div>';
-      if(det.length===0){ h+='<p style="font-size:13px;color:#888780">Sin datos en el detalle todavía. Generá el detalle diario para ver indicadores.</p>'; contenido.innerHTML=h; return; }
+      h+='<select onchange="setDashProy(this.value)" style="width:auto"><option value="">Todos los vigentes</option>'+proyVig.map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+'</option>').join('')+(proyectos.filter(p=>p.estado==='Cerrado').length?('<optgroup label="Cerrados">'+proyectos.filter(p=>p.estado==='Cerrado').map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+' (cerrado)</option>').join('')+'</optgroup>'):'')+'</select>';
+      h+=botonesExport("dash-print","dashboard")+'</div>';
+      h+='<div id="dash-print">';
+      if(det.length===0){ h+='<p style="font-size:13px;color:#888780">Sin datos en el detalle todavía. Generá el detalle diario para ver indicadores.</p></div>'; contenido.innerHTML=h; return; }
       if(vistaDash==='pm'){
         const usoPct = presup ? (real/presup*100) : 0;
         h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
@@ -446,6 +461,7 @@
       if(!estArr.length) h+='<div style="font-size:12.5px;color:#A8A69E">Sin datos.</div>';
       estArr.forEach(([k,v])=>{ const pct=v.real/maxEst*100; h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px"><span style="width:150px;color:#5F5E5A">'+nombreEstacion(k)+'</span><div style="flex:1;background:#F1EFE8;border-radius:4px;height:18px;position:relative"><div style="width:'+pct+'%;background:'+STATIONS[k].color+';height:100%;border-radius:4px"></div></div><span style="width:90px;text-align:right">$'+Math.round(v.real).toLocaleString("es-AR")+'</span></div>'; });
       h+='</div>';
+      h+='</div>';
       contenido.innerHTML=h;
     }
     function setVista(v){ vistaDash=v; renderDash(); }
@@ -458,7 +474,7 @@
       const todas=[]; plani.forEach(b=>{ diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>todas.push(d)); if(b.fecha_real_desde&&b.fecha_real_hasta)diasHabiles(b.fecha_real_desde,b.fecha_real_hasta).forEach(d=>todas.push(d)); });
       const fechas=[...new Set(todas)].sort();
       if(!fechas.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">Las estaciones no tienen fechas cargadas.</p>'; return; }
-      let h='<p style="font-size:13px;color:#888780;margin-top:0">Barra clara: planificado. Barra sólida: real (de las fechas reales del detalle).</p><div style="overflow-x:auto"><table style="min-width:'+(200+fechas.length*42)+'px;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Estación</th>';
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Barra clara: planificado. Barra sólida: real (de las fechas reales del detalle).</p>'+botonesExport("gantt-print","gantt")+'</div><div id="gantt-print"><div style="overflow-x:auto"><table style="min-width:'+(200+fechas.length*42)+'px;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Estación</th>';
       fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:40px">'+d.slice(8)+'/'+d.slice(5,7)+'</th>');
       h+='</tr></thead><tbody>';
       plani.forEach(b=>{ const st=STATIONS[b.estacion]; if(!st)return; const dP=diasHabiles(b.fecha_desde,b.fecha_hasta); const dR=(b.fecha_real_desde&&b.fecha_real_hasta)?diasHabiles(b.fecha_real_desde,b.fecha_real_hasta):[];
@@ -466,7 +482,7 @@
         fechas.forEach(d=>{ const oP=dP.includes(d), oR=dR.includes(d); h+='<td style="padding:3px 2px;vertical-align:middle">'+(oP?'<div style="background:#C9C6BC;height:8px;border-radius:2px;margin-bottom:2px"></div>':'')+(oR?'<div style="background:'+st.color+';height:8px;border-radius:2px"></div>':'')+'</td>'; });
         h+='</tr>';
       });
-      h+='</tbody></table></div>';
+      h+='</tbody></table></div></div>';
       contenido.innerHTML=h;
     }
 
@@ -476,14 +492,14 @@
       const fechas=[...new Set(detalle.map(f=>f.fecha))].sort();
       const pers=[...new Set(detalle.map(f=>f.persona_real))];
       const cell={}; detalle.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?"__aus":f.estacion_real; });
-      let h='<p style="font-size:13px;color:#888780;margin-top:0">Personas en filas, días en columnas, color por estación.</p><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por estación.</p>'+botonesExport("histo-print","histograma")+'</div><div id="histo-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
       fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:50px">'+d.slice(8)+'/'+d.slice(5,7)+'</th>');
       h+='</tr></thead><tbody>';
       pers.forEach(pid=>{ h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+nombrePersona(pid)+'</td>';
         fechas.forEach(d=>{ const t=cell[pid+"|"+d]; let c='<span style="color:#D3D1C7">—</span>'; if(t==="__aus")c='<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>'; else if(t&&STATIONS[t])c='<span style="display:inline-block;width:100%;background:'+STATIONS[t].bg+';color:'+STATIONS[t].color+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+STATIONS[t].label.slice(0,8)+'</span>'; h+='<td style="padding:4px;text-align:center">'+c+'</td>'; });
         h+='</tr>';
       });
-      h+='</tbody></table></div>';
+      h+='</tbody></table></div></div>';
       contenido.innerHTML=h;
     }
 
@@ -504,6 +520,7 @@
       h+='<label style="font-size:11.5px;color:#888780">Estación<br><select onchange="setParte(\'est\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+STKEYS.map(k=>'<option value="'+k+'" '+(k===parteEst?'selected':'')+'>'+STATIONS[k].label+'</option>').join('')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Persona<br><select onchange="setParte(\'pers\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+personas.map(p=>'<option value="'+p.id+'" '+(p.id===partePersona?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
       h+='<button class="btn" style="background:#25D366;color:#fff" onclick="copiarParte()">Copiar para WhatsApp</button>';
+      h+=botonesExport("parteBox","parte_diario");
       h+='</div>';
       h+='<div id="parteBox" style="border:1px solid #E6E4DC;border-radius:12px;padding:18px 20px;max-width:480px"><div style="font-size:16px;font-weight:600">Parte diario '+(fSel?fSel.split("-").reverse().join("/"):"")+'</div><div style="font-size:12.5px;color:#888780;margin-bottom:6px">'+proyNom+(parteEst?' · '+STATIONS[parteEst].label:'')+(partePersona?' · '+nombrePersona(partePersona):'')+'</div><div style="border-top:1px solid #F1EFE8;margin-top:6px;padding-top:6px">';
       if(!rows.length) h+='<div style="font-size:13px;color:#A8A69E;padding:8px 0">'+(detalle.length?'Sin asignaciones para este filtro.':'Generá el detalle diario primero.')+'</div>';
