@@ -48,6 +48,7 @@
       <button class="tab" id="tab-proyectos" onclick="cambiarTab('proyectos')">Proyectos</button>
       <button class="tab" id="tab-dispo" onclick="cambiarTab('dispo')">Disponibilidad</button>
       <button class="tab" id="tab-plani" onclick="cambiarTab('plani')">Planificación General</button>
+      <button class="tab" id="tab-detalle" onclick="cambiarTab('detalle')">Detalle diario</button>
     </div>
     <div class="panel">
       <div id="estado" class="estado cargando">Conectando…</div>
@@ -88,7 +89,7 @@
     const contenido = document.getElementById("contenido");
     const TIPOS = ["Vacaciones", "Licencia", "Parte médico"];
     let tab = "personal";
-    let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {};
+    let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, detalle = [];
 
     function setEstado(m, c) { estado.textContent = m; estado.className = "estado " + c; }
     function fechaStr(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
@@ -96,7 +97,7 @@
     function nombrePersona(id) { const p = personas.find(x => x.id === id); return p ? p.nombre : "—"; }
     function nombreProy(id) { const p = proyectos.find(x => x.id === id); return p ? p.nombre : "(sin proyecto)"; }
 
-    function cambiarTab(t) { tab = t; ["personal","proyectos","dispo","plani"].forEach(x => document.getElementById("tab-"+x).className = "tab" + (x===t?" active":"")); cargar(); }
+    function cambiarTab(t) { tab = t; ["personal","proyectos","dispo","plani","detalle"].forEach(x => document.getElementById("tab-"+x).className = "tab" + (x===t?" active":"")); cargar(); }
 
     async function asegurarBase() {
       if (!personas.length) { const { data } = await sb.from("personal").select("*"); personas = (data||[]).sort((a,b)=>{if(a.tipo!==b.tipo)return a.tipo==="Directo"?-1:1;return (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999);}); }
@@ -117,13 +118,18 @@
         await asegurarBase();
         const { data, error } = await sb.from("no_disponibilidad").select("*"); if (error) return errLoad(error);
         dispo = data || []; setEstado("\u2713 " + dispo.length + " período(s).", "ok"); renderDispo();
-      } else {
+      } else if (tab === "plani") {
         await asegurarBase();
         const { data, error } = await sb.from("planificacion").select("*"); if (error) return errLoad(error);
         plani = data || [];
         const { data: pp, error: e2 } = await sb.from("planificacion_personal").select("*"); if (e2) return errLoad(e2);
         planiPers = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) planiPers[r.planificacion_id] = []; planiPers[r.planificacion_id].push(r.persona_id); });
         setEstado("\u2713 " + plani.length + " estación(es) planificada(s).", "ok"); renderPlani();
+      } else {
+        await asegurarBase();
+        const { data, error } = await sb.from("detalle_diario").select("*"); if (error) return errLoad(error);
+        detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0);
+        setEstado("\u2713 " + detalle.length + " registro(s) en el detalle.", "ok"); renderDetalle();
       }
     }
 
@@ -254,11 +260,77 @@
     }
     async function editarPl(id, c, v) { const u = {}; u[c] = (v === "" ? null : v); const { error } = await sb.from("planificacion").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const b = plani.find(x=>x.id===id); if(b) b[c]=u[c]; setEstado("\u2713 Guardado.", "ok"); if(c==="fecha_desde"||c==="fecha_hasta") renderPlani(); }
     async function eliminarPl(id) { const { error } = await sb.from("planificacion").delete().eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); cargar(); }
-    function generarDetalle() {
+    async function generarDetalle() {
       const val = validarCobertura();
       if (!val.ok) { setEstado("Todavía hay días sin cubrir.", "err"); return; }
-      setEstado("\u2713 Cobertura validada. La generación del detalle diario se conecta en la próxima etapa.", "ok");
+      const hoy = fechaStr(new Date());
+      // traer detalle existente
+      const { data: existente, error: eEx } = await sb.from("detalle_diario").select("*");
+      if (eEx) return setEstado("Error: " + eEx.message, "err");
+      // ¿hay algo cargado (real) en días futuros (>= hoy)?
+      const futConDatos = (existente||[]).filter(d => d.fecha >= hoy && (d.ausente || d.horas_extra > 0 || d.estacion_real !== d.estacion_plan || d.persona_real !== d.persona_plan));
+      if (futConDatos.length > 0) {
+        if (!confirm("Hay " + futConDatos.length + " registro(s) ya cargados en días de hoy en adelante que se van a regenerar y perder. ¿Continuar?")) { setEstado("Generación cancelada.", "cargando"); return; }
+      }
+      // borrar SOLO el detalle de hoy en adelante (el pasado queda intacto)
+      const { error: eDel } = await sb.from("detalle_diario").delete().gte("fecha", hoy);
+      if (eDel) return setEstado("Error al limpiar futuro: " + eDel.message, "err");
+      // generar filas nuevas de hoy en adelante
+      const filas = [];
+      plani.forEach(b => {
+        const dias = diasHabiles(b.fecha_desde, b.fecha_hasta).filter(d => d >= hoy);
+        const gente = planiPers[b.id] || [];
+        gente.forEach(g => dias.forEach(fecha => {
+          if (noDispoEn(g, fecha)) return; // no genera filas para días no disponibles
+          filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, horas_normales: 8, horas_extra: 0, ausente: false });
+        }));
+      });
+      if (filas.length > 0) {
+        const { error: eIns } = await sb.from("detalle_diario").insert(filas);
+        if (eIns) return setEstado("Error al generar: " + eIns.message, "err");
+      }
+      setEstado("\u2713 Detalle generado: " + filas.length + " registro(s) de hoy en adelante. El pasado quedó intacto.", "ok");
+      tab = "detalle"; ["personal","proyectos","dispo","plani","detalle"].forEach(x => document.getElementById("tab-"+x).className = "tab" + (x==="detalle"?" active":""));
+      cargar();
     }
+
+    function renderDetalle() {
+      if (detalle.length === 0) { contenido.innerHTML = '<p style="font-size:13px;color:#888780">Todavía no hay detalle. Andá a Planificación General, completá la asignación y tocá "Generar detalle diario".</p>'; return; }
+      const hoy = fechaStr(new Date());
+      // horas por persona/día para detectar sobreasignación
+      const horasDia = {};
+      detalle.forEach(f => { if (f.ausente) return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
+      const exceso = (f) => !f.ausente && horasDia[f.persona_real + "|" + f.fecha] > 8;
+      const opcPersona = (sel) => personas.map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
+      const opcEst = (sel) => STKEYS.map(k => '<option value="'+k+'" '+(k===sel?'selected':'')+'>'+STATIONS[k].label+'</option>').join('');
+      const opcSub = (est, sel) => (STATIONS[est]?STATIONS[est].subs:[]).map(s => '<option '+(s===sel?'selected':'')+'>'+s+'</option>').join('');
+
+      let h = '<p style="font-size:13px;color:#888780;margin-top:0">Registro real día por día. Editá lo que pasó: reasignar persona/estación/tarea, marcar ausente, cargar horas extra. Los días anteriores a hoy son historia.</p>';
+      const conf = Object.entries(horasDia).filter(([,v])=>v>8);
+      if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación:</b> '+conf.map(([k,v])=>{const [pid,f]=k.split("|");return nombrePersona(pid)+" ("+f.slice(5)+"): "+v+"h";}).join(" · ")+'</div>';
+      h += '<div style="overflow-x:auto"><table style="min-width:920px"><thead><tr><th>Fecha</th><th>Persona</th><th>Estación</th><th>Tarea</th><th style="text-align:center">Aus.</th><th style="text-align:center">Hs</th><th style="text-align:center">Ext.</th></tr></thead><tbody>';
+      detalle.forEach(f => {
+        const pasado = f.fecha < hoy;
+        const reasig = f.estacion_real !== f.estacion_plan || f.persona_real !== f.persona_plan;
+        const bg = f.ausente ? 'background:#FCEBEB' : reasig ? 'background:#FBFAF5' : '';
+        const dis = pasado ? 'disabled' : '';
+        h += '<tr style="'+bg+'">'
+          + '<td style="white-space:nowrap;color:#888780">'+f.fecha.slice(5)+(pasado?' 🔒':'')+'</td>'
+          + '<td><select '+dis+' onchange="editarDet(\''+f.id+'\',\'persona_real\',this.value)">'+opcPersona(f.persona_real)+'</select></td>'
+          + '<td>'+(f.ausente?'<span style="color:#A32D2D;font-size:11.5px">— ausente —</span>':'<select '+dis+' onchange="cambiarEstDet(\''+f.id+'\',this.value)" style="'+(f.estacion_real!==f.estacion_plan?'border-color:#BA7517;background:#FAEEDA':'')+'">'+opcEst(f.estacion_real)+'</select>')+'</td>'
+          + '<td>'+(f.ausente?'<span style="color:#A8A69E">—</span>':'<select '+dis+' onchange="editarDet(\''+f.id+'\',\'subtarea_real\',this.value)">'+opcSub(f.estacion_real,f.subtarea_real)+'</select>')+'</td>'
+          + '<td style="text-align:center"><input type="checkbox" '+dis+' '+(f.ausente?'checked':'')+' onchange="toggleAusente(\''+f.id+'\',this.checked)"></td>'
+          + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_normales||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_normales\',Number(this.value))" style="width:42px;text-align:center;'+(exceso(f)?'border-color:#A32D2D;background:#FCEBEB;color:#A32D2D':'')+'" '+(f.ausente?'disabled':'')+'></td>'
+          + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_extra||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_extra\',Number(this.value))" style="width:42px;text-align:center;'+(f.horas_extra>0?'color:#BA7517':'')+'" '+(f.ausente?'disabled':'')+'></td>'
+          + '</tr>';
+      });
+      h += '</tbody></table></div><div class="row-actions"><button class="btn btn-primary" onclick="cargar()">↻ Recargar</button></div>';
+      h += '<p style="font-size:12px;color:#A8A69E;margin-top:10px">🔒 = día anterior a hoy (historia, no editable). Para sumar o cambiar tareas futuras, hacelo en Planificación General y regenerá el detalle.</p>';
+      contenido.innerHTML = h;
+    }
+    async function editarDet(id, c, v) { const u = {}; u[c] = v; const { error } = await sb.from("detalle_diario").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const f = detalle.find(x=>x.id===id); if(f) f[c]=v; setEstado("\u2713 Guardado.", "ok"); renderDetalle(); }
+    async function cambiarEstDet(id, est) { const sub = STATIONS[est].subs[0]; const { error } = await sb.from("detalle_diario").update({ estacion_real: est, subtarea_real: sub }).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const f = detalle.find(x=>x.id===id); if(f){f.estacion_real=est;f.subtarea_real=sub;} setEstado("\u2713 Guardado.", "ok"); renderDetalle(); }
+    async function toggleAusente(id, val) { const u = val ? { ausente: true, horas_normales: 0, horas_extra: 0 } : { ausente: false, horas_normales: 8 }; const { error } = await sb.from("detalle_diario").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const f = detalle.find(x=>x.id===id); if(f) Object.assign(f,u); setEstado("\u2713 Guardado.", "ok"); renderDetalle(); }
     async function toggleGente(planiId, personaId, estaba) {
       if (estaba) { const { error } = await sb.from("planificacion_personal").delete().eq("planificacion_id", planiId).eq("persona_id", personaId); if (error) return setEstado("Error: " + error.message, "err"); }
       else { const { error } = await sb.from("planificacion_personal").insert({ planificacion_id: planiId, persona_id: personaId }); if (error) return setEstado("Error: " + error.message, "err"); }
