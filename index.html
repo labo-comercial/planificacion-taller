@@ -184,7 +184,7 @@
         feriados = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : 1); setEstado("\u2713 " + feriados.length + " feriado(s).", "ok"); renderFeriados();
       } else if (tab === "plani") {
         await asegurarBase();
-        const { data, error } = await sb.from("planificacion").select("*"); if (error) return errLoad(error);
+        const { data, error } = await sb.from("planificacion").select("*").order("creado_en", { ascending: true }); if (error) return errLoad(error);
         plani = data || [];
         const { data: pp, error: e2 } = await sb.from("planificacion_personal").select("*"); if (e2) return errLoad(e2);
         planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); });
@@ -198,7 +198,7 @@
         // pestañas visuales: necesitan todo
         await asegurarBase();
         { const { data } = await sb.from("no_disponibilidad").select("*"); dispo = data || []; }
-        { const { data } = await sb.from("planificacion").select("*"); plani = data || []; }
+        { const { data } = await sb.from("planificacion").select("*").order("creado_en", { ascending: true }); plani = data || []; }
         { const { data: pp } = await sb.from("planificacion_personal").select("*"); planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); }); }
         { const { data } = await sb.from("detalle_diario").select("*"); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
         setEstado("\u2713 Datos cargados.", "ok");
