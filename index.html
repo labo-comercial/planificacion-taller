@@ -238,7 +238,8 @@
         + '<label class="lbl" style="grid-column:1/-1">Descripción<input value="'+(pr.descripcion||'')+'" onchange="editarPr(\''+pr.id+'\',\'descripcion\',this.value)"></label>'
         + ln(pr.id,'cant_modulos','Cantidad de módulos',pr.cant_modulos) + li(pr.id,'tam_modulos','Tamaño de módulos',pr.tam_modulos)
         + ld(pr.id,'fecha_entrega','Fecha de entrega',pr.fecha_entrega) + ld(pr.id,'fecha_montaje','Fecha de montaje',pr.fecha_montaje)
-        + ln(pr.id,'presupuesto_mo','Presupuesto mano de obra',pr.presupuesto_mo) + li(pr.id,'planos','Planos (link o ref.)',pr.planos) + '</div></div>';
+        + ln(pr.id,'presupuesto_mo','Presupuesto mano de obra',pr.presupuesto_mo) + li(pr.id,'planos','Planos (link o ref.)',pr.planos)
+        + editorModulos(pr) + '</div></div>';
       });
       h += '<button class="btn-add" onclick="agregarPr()">+ Agregar proyecto</button>';
       contenido.innerHTML = h;
@@ -249,6 +250,44 @@
     async function agregarPr(){const{error}=await sb.from("proyectos").insert({nombre:"Nuevo proyecto",estado:"Vigente"});if(error)return setEstado("Error: "+error.message,"err");cargar();}
     async function editarPr(id,c,v){const u={};u[c]=v;const{error}=await sb.from("proyectos").update(u).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");setEstado("\u2713 Guardado.","ok");}
     async function eliminarPr(id){const{error}=await sb.from("proyectos").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");cargar();}
+    // --- MÓDULOS ---
+    function modulosDe(pr){ return (pr && pr.modulos ? String(pr.modulos) : "").split(",").map(s=>s.trim()).filter(Boolean); }
+    function modulosDeProy(proyId){ const pr=proyectos.find(p=>p.id===proyId); return modulosDe(pr); }
+    function editorModulos(pr){
+      const mods = modulosDe(pr);
+      let h = '<div class="lbl" style="grid-column:1/-1"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span>Módulos (identificación)</span>';
+      h += '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#185FA5;padding:3px 9px;font-size:11px" onclick="autonumerarModulos(\''+pr.id+'\')">↻ Autonumerar (M1…M'+(pr.cant_modulos||0)+')</button></div>';
+      if(!mods.length){ h += '<div style="font-size:11.5px;color:#A8A69E;margin-bottom:6px">Sin módulos definidos. Cargá la cantidad y tocá Autonumerar, o agregá uno a uno.</div>'; }
+      h += '<div class="chips" style="margin-top:0">';
+      mods.forEach((m,idx)=>{ h += '<span style="display:inline-flex;align-items:center;gap:2px;border:1px solid #E6E4DC;border-radius:16px;padding:2px 4px 2px 8px"><input value="'+m.replace(/"/g,'&quot;')+'" onchange="editarModulo(\''+pr.id+'\','+idx+',this.value)" style="width:58px;border:none;background:transparent;padding:2px;font-size:11.5px;text-align:center"><button class="btn-del" style="width:18px;height:18px;line-height:1" onclick="eliminarModulo(\''+pr.id+'\','+idx+')">×</button></span>'; });
+      h += '<button class="chip" style="border-style:dashed" onclick="agregarModulo(\''+pr.id+'\')">+ módulo</button>';
+      h += '</div></div>';
+      return h;
+    }
+    async function guardarModulos(proyId, mods){
+      const valor = mods.join(", ");
+      const { error } = await sb.from("proyectos").update({ modulos: valor }).eq("id", proyId);
+      if(error) return setEstado("Error: "+error.message,"err");
+      const pr = proyectos.find(p=>p.id===proyId); if(pr) pr.modulos = valor;
+      setEstado("\u2713 Módulos guardados.","ok"); renderProyectos();
+    }
+    function autonumerarModulos(proyId){
+      const pr = proyectos.find(p=>p.id===proyId); if(!pr) return;
+      const n = Number(pr.cant_modulos)||0;
+      if(n<=0){ setEstado("Cargá primero la cantidad de módulos.","err"); return; }
+      const mods=[]; for(let i=1;i<=n;i++) mods.push("M"+i);
+      guardarModulos(proyId, mods);
+    }
+    function editarModulo(proyId, idx, val){
+      const mods = modulosDeProy(proyId); if(idx<0||idx>=mods.length) return;
+      mods[idx] = val.trim(); guardarModulos(proyId, mods.filter(Boolean));
+    }
+    function eliminarModulo(proyId, idx){
+      const mods = modulosDeProy(proyId); mods.splice(idx,1); guardarModulos(proyId, mods);
+    }
+    function agregarModulo(proyId){
+      const mods = modulosDeProy(proyId); mods.push("M"+(mods.length+1)); guardarModulos(proyId, mods);
+    }
 
     /* ---- DISPONIBILIDAD ---- */
     function renderDispo() {
@@ -330,6 +369,7 @@
           + '<select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px">'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>'
           + '<button class="btn-del" style="margin-left:auto" onclick="eliminarPl(\''+b.id+'\')">×</button></div>'
           + '<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Tareas (tildá una o varias):</div><div class="chips">'+st.subs.map(s=>{const on=subsSel.includes(s);return '<button class="chip'+(on?' on':'')+'" onclick="toggleSub(\''+b.id+'\',\''+s.replace(/'/g,"\\\\'")+'\','+(on?'true':'false')+')">'+s+'</button>';}).join('')+'</div></div>'
+          + (function(){ const mods=modulosDeProy(b.proyecto_id); const sel=(b.modulos||"").split(",").map(s=>s.trim()).filter(Boolean); let m='<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Módulos (opcional, tildá uno o varios):</div><div class="chips">'; if(!mods.length){ m+='<span style="font-size:11px;color:#A8A69E">El proyecto no tiene módulos definidos (cargalos en Proyectos).</span>'; } else { m+=mods.map(md=>{const on=sel.includes(md);return '<button class="chip'+(on?' on':'')+'" onclick="toggleModuloPl(\''+b.id+'\',\''+md.replace(/'/g,"\\\\'")+'\','+(on?'true':'false')+')">'+md+'</button>';}).join(''); } return m+'</div></div>'; })()
           + '<div class="pl-row"><input type="date" value="'+(b.fecha_desde||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(b.fecha_hasta||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+diasHabiles(b.fecha_desde,b.fecha_hasta).length+' días háb.</span></div>'
           + '<div class="chips">'+personas.map(p=>{
               const on=gente.includes(p.id);
@@ -364,7 +404,16 @@
       const { error } = await sb.from("planificacion").insert(filas);
       if (error) return setEstado("Error: " + error.message, "err"); cargar();
     }
-    async function editarPl(id, c, v) { const u = {}; u[c] = (v === "" ? null : v); const { error } = await sb.from("planificacion").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const b = plani.find(x=>x.id===id); if(b) b[c]=u[c]; setEstado("\u2713 Guardado.", "ok"); if(c==="fecha_desde"||c==="fecha_hasta") renderPlani(); }
+    async function editarPl(id, c, v) { const u = {}; u[c] = (v === "" ? null : v); if(c==="proyecto_id"){ u.modulos = null; } const { error } = await sb.from("planificacion").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const b = plani.find(x=>x.id===id); if(b){ b[c]=u[c]; if(c==="proyecto_id") b.modulos=null; } setEstado("\u2713 Guardado.", "ok"); if(c==="fecha_desde"||c==="fecha_hasta"||c==="proyecto_id") renderPlani(); }
+    async function toggleModuloPl(id, mod, estaba) {
+      const b = plani.find(x=>x.id===id); if(!b) return;
+      let mods = (b.modulos||"").split(",").map(s=>s.trim()).filter(Boolean);
+      if (estaba) mods = mods.filter(s=>s!==mod); else if(!mods.includes(mod)) mods.push(mod);
+      const nuevo = mods.join(", ");
+      const { error } = await sb.from("planificacion").update({ modulos: nuevo }).eq("id", id);
+      if (error) return setEstado("Error: " + error.message, "err");
+      b.modulos = nuevo; setEstado("\u2713 Guardado.", "ok"); renderPlani();
+    }
     async function toggleSub(id, sub, estaba) {
       const b = plani.find(x=>x.id===id); if(!b) return;
       let subs = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
@@ -398,7 +447,7 @@
         gente.forEach(g => dias.forEach(fecha => {
           if (noDispoEn(g, fecha)) return; // no genera filas para días no disponibles
           const hrs = (planiHoras[b.id] && planiHoras[b.id][g]!=null) ? planiHoras[b.id][g] : 8;
-          filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, horas_normales: hrs, horas_extra: 0, ausente: false });
+          filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, modulos_plan: b.modulos||null, modulos_real: b.modulos||null, horas_normales: hrs, horas_extra: 0, ausente: false });
         }));
       });
       if (filas.length > 0) {
@@ -424,7 +473,7 @@
       let h = '<p style="font-size:13px;color:#888780;margin-top:0">Registro real día por día. Editá lo que pasó: reasignar persona/estación/tarea, marcar ausente, cargar horas extra. Los días anteriores a hoy son historia.</p>';
       const conf = Object.entries(horasDia).filter(([,v])=>v>8);
       if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación:</b> '+conf.map(([k,v])=>{const [pid,f]=k.split("|");return nombrePersona(pid)+" ("+dm(f)+"): "+v+"h";}).join(" · ")+'</div>';
-      h += '<div style="overflow-x:auto"><table style="min-width:920px"><thead><tr><th>Fecha</th><th>Persona</th><th>Estación</th><th>Tarea</th><th style="text-align:center">Aus.</th><th style="text-align:center">Hs</th><th style="text-align:center">Ext.</th></tr></thead><tbody>';
+      h += '<div style="overflow-x:auto"><table style="min-width:1040px"><thead><tr><th>Fecha</th><th>Persona</th><th>Estación</th><th>Tarea</th><th>Módulos</th><th style="text-align:center">Aus.</th><th style="text-align:center">Hs</th><th style="text-align:center">Ext.</th></tr></thead><tbody>';
       detalle.forEach(f => {
         const pasado = f.fecha < hoy;
         const reasig = f.estacion_real !== f.estacion_plan || f.persona_real !== f.persona_plan;
@@ -435,6 +484,7 @@
           + '<td><select '+dis+' onchange="editarDet(\''+f.id+'\',\'persona_real\',this.value)">'+opcPersona(f.persona_real)+'</select></td>'
           + '<td>'+(f.ausente?'<span style="color:#A32D2D;font-size:11.5px">— ausente —</span>':'<select '+dis+' onchange="cambiarEstDet(\''+f.id+'\',this.value)" style="'+(f.estacion_real!==f.estacion_plan?'border-color:#BA7517;background:#FAEEDA':'')+'">'+opcEst(f.estacion_real)+'</select>')+'</td>'
           + '<td>'+(f.ausente?'<span style="color:#A8A69E">—</span>':'<select '+dis+' onchange="editarDet(\''+f.id+'\',\'subtarea_real\',this.value)">'+opcSub(f.estacion_real,f.subtarea_real)+'</select>')+'</td>'
+          + '<td>'+(f.ausente?'<span style="color:#A8A69E">—</span>':celdaModulos(f,pasado))+'</td>'
           + '<td style="text-align:center"><input type="checkbox" '+dis+' '+(f.ausente?'checked':'')+' onchange="toggleAusente(\''+f.id+'\',this.checked)"></td>'
           + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_normales||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_normales\',Number(this.value))" style="width:42px;text-align:center;'+(exceso(f)?'border-color:#A32D2D;background:#FCEBEB;color:#A32D2D':'')+'" '+(f.ausente?'disabled':'')+'></td>'
           + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_extra||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_extra\',Number(this.value))" style="width:42px;text-align:center;'+(f.horas_extra>0?'color:#BA7517':'')+'" '+(f.ausente?'disabled':'')+'></td>'
@@ -445,6 +495,22 @@
       contenido.innerHTML = h;
     }
     async function editarDet(id, c, v) { const u = {}; u[c] = v; const { error } = await sb.from("detalle_diario").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const f = detalle.find(x=>x.id===id); if(f) f[c]=v; setEstado("\u2713 Guardado.", "ok"); renderDetalle(); }
+    function celdaModulos(f, pasado){
+      const mods = modulosDeProy(f.proyecto_id);
+      const sel = (f.modulos_real||"").split(",").map(s=>s.trim()).filter(Boolean);
+      if(!mods.length){ return '<span style="font-size:11px;color:#A8A69E">'+(sel.length?sel.join(", "):"—")+'</span>'; }
+      if(pasado){ return '<span style="font-size:11.5px;color:#5F5E5A">'+(sel.length?sel.join(", "):"—")+'</span>'; }
+      return '<div class="chips" style="margin-top:0;gap:3px">'+mods.map(md=>{const on=sel.includes(md);return '<button class="chip'+(on?' on':'')+'" style="padding:2px 7px;font-size:10.5px" onclick="toggleModuloDet(\''+f.id+'\',\''+md.replace(/'/g,"\\\\'")+'\','+(on?'true':'false')+')">'+md+'</button>';}).join('')+'</div>';
+    }
+    async function toggleModuloDet(id, mod, estaba){
+      const f = detalle.find(x=>x.id===id); if(!f) return;
+      let mods = (f.modulos_real||"").split(",").map(s=>s.trim()).filter(Boolean);
+      if(estaba) mods = mods.filter(s=>s!==mod); else if(!mods.includes(mod)) mods.push(mod);
+      const nuevo = mods.join(", ");
+      const { error } = await sb.from("detalle_diario").update({ modulos_real: nuevo }).eq("id", id);
+      if(error) return setEstado("Error: "+error.message,"err");
+      f.modulos_real = nuevo; setEstado("\u2713 Guardado.","ok"); renderDetalle();
+    }
     async function cambiarEstDet(id, est) { const sub = STATIONS[est].subs[0]; const { error } = await sb.from("detalle_diario").update({ estacion_real: est, subtarea_real: sub }).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const f = detalle.find(x=>x.id===id); if(f){f.estacion_real=est;f.subtarea_real=sub;} setEstado("\u2713 Guardado.", "ok"); renderDetalle(); }
     async function toggleAusente(id, val) { const u = val ? { ausente: true, horas_normales: 0, horas_extra: 0 } : { ausente: false, horas_normales: 8 }; const { error } = await sb.from("detalle_diario").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const f = detalle.find(x=>x.id===id); if(f) Object.assign(f,u); setEstado("\u2713 Guardado.", "ok"); renderDetalle(); }
 
@@ -611,8 +677,8 @@
 
       // --- POR ESTACIÓN ---
       const est={};
-      blo.forEach(b=>{ const dP=diasHabiles(b.fecha_desde,b.fecha_hasta); if(!est[b.estacion])est[b.estacion]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0}; dP.forEach(d=>est[b.estacion].planD.add(d)); });
-      det.forEach(f=>{ if(!est[f.estacion_real])est[f.estacion_real]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0}; if(!f.ausente){est[f.estacion_real].realD.add(f.fecha); const ch=costoHora(f.persona_real); est[f.estacion_real].costo+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*2; est[f.estacion_real].hsExtra+=(Number(f.horas_extra)||0);} });
+      blo.forEach(b=>{ const dP=diasHabiles(b.fecha_desde,b.fecha_hasta); if(!est[b.estacion])est[b.estacion]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; dP.forEach(d=>est[b.estacion].planD.add(d)); (b.modulos||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[b.estacion].modsPlan.add(m)); });
+      det.forEach(f=>{ if(!est[f.estacion_real])est[f.estacion_real]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; if(!f.ausente){est[f.estacion_real].realD.add(f.fecha); const ch=costoHora(f.persona_real); est[f.estacion_real].costo+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*2; est[f.estacion_real].hsExtra+=(Number(f.horas_extra)||0); (f.modulos_real||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[f.estacion_real].modsReal.add(m));} });
 
       const fmt=(n)=>'$'+Math.round(n).toLocaleString("es-AR");
       const fdate=(d)=>d?dmy(d):"—";
@@ -653,8 +719,8 @@
       // desglose por estación
       const estArr=Object.entries(est).filter(([,v])=>v.realD.size>0||v.planD.size>0).sort((a,b)=>b[1].costo-a[1].costo);
       h+='<div style="font-size:14px;font-weight:600;margin:18px 0 8px">📊 Desglose por estación</div>';
-      h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:8px 10px">Estación</th><th style="text-align:center;padding:8px 10px">Días plan</th><th style="text-align:center;padding:8px 10px">Días real</th><th style="text-align:center;padding:8px 10px">Desvío</th><th style="text-align:right;padding:8px 10px">Costo real</th><th style="text-align:center;padding:8px 10px">Hs extra</th></tr></thead><tbody>';
-      estArr.forEach(([k,v])=>{ const dp=v.planD.size, dr=v.realD.size, dv=dr-dp; h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px"><span style="background:'+(STATIONS[k]?STATIONS[k].bg:'#eee')+';color:'+(STATIONS[k]?STATIONS[k].color:'#555')+';padding:2px 7px;border-radius:6px">'+nombreEstacion(k)+'</span></td><td style="text-align:center">'+dp+'</td><td style="text-align:center">'+dr+'</td><td style="text-align:center;color:'+(dv>0?'#A32D2D':dv<0?'#3B6D11':'#888780')+'">'+(dv>=0?"+":"")+dv+'</td><td style="text-align:right">'+fmt(v.costo)+'</td><td style="text-align:center;color:'+(v.hsExtra>0?'#BA7517':'#A8A69E')+'">'+(v.hsExtra||0)+'h</td></tr>'; });
+      h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:8px 10px">Estación</th><th style="text-align:center;padding:8px 10px">Días plan</th><th style="text-align:center;padding:8px 10px">Días real</th><th style="text-align:center;padding:8px 10px">Desvío</th><th style="text-align:right;padding:8px 10px">Costo real</th><th style="text-align:center;padding:8px 10px">Hs extra</th><th style="text-align:left;padding:8px 10px">Módulos plan</th><th style="text-align:left;padding:8px 10px">Módulos real</th></tr></thead><tbody>';
+      estArr.forEach(([k,v])=>{ const dp=v.planD.size, dr=v.realD.size, dv=dr-dp; const mP=[...v.modsPlan].join(", ")||"—"; const mR=[...v.modsReal].join(", ")||"—"; h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px"><span style="background:'+(STATIONS[k]?STATIONS[k].bg:'#eee')+';color:'+(STATIONS[k]?STATIONS[k].color:'#555')+';padding:2px 7px;border-radius:6px">'+nombreEstacion(k)+'</span></td><td style="text-align:center">'+dp+'</td><td style="text-align:center">'+dr+'</td><td style="text-align:center;color:'+(dv>0?'#A32D2D':dv<0?'#3B6D11':'#888780')+'">'+(dv>=0?"+":"")+dv+'</td><td style="text-align:right">'+fmt(v.costo)+'</td><td style="text-align:center;color:'+(v.hsExtra>0?'#BA7517':'#A8A69E')+'">'+(v.hsExtra||0)+'h</td><td style="padding:7px 10px;font-size:11.5px;color:#5F5E5A">'+mP+'</td><td style="padding:7px 10px;font-size:11.5px;color:#5F5E5A">'+mR+'</td></tr>'; });
       h+='</tbody></table></div>';
 
       // lectura del desvío (descriptiva, basada en datos)
