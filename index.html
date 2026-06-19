@@ -123,18 +123,21 @@
       electrica:{label:"Instalación Eléctrica",color:"#993C1D",bg:"#FAECE7",subs:["Colocación de caño de pvc con cajas","Cableado","Colocación de tablero","Colocación de artefacto","Prueba eléctrica"]},
       termomecanica:{label:"Instalación Termomecánica",color:"#0F6E56",bg:"#E1F5EE",subs:["Colocación de equipo","Colocación de desagüe","Colocación de cañería","Cableado","Colocación de equipo interior","Colocación de equipo exterior","Colocación de ductos","Prueba de funcionamiento"]},
       revest_humedo:{label:"Revestimiento húmedo",color:"#085041",bg:"#D9F0E6",subs:["Colocación de Webertec","Colocación de piso","Colocación de muro","Colocación de pastina","Prueba desagote de agua en ducha"]},
-      revestimiento:{label:"Revestimiento",color:"#107A5F",bg:"#E1F5EE",subs:["Colocación de placa de muro interior","Colocación de placa de muro exterior","Colocación de cielorraso (MDF)","Colocación de cielorraso (Macizo)","Colocación de puerta","Colocación de chapa","Colocación de Knauf y calles para CR","Colocación de rejillas","Colocación de muebles","Colocación de piso de goma","Masillado y Joly"]},
+      revestimiento:{label:"Revestimiento",color:"#107A5F",bg:"#E1F5EE",subs:["Colocación de placa de muro interior","Colocación de placa de muro exterior","Colocación de cielorraso (MDF)","Colocación de cielorraso (Macizo)","Colocación de puerta","Colocación de chapa","Colocación de Knauf y calles para CR","Colocación de rejillas","Colocación de muebles","Colocación de piso de goma","Masillado y lijado"]},
       terminaciones:{label:"Terminaciones",color:"#7A4708",bg:"#F7ECDA",subs:["Sellado","Embalaje","Trincado","Aceitado de placa"]},
       impermeabilizacion:{label:"Impermeabilización",color:"#2C6E8F",bg:"#DEEEF5",subs:["Colocación de membrana","Colocación pintura asfáltica","Pintura de membrana líquida transitable","Prueba hidráulica"]},
       maquinista:{label:"Maquinista",color:"#55544F",bg:"#EEEDE6",subs:["Movimiento interno de producción","Movimiento externo de rental","Movimiento externo otros","Orden y limpieza","Prueba sujeción de mecánicos"]},
       rental:{label:"Rental",color:"#185FA5",bg:"#E6F1FB",subs:["General"]},
-      mantenimiento:{label:"Mantenimiento",color:"#5F5E5A",bg:"#F1EFE8",subs:["Orden y limpieza","Corte de pasto","Clasificación de residuo","Mantenimiento eléctrico","Mantenimiento operativo","Mejoras"]}
+      mantenimiento:{label:"Mantenimiento",color:"#5F5E5A",bg:"#F1EFE8",subs:["Orden y limpieza","Corte de pasto","Clasificación de residuo","Mantenimiento eléctrico","Mantenimiento operativo","Mejoras"]},
+      montaje:{label:"Montaje",color:"#3C3489",bg:"#E8E5FA",subs:["Montaje en obra","Nivelación","Unión de módulos","Conexionado","Terminaciones de montaje"]},
+      postventa:{label:"Postventa",color:"#993556",bg:"#FBEAF0",subs:["Reparación","Ajuste","Reclamo de cliente","Garantía","Inspección"]}
     };
     const STKEYS = Object.keys(STATIONS);
 
     const estado = document.getElementById("estado");
     const contenido = document.getElementById("contenido");
     const TIPOS = ["Vacaciones", "Licencia", "Parte médico"];
+    const MOTIVOS_DESVIO = ["Ejecución (Producción)", "Documentación (Diseño / Técnica)", "Materiales (Compras)"];
     // INTERRUPTOR DE PRUEBAS: en false, deja generar el detalle aunque falten personas por asignar.
     // Para reactivar la validación estricta, poné true.
     const VALIDAR_COBERTURA = false;
@@ -182,6 +185,9 @@
         proyectos = data || []; setEstado("\u2713 " + proyectos.length + " proyecto(s).", "ok"); renderProyectos();
       } else if (tab === "dispo") {
         await asegurarBase();
+        // planificación necesaria para validar choques con ausencias
+        { const { data } = await sb.from("planificacion").select("*").order("creado_en", { ascending: true }); plani = data || []; }
+        { const { data: pp } = await sb.from("planificacion_personal").select("*"); planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); }); }
         const { data, error } = await sb.from("no_disponibilidad").select("*"); if (error) return errLoad(error);
         dispo = data || []; setEstado("\u2713 " + dispo.length + " período(s).", "ok"); renderDispo();
       } else if (tab === "feriados") {
@@ -299,8 +305,40 @@
       h+='</tbody></table><div class="row-actions"><button class="btn-add" onclick="agregarD()">+ Agregar período</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
       contenido.innerHTML=h;
     }
+    // Detecta si una persona tiene tareas planificadas dentro de un rango de fechas.
+    function planificadoEnRango(personaId, desde, hasta){
+      const hit=[];
+      plani.forEach(b=>{
+        if(!(planiPers[b.id]||[]).includes(personaId)) return;
+        const dias=diasHabiles(b.fecha_desde,b.fecha_hasta);
+        const choca=dias.filter(d=> d>=desde && d<=hasta);
+        if(choca.length){ const st=STATIONS[b.estacion]; hit.push({ estacion: st?st.label:b.estacion, proyecto: nombreProy(b.proyecto_id), dias: choca }); }
+      });
+      return hit;
+    }
+    function avisarSiPlanificado(personaId, desde, hasta){
+      if(!desde||!hasta) return true;
+      const hit=planificadoEnRango(personaId,desde,hasta);
+      if(!hit.length) return true;
+      const nom=nombrePersona(personaId);
+      const detalleTxt=hit.map(h=>"• "+h.estacion+" ("+h.proyecto+"): "+h.dias.map(dm).join(", ")).join("\n");
+      return confirm("\u26a0 "+nom+" tiene tareas planificadas en ese rango:\n\n"+detalleTxt+"\n\nDeber\u00edas desafectarla de esas estaciones en Planificaci\u00f3n General antes de cargar la ausencia.\n\n\u00bfCargar la ausencia igual de todos modos?");
+    }
     async function agregarD(){if(!personas.length){setEstado("Cargá personal primero.","err");return;}const t=fechaStr(new Date());const{error}=await sb.from("no_disponibilidad").insert({persona_id:personas[0].id,tipo:"Vacaciones",desde:t,hasta:t});if(error)return setEstado("Error: "+error.message,"err");cargar();}
-    async function editarD(id,c,v){const u={};u[c]=v;const{error}=await sb.from("no_disponibilidad").update(u).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");setEstado("\u2713 Guardado.","ok");}
+    async function editarD(id,c,v){
+      const d=dispo.find(x=>x.id===id);
+      const sim = d ? { persona_id:d.persona_id, desde:d.desde, hasta:d.hasta } : {};
+      sim[c]=v;
+      if(d && (c==="persona_id"||c==="desde"||c==="hasta")){
+        if(!avisarSiPlanificado(sim.persona_id, sim.desde, sim.hasta)){
+          setEstado("Carga de ausencia cancelada. Desafectá a la persona en Planificación primero.","cargando");
+          renderDispo(); return;
+        }
+      }
+      const u={};u[c]=v;const{error}=await sb.from("no_disponibilidad").update(u).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");
+      if(d) d[c]=v;
+      setEstado("\u2713 Guardado.","ok");
+    }
     async function eliminarD(id){const{error}=await sb.from("no_disponibilidad").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");cargar();}
 
     /* ---- FERIADOS ---- */
@@ -469,11 +507,13 @@
       const opcPersona = (sel) => personas.map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
       const opcEst = (sel) => STKEYS.map(k => '<option value="'+k+'" '+(k===sel?'selected':'')+'>'+STATIONS[k].label+'</option>').join('');
       const opcSub = (est, sel) => { const base = STATIONS[est]?STATIONS[est].subs.slice():[]; if(sel && !base.includes(sel)) base.unshift(sel); return base.map(s => '<option '+(s===sel?'selected':'')+'>'+s+'</option>').join(''); };
+      const opcProy = (sel) => proyectos.map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
+      const opcMotivo = (sel) => '<option value="">— motivo —</option>'+MOTIVOS_DESVIO.map(m => '<option '+(m===sel?'selected':'')+'>'+m+'</option>').join('');
 
-      let h = '<p style="font-size:13px;color:#888780;margin-top:0">Registro real día por día. Editá lo que pasó: reasignar persona/estación/tarea, marcar ausente, cargar horas extra. Los días anteriores a hoy son historia.</p>';
+      let h = '<p style="font-size:13px;color:#888780;margin-top:0">Registro real día por día. Editá lo que pasó: reasignar proyecto/persona/estación/tarea, marcar ausente, cargar horas extra. Cuando hay desvío respecto a lo planificado, justificá el motivo. Los días anteriores a hoy son historia.</p>';
       const conf = Object.entries(horasDia).filter(([,v])=>v>8);
       if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación:</b> '+conf.map(([k,v])=>{const [pid,f]=k.split("|");return nombrePersona(pid)+" ("+dm(f)+"): "+v+"h";}).join(" · ")+'</div>';
-      h += '<div style="overflow-x:auto"><table style="min-width:1040px"><thead><tr><th>Fecha</th><th>Persona</th><th>Estación</th><th>Tarea</th><th>Módulos</th><th style="text-align:center">Aus.</th><th style="text-align:center">Hs</th><th style="text-align:center">Ext.</th></tr></thead><tbody>';
+      h += '<div style="overflow-x:auto"><table style="min-width:1240px"><thead><tr><th>Fecha</th><th>Proyecto</th><th>Persona</th><th>Estación</th><th>Tarea</th><th>Módulos</th><th style="text-align:center">Aus.</th><th style="text-align:center">Hs</th><th style="text-align:center">Ext.</th><th>Motivo desvío</th></tr></thead><tbody>';
       detalle.forEach(f => {
         const pasado = f.fecha < hoy;
         const reasig = f.estacion_real !== f.estacion_plan || f.persona_real !== f.persona_plan;
@@ -481,6 +521,7 @@
         const dis = pasado ? 'disabled' : '';
         h += '<tr style="'+bg+'">'
           + '<td style="white-space:nowrap;color:#888780">'+dm(f.fecha)+(pasado?' 🔒':'')+'</td>'
+          + '<td><select '+dis+' onchange="cambiarProyDet(\''+f.id+'\',this.value)" style="min-width:130px">'+opcProy(f.proyecto_id)+'</select></td>'
           + '<td><select '+dis+' onchange="editarDet(\''+f.id+'\',\'persona_real\',this.value)">'+opcPersona(f.persona_real)+'</select></td>'
           + '<td>'+(f.ausente?'<span style="color:#A32D2D;font-size:11.5px">— ausente —</span>':'<select '+dis+' onchange="cambiarEstDet(\''+f.id+'\',this.value)" style="'+(f.estacion_real!==f.estacion_plan?'border-color:#BA7517;background:#FAEEDA':'')+'">'+opcEst(f.estacion_real)+'</select>')+'</td>'
           + '<td>'+(f.ausente?'<span style="color:#A8A69E">—</span>':'<select '+dis+' onchange="editarDet(\''+f.id+'\',\'subtarea_real\',this.value)">'+opcSub(f.estacion_real,f.subtarea_real)+'</select>')+'</td>'
@@ -488,11 +529,18 @@
           + '<td style="text-align:center"><input type="checkbox" '+dis+' '+(f.ausente?'checked':'')+' onchange="toggleAusente(\''+f.id+'\',this.checked)"></td>'
           + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_normales||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_normales\',Number(this.value))" style="width:42px;text-align:center;'+(exceso(f)?'border-color:#A32D2D;background:#FCEBEB;color:#A32D2D':'')+'" '+(f.ausente?'disabled':'')+'></td>'
           + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_extra||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_extra\',Number(this.value))" style="width:42px;text-align:center;'+(f.horas_extra>0?'color:#BA7517':'')+'" '+(f.ausente?'disabled':'')+'></td>'
+          + '<td>'+(reasig?'<select '+dis+' onchange="editarDet(\''+f.id+'\',\'motivo_desvio\',this.value)" style="min-width:160px;border-color:'+(f.motivo_desvio?'#BA7517':'#A32D2D')+';'+(f.motivo_desvio?'':'background:#FCEBEB')+'">'+opcMotivo(f.motivo_desvio)+'</select>':'<span style="color:#D3D1C7;font-size:11px">—</span>')+'</td>'
           + '</tr>';
       });
       h += '</tbody></table></div><div class="row-actions"><button class="btn btn-primary" onclick="cargar()">↻ Recargar</button></div>';
-      h += '<p style="font-size:12px;color:#A8A69E;margin-top:10px">🔒 = día anterior a hoy (historia, no editable). Para sumar o cambiar tareas futuras, hacelo en Planificación General y regenerá el detalle.</p>';
+      h += '<p style="font-size:12px;color:#A8A69E;margin-top:10px">🔒 = día anterior a hoy (historia, no editable). Las filas con fondo crema tienen desvío (estación o persona distinta a lo planificado) y piden un motivo. Para sumar o cambiar tareas futuras, hacelo en Planificación General y regenerá el detalle.</p>';
       contenido.innerHTML = h;
+    }
+    async function cambiarProyDet(id, proyId){
+      const { error } = await sb.from("detalle_diario").update({ proyecto_id: proyId, modulos_real: null }).eq("id", id);
+      if(error) return setEstado("Error: "+error.message,"err");
+      const f = detalle.find(x=>x.id===id); if(f){ f.proyecto_id=proyId; f.modulos_real=null; }
+      setEstado("\u2713 Guardado.","ok"); renderDetalle();
     }
     async function editarDet(id, c, v) { const u = {}; u[c] = v; const { error } = await sb.from("detalle_diario").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const f = detalle.find(x=>x.id===id); if(f) f[c]=v; setEstado("\u2713 Guardado.", "ok"); renderDetalle(); }
     function celdaModulos(f, pasado){
@@ -624,7 +672,8 @@
       if(parteEst) rows=rows.filter(f=>f.estacion_real===parteEst);
       if(partePersona) rows=rows.filter(f=>f.persona_real===partePersona);
       const proyNom = parteProy ? nombreProy(parteProy) : "Todos los proyectos";
-      const texto = "*Parte diario "+(fSel?dmy(fSel):"")+"*\n"+proyNom+"\n\n"+rows.map(f=>"• "+nombrePersona(f.persona_real)+" → "+nombreEstacion(f.estacion_real)+": "+f.subtarea_real+(f.horas_extra>0?" (+"+f.horas_extra+"h extra)":"")).join("\n");
+      const modTxt = (f)=>{ const m=(f.modulos_real||"").trim(); return m?" ["+m+"]":""; };
+      const texto = "*Parte diario "+(fSel?dmy(fSel):"")+"*\n"+proyNom+"\n\n"+rows.map(f=>"• "+nombrePersona(f.persona_real)+" → "+nombreEstacion(f.estacion_real)+modTxt(f)+": "+f.subtarea_real+(f.horas_extra>0?" (+"+f.horas_extra+"h extra)":"")).join("\n");
       let h='<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">';
       h+='<label style="font-size:11.5px;color:#888780">Fecha<br><select onchange="setParte(\'fecha\',this.value)" style="margin-top:3px">'+(fechas.length?fechas.map(d=>'<option value="'+d+'" '+(d===fSel?'selected':'')+'>'+dmy(d)+'</option>').join(''):'<option>—</option>')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Proyecto<br><select onchange="setParte(\'proy\',this.value)" style="margin-top:3px"><option value="">Todos</option>'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===parteProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
@@ -635,7 +684,7 @@
       h+='</div>';
       h+='<div id="parteBox" style="border:1px solid #E6E4DC;border-radius:12px;padding:18px 20px;max-width:480px"><div style="font-size:16px;font-weight:600">Parte diario '+(fSel?dmy(fSel):"")+'</div><div style="font-size:12.5px;color:#888780;margin-bottom:6px">'+proyNom+(parteEst?' · '+STATIONS[parteEst].label:'')+(partePersona?' · '+nombrePersona(partePersona):'')+'</div><div style="border-top:1px solid #F1EFE8;margin-top:6px;padding-top:6px">';
       if(!rows.length) h+='<div style="font-size:13px;color:#A8A69E;padding:8px 0">'+(detalle.length?'Sin asignaciones para este filtro.':'Generá el detalle diario primero.')+'</div>';
-      rows.forEach(f=>{ h+='<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #F1EFE8;font-size:13px"><span style="font-weight:600;min-width:140px">'+nombrePersona(f.persona_real)+'</span><span><span style="background:'+STATIONS[f.estacion_real].bg+';color:'+STATIONS[f.estacion_real].color+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(f.estacion_real)+'</span> <span style="color:#888780">'+f.subtarea_real+'</span>'+(f.horas_extra>0?' <span style="color:#BA7517;font-size:11px">+'+f.horas_extra+'h</span>':'')+'</span></div>'; });
+      rows.forEach(f=>{ const mm=(f.modulos_real||"").trim(); h+='<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #F1EFE8;font-size:13px"><span style="font-weight:600;min-width:140px">'+nombrePersona(f.persona_real)+'</span><span><span style="background:'+STATIONS[f.estacion_real].bg+';color:'+STATIONS[f.estacion_real].color+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(f.estacion_real)+'</span>'+(mm?' <span style="background:#E6F1FB;color:#185FA5;padding:2px 6px;border-radius:6px;font-size:10.5px">'+mm+'</span>':'')+' <span style="color:#888780">'+f.subtarea_real+'</span>'+(f.horas_extra>0?' <span style="color:#BA7517;font-size:11px">+'+f.horas_extra+'h</span>':'')+'</span></div>'; });
       h+='</div></div>';
       h+='<textarea id="parteTexto" style="position:absolute;left:-9999px">'+texto+'</textarea>';
       contenido.innerHTML=h;
