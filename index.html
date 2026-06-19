@@ -374,17 +374,39 @@
       const todas = [];
       plani.forEach(b => diasHabiles(b.fecha_desde, b.fecha_hasta).forEach(d => todas.push(d)));
       const fechas = [...new Set(todas)].sort();
-      // carga por persona/día (cada bloque modo nombre asigna jornada completa)
-      const carga = {};
-      plani.forEach(b => { (planiPers[b.id]||[]).forEach(g => { const hrs = (planiHoras[b.id] && planiHoras[b.id][g]!=null) ? planiHoras[b.id][g] : 8; diasHabiles(b.fecha_desde, b.fecha_hasta).forEach(d => { const k = g+"|"+d; carga[k] = (carga[k]||0) + hrs; }); }); });
+      // carga por persona/día, separando dos "pistas" paralelas:
+      //  - cargaEst: trabajo en estaciones normales (se suma)
+      //  - cargaSup: supervisión (vale 8h fijas, corre en paralelo, no se suma con estación)
+      const cargaEst = {}, cargaSup = {};
+      plani.forEach(b => {
+        const esSup = (b.estacion === SUP_ESTKEY);
+        (planiPers[b.id]||[]).forEach(g => {
+          const hrs = (planiHoras[b.id] && planiHoras[b.id][g]!=null) ? planiHoras[b.id][g] : 8;
+          diasHabiles(b.fecha_desde, b.fecha_hasta).forEach(d => {
+            const k = g+"|"+d;
+            if (esSup) cargaSup[k] = (cargaSup[k]||0) + hrs;
+            else cargaEst[k] = (cargaEst[k]||0) + hrs;
+          });
+        });
+      });
       const directos = personas.filter(p => p.tipo !== "Contratista");
       const faltantes = [], excesos = [];
       fechas.forEach(d => {
         directos.forEach(p => {
           if (noDispoEn(p.id, d)) return;
-          const h = carga[p.id+"|"+d] || 0;
-          if (h < 8) faltantes.push(nombrePersona(p.id) + " · " + dm(d));
-          else if (h > 8) excesos.push(nombrePersona(p.id) + " · " + dm(d));
+          const k = p.id+"|"+d;
+          const hSup = cargaSup[k] || 0;
+          const hEst = cargaEst[k] || 0;
+          // Si supervisa ese día, queda cubierto por las 8h de supervisión; el trabajo en
+          // estación es paralelo y no se suma (ni cuenta como exceso).
+          if (hSup > 0) {
+            if (hSup < 8) faltantes.push(nombrePersona(p.id) + " · " + dm(d) + " (supervisión < 8h)");
+            else if (hSup > 8) excesos.push(nombrePersona(p.id) + " · " + dm(d) + " (supervisión > 8h)");
+            return;
+          }
+          // Sin supervisión: cuenta el trabajo en estación como cualquier directo.
+          if (hEst < 8) faltantes.push(nombrePersona(p.id) + " · " + dm(d));
+          else if (hEst > 8) excesos.push(nombrePersona(p.id) + " · " + dm(d));
         });
       });
       const cubierto = faltantes.length===0 && excesos.length===0 && fechas.length>0;
@@ -416,6 +438,7 @@
             + '<span style="font-size:12px;color:#888780">Asigná un supervisor a uno o varios proyectos (8h diarias totales).</span>'
             + '<button class="btn-del" style="margin-left:auto" onclick="eliminarPl(\''+b.id+'\')">×</button></div>'
             + '<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Proyectos que supervisa (tildá uno o varios):</div><div class="chips">'+(proyectos.length?proyectos.map(p=>{const on=proySel.includes(p.id);return '<button class="chip'+(on?' on':'')+'" onclick="toggleProySup(\''+b.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+'</button>';}).join(''):'<span style="font-size:11px;color:#A8A69E">No hay proyectos.</span>')+'</div></div>'
+            + (gente.length && !proySel.length ? '<div class="estado err" style="margin:0 0 8px;padding:6px 10px;font-size:12px">⚠ El supervisor debe estar asignado al menos a un proyecto. Tildá uno arriba.</div>' : '')
             + '<div class="pl-row"><input type="date" value="'+(b.fecha_desde||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(b.fecha_hasta||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+diasHabiles(b.fecha_desde,b.fecha_hasta).length+' días háb.</span></div>'
             + '<div style="font-size:11px;color:#A8A69E;margin:4px 0">Supervisores:</div><div class="chips">'+(function(){ const sups=personas.filter(esSupervisor); if(!sups.length) return '<span style="font-size:11px;color:#A8A69E">No hay personas con especialidad «Supervisor de proyecto». Cargalas en Personal.</span>'; return sups.map(p=>{
                 const on=gente.includes(p.id);
@@ -507,6 +530,13 @@
     async function generarDetalle() {
       const val = validarCobertura();
       if (!val.ok) { setEstado("Todavía hay días sin cubrir.", "err"); return; }
+      // requisito excluyente: toda card de Supervisión con gente debe tener al menos un proyecto tildado
+      const supSinProy = plani.filter(b => b.estacion === SUP_ESTKEY && (planiPers[b.id]||[]).length > 0 && !((b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean).length));
+      if (supSinProy.length > 0) {
+        const quienes = [...new Set(supSinProy.flatMap(b => (planiPers[b.id]||[]).map(nombrePersona)))].join(", ");
+        setEstado("⚠ Hay supervisión sin proyecto asignado (" + quienes + "). Tildá al menos un proyecto en cada card de Supervisión antes de generar.", "err");
+        return;
+      }
       const hoy = fechaStr(new Date());
       // traer detalle existente
       const { data: existente, error: eEx } = await sb.from("detalle_diario").select("*");
@@ -549,10 +579,11 @@
     function renderDetalle() {
       if (detalle.length === 0) { contenido.innerHTML = '<p style="font-size:13px;color:#888780">Todavía no hay detalle. Andá a Planificación General, completá la asignación y tocá "Generar detalle diario".</p>'; return; }
       const hoy = fechaStr(new Date());
-      // horas por persona/día para detectar sobreasignación
+      // horas por persona/día para detectar sobreasignación.
+      // Las filas de supervisión corren en paralelo: no se suman con el trabajo en estación.
       const horasDia = {};
-      detalle.forEach(f => { if (f.ausente) return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
-      const exceso = (f) => !f.ausente && horasDia[f.persona_real + "|" + f.fecha] > 8;
+      detalle.forEach(f => { if (f.ausente) return; if (f.estacion_real === SUP_ESTKEY) return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
+      const exceso = (f) => !f.ausente && f.estacion_real !== SUP_ESTKEY && horasDia[f.persona_real + "|" + f.fecha] > 8;
       const opcPersona = (sel) => personas.map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
       const opcEst = (sel) => STKEYS.map(k => '<option value="'+k+'" '+(k===sel?'selected':'')+'>'+STATIONS[k].label+'</option>').join('');
       const opcSub = (est, sel) => { const base = STATIONS[est]?STATIONS[est].subs.slice():[]; if(sel && !base.includes(sel)) base.unshift(sel); return base.map(s => '<option '+(s===sel?'selected':'')+'>'+s+'</option>').join(''); };
@@ -848,11 +879,13 @@
       else { planiPers[planiId].push(personaId); if(!planiHoras[planiId]) planiHoras[planiId]={}; planiHoras[planiId][personaId] = 8; }
       setEstado("\u2713 Guardado.", "ok"); renderPlani();
     }
-    // suma de horas de una persona en un día dado, entre todas las estaciones cuyo rango incluye ese día
-    function horasPersonaDia(personaId, fecha, exceptoPlaniId) {
+    // suma de horas de una persona en un día dado, entre las estaciones cuyo rango incluye ese día.
+    // Por defecto excluye la supervisión, que corre en paralelo y no se suma con el trabajo en estación.
+    function horasPersonaDia(personaId, fecha, exceptoPlaniId, incluirSupervision) {
       let tot = 0;
       plani.forEach(b => {
         if (b.id === exceptoPlaniId) return;
+        if (!incluirSupervision && b.estacion === SUP_ESTKEY) return;
         if (!(planiPers[b.id]||[]).includes(personaId)) return;
         if (!diasHabiles(b.fecha_desde, b.fecha_hasta).includes(fecha)) return;
         tot += (planiHoras[b.id] && planiHoras[b.id][personaId] != null) ? planiHoras[b.id][personaId] : 8;
