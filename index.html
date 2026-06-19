@@ -130,9 +130,14 @@
       rental:{label:"Rental",color:"#185FA5",bg:"#E6F1FB",subs:["General"]},
       mantenimiento:{label:"Mantenimiento",color:"#5F5E5A",bg:"#F1EFE8",subs:["Orden y limpieza","Corte de pasto","Clasificación de residuo","Mantenimiento eléctrico","Mantenimiento operativo","Mejoras"]},
       montaje:{label:"Montaje",color:"#3C3489",bg:"#E8E5FA",subs:["Montaje en obra","Nivelación","Unión de módulos","Conexionado","Terminaciones de montaje"]},
-      postventa:{label:"Postventa",color:"#993556",bg:"#FBEAF0",subs:["Reparación","Ajuste","Reclamo de cliente","Garantía","Inspección"]}
+      postventa:{label:"Postventa",color:"#993556",bg:"#FBEAF0",subs:["Reparación","Ajuste","Reclamo de cliente","Garantía","Inspección"]},
+      supervision:{label:"Supervisión",color:"#0F6E56",bg:"#E1F5EE",subs:["Supervisión de proyecto"]}
     };
     const STKEYS = Object.keys(STATIONS);
+    const SUP_ESTKEY = "supervision";
+    // Es supervisor quien tenga "supervisor de proyecto" en su especialidad (admite numeración: 1, 2, ...).
+    function esSupervisor(p){ return p && /supervisor de proyecto/i.test((p.especialidad||"")); }
+    function esSupervisorId(pid){ return esSupervisor(personas.find(x=>x.id===pid)); }
 
     const estado = document.getElementById("estado");
     const contenido = document.getElementById("contenido");
@@ -402,7 +407,30 @@
       plani.forEach(b => {
         const st = STATIONS[b.estacion]; if (!st) return;
         const gente = planiPers[b.id] || [];
+        const esSup = (b.estacion === SUP_ESTKEY);
         const subsSel = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
+        if (esSup) {
+          // SUPERVISIÓN: proyectos múltiples (guardados en subtarea como IDs), 8h totales, solo supervisores
+          const proySel = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
+          h += '<div class="card" style="border-left:3px solid '+st.color+'"><div class="pl-row"><span class="estpill" style="background:'+st.bg+';color:'+st.color+';min-width:130px;display:inline-block;text-align:center">'+st.label+'</span>'
+            + '<span style="font-size:12px;color:#888780">Asigná un supervisor a uno o varios proyectos (8h diarias totales).</span>'
+            + '<button class="btn-del" style="margin-left:auto" onclick="eliminarPl(\''+b.id+'\')">×</button></div>'
+            + '<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Proyectos que supervisa (tildá uno o varios):</div><div class="chips">'+(proyectos.length?proyectos.map(p=>{const on=proySel.includes(p.id);return '<button class="chip'+(on?' on':'')+'" onclick="toggleProySup(\''+b.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+'</button>';}).join(''):'<span style="font-size:11px;color:#A8A69E">No hay proyectos.</span>')+'</div></div>'
+            + '<div class="pl-row"><input type="date" value="'+(b.fecha_desde||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(b.fecha_hasta||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+diasHabiles(b.fecha_desde,b.fecha_hasta).length+' días háb.</span></div>'
+            + '<div style="font-size:11px;color:#A8A69E;margin:4px 0">Supervisores:</div><div class="chips">'+(function(){ const sups=personas.filter(esSupervisor); if(!sups.length) return '<span style="font-size:11px;color:#A8A69E">No hay personas con especialidad «Supervisor de proyecto». Cargalas en Personal.</span>'; return sups.map(p=>{
+                const on=gente.includes(p.id);
+                const dias=diasHabiles(b.fecha_desde,b.fecha_hasta);
+                const diasNoDispo=dias.filter(d=>noDispoEn(p.id,d));
+                const algoNoDispo=diasNoDispo.length>0;
+                if(algoNoDispo && !on){ const tipo=tipoNoDispoEn(p.id,diasNoDispo[0])||"No disp."; return '<button class="chip" disabled title="No disponible ('+tipo+') en '+diasNoDispo.length+' día(s) del rango" style="text-decoration:line-through;opacity:0.45;cursor:not-allowed">'+p.nombre+'</button>'; }
+                const horas = (planiHoras[b.id] && planiHoras[b.id][p.id]!=null) ? planiHoras[b.id][p.id] : 8;
+                const chipBtn = '<button class="chip'+(on?' on':'')+'" onclick="toggleGente(\''+b.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+(algoNoDispo?' \u26a0':'')+'</button>';
+                if(!on) return chipBtn;
+                return '<span style="display:inline-flex;align-items:center;gap:3px">'+chipBtn+'<input type="number" value="'+horas+'" min="0" max="8" onchange="editarHoras(\''+b.id+'\',\''+p.id+'\',Number(this.value))" title="Horas de supervisión" style="width:42px;padding:2px 4px;font-size:11px;text-align:center">h</span>';
+              }).join(''); })()+'</div>'
+            + '</div>';
+          return;
+        }
         h += '<div class="card"><div class="pl-row"><span class="estpill" style="background:'+st.bg+';color:'+st.color+';min-width:130px;display:inline-block;text-align:center">'+st.label+'</span>'
           + '<select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px">'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>'
           + '<button class="btn-del" style="margin-left:auto" onclick="eliminarPl(\''+b.id+'\')">×</button></div>'
@@ -433,12 +461,16 @@
     async function agregarEstacion(estKey) {
       if (!proyectos.length) { setEstado("Creá un proyecto primero.", "err"); return; }
       const st = STATIONS[estKey];
-      const { error } = await sb.from("planificacion").insert({ estacion: estKey, subtarea: st.subs[0], proyecto_id: proyectos[0].id, modo: "nombre", fecha_desde: null, fecha_hasta: null });
+      const esSup = (estKey === SUP_ESTKEY);
+      const fila = esSup
+        ? { estacion: estKey, subtarea: "", proyecto_id: proyectos[0].id, modo: "nombre", fecha_desde: null, fecha_hasta: null }
+        : { estacion: estKey, subtarea: st.subs[0], proyecto_id: proyectos[0].id, modo: "nombre", fecha_desde: null, fecha_hasta: null };
+      const { error } = await sb.from("planificacion").insert(fila);
       if (error) return setEstado("Error: " + error.message, "err"); cargar();
     }
     async function agregarEstacionDefault() {
       if (!proyectos.length) { setEstado("Creá un proyecto primero.", "err"); return; }
-      const filas = STKEYS.map(k => ({ estacion: k, subtarea: STATIONS[k].subs[0], proyecto_id: proyectos[0].id, modo: "nombre" }));
+      const filas = STKEYS.filter(k => k !== SUP_ESTKEY).map(k => ({ estacion: k, subtarea: STATIONS[k].subs[0], proyecto_id: proyectos[0].id, modo: "nombre" }));
       const { error } = await sb.from("planificacion").insert(filas);
       if (error) return setEstado("Error: " + error.message, "err"); cargar();
     }
@@ -451,6 +483,16 @@
       const { error } = await sb.from("planificacion").update({ modulos: nuevo }).eq("id", id);
       if (error) return setEstado("Error: " + error.message, "err");
       b.modulos = nuevo; setEstado("\u2713 Guardado.", "ok"); renderPlani();
+    }
+    async function toggleProySup(id, proyId, estaba) {
+      const b = plani.find(x=>x.id===id); if(!b) return;
+      let ids = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
+      if (estaba) ids = ids.filter(s=>s!==proyId); else if(!ids.includes(proyId)) ids.push(proyId);
+      const nuevo = ids.join(", ");
+      const u = { subtarea: nuevo, proyecto_id: ids[0] || null };
+      const { error } = await sb.from("planificacion").update(u).eq("id", id);
+      if (error) return setEstado("Error: " + error.message, "err");
+      b.subtarea = nuevo; b.proyecto_id = u.proyecto_id; setEstado("\u2713 Guardado.", "ok"); renderPlani();
     }
     async function toggleSub(id, sub, estaba) {
       const b = plani.find(x=>x.id===id); if(!b) return;
@@ -485,6 +527,13 @@
         gente.forEach(g => dias.forEach(fecha => {
           if (noDispoEn(g, fecha)) return; // no genera filas para días no disponibles
           const hrs = (planiHoras[b.id] && planiHoras[b.id][g]!=null) ? planiHoras[b.id][g] : 8;
+          if (b.estacion === SUP_ESTKEY) {
+            // supervisión: subtarea = nombres de proyectos supervisados; una sola fila de 8h
+            const ids = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
+            const nombres = ids.map(nombreProy).join(", ") || "Supervisión de proyecto";
+            filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: nombres, estacion_real: b.estacion, subtarea_real: nombres, modulos_plan: null, modulos_real: null, horas_normales: hrs, horas_extra: 0, ausente: false });
+            return;
+          }
           filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, modulos_plan: b.modulos||null, modulos_real: b.modulos||null, horas_normales: hrs, horas_extra: 0, ausente: false });
         }));
       });
@@ -524,8 +573,8 @@
           + '<td><select '+dis+' onchange="cambiarProyDet(\''+f.id+'\',this.value)" style="min-width:130px">'+opcProy(f.proyecto_id)+'</select></td>'
           + '<td><select '+dis+' onchange="editarDet(\''+f.id+'\',\'persona_real\',this.value)">'+opcPersona(f.persona_real)+'</select></td>'
           + '<td>'+(f.ausente?'<span style="color:#A32D2D;font-size:11.5px">— ausente —</span>':'<select '+dis+' onchange="cambiarEstDet(\''+f.id+'\',this.value)" style="'+(f.estacion_real!==f.estacion_plan?'border-color:#BA7517;background:#FAEEDA':'')+'">'+opcEst(f.estacion_real)+'</select>')+'</td>'
-          + '<td>'+(f.ausente?'<span style="color:#A8A69E">—</span>':'<select '+dis+' onchange="editarDet(\''+f.id+'\',\'subtarea_real\',this.value)">'+opcSub(f.estacion_real,f.subtarea_real)+'</select>')+'</td>'
-          + '<td>'+(f.ausente?'<span style="color:#A8A69E">—</span>':celdaModulos(f,pasado))+'</td>'
+          + '<td>'+(f.ausente?'<span style="color:#A8A69E">—</span>':(f.estacion_real===SUP_ESTKEY?'<span style="font-size:12px;color:#0F6E56">'+(f.subtarea_real||'Supervisión de proyecto')+'</span>':'<select '+dis+' onchange="editarDet(\''+f.id+'\',\'subtarea_real\',this.value)">'+opcSub(f.estacion_real,f.subtarea_real)+'</select>'))+'</td>'
+          + '<td>'+(f.ausente||f.estacion_real===SUP_ESTKEY?'<span style="color:#A8A69E">—</span>':celdaModulos(f,pasado))+'</td>'
           + '<td style="text-align:center"><input type="checkbox" '+dis+' '+(f.ausente?'checked':'')+' onchange="toggleAusente(\''+f.id+'\',this.checked)"></td>'
           + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_normales||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_normales\',Number(this.value))" style="width:42px;text-align:center;'+(exceso(f)?'border-color:#A32D2D;background:#FCEBEB;color:#A32D2D':'')+'" '+(f.ausente?'disabled':'')+'></td>'
           + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_extra||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_extra\',Number(this.value))" style="width:42px;text-align:center;'+(f.horas_extra>0?'color:#BA7517':'')+'" '+(f.ausente?'disabled':'')+'></td>'
