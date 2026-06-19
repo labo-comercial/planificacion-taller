@@ -130,11 +130,14 @@
       rental:{label:"Rental",color:"#185FA5",bg:"#E6F1FB",subs:["General"]},
       mantenimiento:{label:"Mantenimiento",color:"#5F5E5A",bg:"#F1EFE8",subs:["Orden y limpieza","Corte de pasto","Clasificación de residuo","Mantenimiento eléctrico","Mantenimiento operativo","Mejoras"]},
       montaje:{label:"Montaje",color:"#3C3489",bg:"#E8E5FA",subs:["Montaje en obra","Nivelación","Unión de módulos","Conexionado","Terminaciones de montaje"]},
-      postventa:{label:"Postventa",color:"#993556",bg:"#FBEAF0",subs:["Reparación","Ajuste","Reclamo de cliente","Garantía","Inspección"]},
-      supervision:{label:"Supervisión",color:"#0F6E56",bg:"#E1F5EE",subs:["Supervisión de proyecto"]}
+      postventa:{label:"Postventa",color:"#993556",bg:"#FBEAF0",subs:["Reparación","Ajuste","Reclamo de cliente","Garantía","Inspección"]}
     };
     const STKEYS = Object.keys(STATIONS);
-    const SUP_ESTKEY = "supervision";
+    // Supervisión NO es una estación: es un rol jerárquico que se asigna a proyectos.
+    // En el detalle se marca con esta etiqueta especial en el campo estacion_real/plan.
+    const SUP_MARK = "__supervision__";
+    const SUP_LABEL = "Supervisión";
+    const SUP_COLOR = "#0F6E56", SUP_BG = "#E1F5EE";
     // Es supervisor quien tenga "supervisor de proyecto" en su especialidad (admite numeración: 1, 2, ...).
     function esSupervisor(p){ return p && /supervisor de proyecto/i.test((p.especialidad||"")); }
     function esSupervisorId(pid){ return esSupervisor(personas.find(x=>x.id===pid)); }
@@ -147,7 +150,7 @@
     // Para reactivar la validación estricta, poné true.
     const VALIDAR_COBERTURA = false;
     let tab = "personal";
-    let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, planiHoras = {}, detalle = [], feriados = [];
+    let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, planiHoras = {}, detalle = [], feriados = [], supervisiones = [];
 
     function setEstado(m, c) { estado.textContent = m; estado.className = "estado " + c; }
     function fechaStr(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
@@ -193,6 +196,7 @@
         // planificación necesaria para validar choques con ausencias
         { const { data } = await sb.from("planificacion").select("*").order("creado_en", { ascending: true }); plani = data || []; }
         { const { data: pp } = await sb.from("planificacion_personal").select("*"); planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); }); }
+        { const { data: sv } = await sb.from("supervision").select("*"); supervisiones = sv || []; }
         const { data, error } = await sb.from("no_disponibilidad").select("*"); if (error) return errLoad(error);
         dispo = data || []; setEstado("\u2713 " + dispo.length + " período(s).", "ok"); renderDispo();
       } else if (tab === "feriados") {
@@ -204,6 +208,7 @@
         plani = data || [];
         const { data: pp, error: e2 } = await sb.from("planificacion_personal").select("*"); if (e2) return errLoad(e2);
         planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); });
+        { const { data: sv } = await sb.from("supervision").select("*").order("creado_en", { ascending: true }); supervisiones = sv || []; }
         setEstado("\u2713 " + plani.length + " estación(es) planificada(s).", "ok"); renderPlani();
       } else if (tab === "detalle") {
         await asegurarBase();
@@ -319,6 +324,12 @@
         const choca=dias.filter(d=> d>=desde && d<=hasta);
         if(choca.length){ const st=STATIONS[b.estacion]; hit.push({ estacion: st?st.label:b.estacion, proyecto: nombreProy(b.proyecto_id), dias: choca }); }
       });
+      supervisiones.forEach(s=>{
+        if(s.supervisor_id!==personaId) return;
+        const dias=diasHabiles(s.fecha_desde,s.fecha_hasta);
+        const choca=dias.filter(d=> d>=desde && d<=hasta);
+        if(choca.length){ const ids=(s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean); hit.push({ estacion: SUP_LABEL, proyecto: ids.map(nombreProy).join(", "), dias: choca }); }
+      });
       return hit;
     }
     function avisarSiPlanificado(personaId, desde, hasta){
@@ -379,14 +390,22 @@
       //  - cargaSup: supervisión (vale 8h fijas, corre en paralelo, no se suma con estación)
       const cargaEst = {}, cargaSup = {};
       plani.forEach(b => {
-        const esSup = (b.estacion === SUP_ESTKEY);
         (planiPers[b.id]||[]).forEach(g => {
           const hrs = (planiHoras[b.id] && planiHoras[b.id][g]!=null) ? planiHoras[b.id][g] : 8;
           diasHabiles(b.fecha_desde, b.fecha_hasta).forEach(d => {
             const k = g+"|"+d;
-            if (esSup) cargaSup[k] = (cargaSup[k]||0) + hrs;
-            else cargaEst[k] = (cargaEst[k]||0) + hrs;
+            cargaEst[k] = (cargaEst[k]||0) + hrs;
           });
+        });
+      });
+      // supervisión vive en su propia tabla; vale 8h fijas en paralelo
+      supervisiones.forEach(s => {
+        const tieneProy = (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean).length > 0;
+        if (!tieneProy) return;
+        const hrs = (s.horas != null ? s.horas : 8);
+        diasHabiles(s.fecha_desde, s.fecha_hasta).forEach(d => {
+          const k = s.supervisor_id+"|"+d;
+          cargaSup[k] = (cargaSup[k]||0) + hrs;
         });
       });
       const directos = personas.filter(p => p.tipo !== "Contratista");
@@ -429,31 +448,7 @@
       plani.forEach(b => {
         const st = STATIONS[b.estacion]; if (!st) return;
         const gente = planiPers[b.id] || [];
-        const esSup = (b.estacion === SUP_ESTKEY);
         const subsSel = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
-        if (esSup) {
-          // SUPERVISIÓN: proyectos múltiples (guardados en subtarea como IDs), 8h totales, solo supervisores
-          const proySel = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
-          h += '<div class="card" style="border-left:3px solid '+st.color+'"><div class="pl-row"><span class="estpill" style="background:'+st.bg+';color:'+st.color+';min-width:130px;display:inline-block;text-align:center">'+st.label+'</span>'
-            + '<span style="font-size:12px;color:#888780">Asigná un supervisor a uno o varios proyectos (8h diarias totales).</span>'
-            + '<button class="btn-del" style="margin-left:auto" onclick="eliminarPl(\''+b.id+'\')">×</button></div>'
-            + '<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Proyectos que supervisa (tildá uno o varios):</div><div class="chips">'+(proyectos.length?proyectos.map(p=>{const on=proySel.includes(p.id);return '<button class="chip'+(on?' on':'')+'" onclick="toggleProySup(\''+b.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+'</button>';}).join(''):'<span style="font-size:11px;color:#A8A69E">No hay proyectos.</span>')+'</div></div>'
-            + (gente.length && !proySel.length ? '<div class="estado err" style="margin:0 0 8px;padding:6px 10px;font-size:12px">⚠ El supervisor debe estar asignado al menos a un proyecto. Tildá uno arriba.</div>' : '')
-            + '<div class="pl-row"><input type="date" value="'+(b.fecha_desde||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(b.fecha_hasta||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+diasHabiles(b.fecha_desde,b.fecha_hasta).length+' días háb.</span></div>'
-            + '<div style="font-size:11px;color:#A8A69E;margin:4px 0">Supervisores:</div><div class="chips">'+(function(){ const sups=personas.filter(esSupervisor); if(!sups.length) return '<span style="font-size:11px;color:#A8A69E">No hay personas con especialidad «Supervisor de proyecto». Cargalas en Personal.</span>'; return sups.map(p=>{
-                const on=gente.includes(p.id);
-                const dias=diasHabiles(b.fecha_desde,b.fecha_hasta);
-                const diasNoDispo=dias.filter(d=>noDispoEn(p.id,d));
-                const algoNoDispo=diasNoDispo.length>0;
-                if(algoNoDispo && !on){ const tipo=tipoNoDispoEn(p.id,diasNoDispo[0])||"No disp."; return '<button class="chip" disabled title="No disponible ('+tipo+') en '+diasNoDispo.length+' día(s) del rango" style="text-decoration:line-through;opacity:0.45;cursor:not-allowed">'+p.nombre+'</button>'; }
-                const horas = (planiHoras[b.id] && planiHoras[b.id][p.id]!=null) ? planiHoras[b.id][p.id] : 8;
-                const chipBtn = '<button class="chip'+(on?' on':'')+'" onclick="toggleGente(\''+b.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+(algoNoDispo?' \u26a0':'')+'</button>';
-                if(!on) return chipBtn;
-                return '<span style="display:inline-flex;align-items:center;gap:3px">'+chipBtn+'<input type="number" value="'+horas+'" min="0" max="8" onchange="editarHoras(\''+b.id+'\',\''+p.id+'\',Number(this.value))" title="Horas de supervisión" style="width:42px;padding:2px 4px;font-size:11px;text-align:center">h</span>';
-              }).join(''); })()+'</div>'
-            + '</div>';
-          return;
-        }
         h += '<div class="card"><div class="pl-row"><span class="estpill" style="background:'+st.bg+';color:'+st.color+';min-width:130px;display:inline-block;text-align:center">'+st.label+'</span>'
           + '<select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px">'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>'
           + '<button class="btn-del" style="margin-left:auto" onclick="eliminarPl(\''+b.id+'\')">×</button></div>'
@@ -473,6 +468,7 @@
             }).join('')+'</div>'
           + '</div>';
       });
+      h += renderPanelSupervision();
       h += '<div class="row-actions"><select id="selAgregar" style="width:auto;color:#185FA5"><option value="">+ Agregar estación…</option>'+STKEYS.map(k=>'<option value="'+k+'">'+STATIONS[k].label+'</option>').join('')+'</select>';
       h += '<button class="btn btn-add" onclick="agregarEstacionDefault()">Cargar las 20 estaciones</button>';
       h += '<button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button>';
@@ -484,16 +480,12 @@
     async function agregarEstacion(estKey) {
       if (!proyectos.length) { setEstado("Creá un proyecto primero.", "err"); return; }
       const st = STATIONS[estKey];
-      const esSup = (estKey === SUP_ESTKEY);
-      const fila = esSup
-        ? { estacion: estKey, subtarea: "", proyecto_id: proyectos[0].id, modo: "nombre", fecha_desde: null, fecha_hasta: null }
-        : { estacion: estKey, subtarea: st.subs[0], proyecto_id: proyectos[0].id, modo: "nombre", fecha_desde: null, fecha_hasta: null };
-      const { error } = await sb.from("planificacion").insert(fila);
+      const { error } = await sb.from("planificacion").insert({ estacion: estKey, subtarea: st.subs[0], proyecto_id: proyectos[0].id, modo: "nombre", fecha_desde: null, fecha_hasta: null });
       if (error) return setEstado("Error: " + error.message, "err"); cargar();
     }
     async function agregarEstacionDefault() {
       if (!proyectos.length) { setEstado("Creá un proyecto primero.", "err"); return; }
-      const filas = STKEYS.filter(k => k !== SUP_ESTKEY).map(k => ({ estacion: k, subtarea: STATIONS[k].subs[0], proyecto_id: proyectos[0].id, modo: "nombre" }));
+      const filas = STKEYS.map(k => ({ estacion: k, subtarea: STATIONS[k].subs[0], proyecto_id: proyectos[0].id, modo: "nombre" }));
       const { error } = await sb.from("planificacion").insert(filas);
       if (error) return setEstado("Error: " + error.message, "err"); cargar();
     }
@@ -507,15 +499,60 @@
       if (error) return setEstado("Error: " + error.message, "err");
       b.modulos = nuevo; setEstado("\u2713 Guardado.", "ok"); renderPlani();
     }
-    async function toggleProySup(id, proyId, estaba) {
-      const b = plani.find(x=>x.id===id); if(!b) return;
-      let ids = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
-      if (estaba) ids = ids.filter(s=>s!==proyId); else if(!ids.includes(proyId)) ids.push(proyId);
-      const nuevo = ids.join(", ");
-      const u = { subtarea: nuevo, proyecto_id: ids[0] || null };
-      const { error } = await sb.from("planificacion").update(u).eq("id", id);
+    /* ---- PANEL DE SUPERVISIÓN (rol jerárquico, separado de las estaciones) ---- */
+    function renderPanelSupervision() {
+      const sups = personas.filter(esSupervisor);
+      let h = '<div class="card" style="border-left:3px solid '+SUP_COLOR+';background:#FBFDFC">';
+      h += '<div class="pl-row" style="align-items:center"><span class="estpill" style="background:'+SUP_BG+';color:'+SUP_COLOR+';min-width:130px;display:inline-block;text-align:center">'+SUP_LABEL+'</span>';
+      h += '<span style="font-size:12px;color:#888780">Rol jerárquico: asigná un supervisor a uno o varios proyectos. Cubre sus 8h diarias y corre en paralelo a cualquier trabajo en estación.</span></div>';
+      if (!sups.length) {
+        h += '<div style="font-size:12px;color:#A8A69E;margin-top:8px">No hay personas con especialidad «Supervisor de proyecto». Cargalas en Personal.</div></div>';
+        return h;
+      }
+      if (!supervisiones.length) {
+        h += '<div style="font-size:12px;color:#A8A69E;margin:8px 0">Sin asignaciones de supervisión.</div>';
+      }
+      supervisiones.forEach(s => {
+        const proySel = (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean);
+        const dias = diasHabiles(s.fecha_desde, s.fecha_hasta);
+        const diasNoDispo = dias.filter(d=>noDispoEn(s.supervisor_id,d));
+        h += '<div style="border:1px solid #E6E4DC;border-radius:12px;padding:12px;margin-top:10px;background:#fff">'
+          + '<div class="pl-row" style="align-items:center"><select onchange="editarSup(\''+s.id+'\',\'supervisor_id\',this.value)" style="min-width:180px">'+sups.map(p=>'<option value="'+p.id+'" '+(p.id===s.supervisor_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>'
+          + '<button class="btn-del" style="margin-left:auto" onclick="eliminarSup(\''+s.id+'\')">×</button></div>'
+          + '<div style="margin:8px 0 6px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Proyectos que supervisa (tildá uno o varios):</div><div class="chips">'+(proyectos.length?proyectos.map(p=>{const on=proySel.includes(p.id);return '<button class="chip'+(on?' on':'')+'" onclick="toggleProySup(\''+s.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+'</button>';}).join(''):'<span style="font-size:11px;color:#A8A69E">No hay proyectos.</span>')+'</div></div>'
+          + (!proySel.length ? '<div class="estado err" style="margin:0 0 8px;padding:6px 10px;font-size:12px">⚠ El supervisor debe estar asignado al menos a un proyecto.</div>' : '')
+          + '<div class="pl-row"><input type="date" value="'+(s.fecha_desde||'')+'" onchange="editarSup(\''+s.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(s.fecha_hasta||'')+'" onchange="editarSup(\''+s.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+dias.length+' días háb.</span>'
+          + (diasNoDispo.length?'<span style="color:#A32D2D;font-size:11px">⚠ '+(tipoNoDispoEn(s.supervisor_id,diasNoDispo[0])||"No disp.")+' en '+diasNoDispo.length+' día(s)</span>':'')+'</div>'
+          + '</div>';
+      });
+      h += '<button class="btn btn-add" style="margin-top:10px" onclick="agregarSup()">+ Agregar supervisión</button>';
+      h += '</div>';
+      return h;
+    }
+    async function agregarSup() {
+      const sups = personas.filter(esSupervisor);
+      if (!sups.length) { setEstado("No hay supervisores cargados en Personal.", "err"); return; }
+      if (!proyectos.length) { setEstado("Creá un proyecto primero.", "err"); return; }
+      const { error } = await sb.from("supervision").insert({ supervisor_id: sups[0].id, proyectos: "", fecha_desde: null, fecha_hasta: null, horas: 8 });
+      if (error) return setEstado("Error: " + error.message, "err"); cargar();
+    }
+    async function editarSup(id, c, v) {
+      const u = {}; u[c] = (v === "" ? null : v);
+      const { error } = await sb.from("supervision").update(u).eq("id", id);
       if (error) return setEstado("Error: " + error.message, "err");
-      b.subtarea = nuevo; b.proyecto_id = u.proyecto_id; setEstado("\u2713 Guardado.", "ok"); renderPlani();
+      const s = supervisiones.find(x=>x.id===id); if(s) s[c]=u[c];
+      setEstado("\u2713 Guardado.", "ok");
+      if (c==="fecha_desde"||c==="fecha_hasta"||c==="supervisor_id") renderPlani();
+    }
+    async function eliminarSup(id) { const { error } = await sb.from("supervision").delete().eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); cargar(); }
+    async function toggleProySup(id, proyId, estaba) {
+      const s = supervisiones.find(x=>x.id===id); if(!s) return;
+      let ids = (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean);
+      if (estaba) ids = ids.filter(x=>x!==proyId); else if(!ids.includes(proyId)) ids.push(proyId);
+      const nuevo = ids.join(", ");
+      const { error } = await sb.from("supervision").update({ proyectos: nuevo }).eq("id", id);
+      if (error) return setEstado("Error: " + error.message, "err");
+      s.proyectos = nuevo; setEstado("\u2713 Guardado.", "ok"); renderPlani();
     }
     async function toggleSub(id, sub, estaba) {
       const b = plani.find(x=>x.id===id); if(!b) return;
@@ -530,11 +567,11 @@
     async function generarDetalle() {
       const val = validarCobertura();
       if (!val.ok) { setEstado("Todavía hay días sin cubrir.", "err"); return; }
-      // requisito excluyente: toda card de Supervisión con gente debe tener al menos un proyecto tildado
-      const supSinProy = plani.filter(b => b.estacion === SUP_ESTKEY && (planiPers[b.id]||[]).length > 0 && !((b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean).length));
+      // requisito excluyente: toda asignación de supervisión debe tener al menos un proyecto
+      const supSinProy = supervisiones.filter(s => !((s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean).length));
       if (supSinProy.length > 0) {
-        const quienes = [...new Set(supSinProy.flatMap(b => (planiPers[b.id]||[]).map(nombrePersona)))].join(", ");
-        setEstado("⚠ Hay supervisión sin proyecto asignado (" + quienes + "). Tildá al menos un proyecto en cada card de Supervisión antes de generar.", "err");
+        const quienes = [...new Set(supSinProy.map(s => nombrePersona(s.supervisor_id)))].join(", ");
+        setEstado("⚠ Hay supervisión sin proyecto asignado (" + quienes + "). Tildá al menos un proyecto en cada asignación de Supervisión antes de generar.", "err");
         return;
       }
       const hoy = fechaStr(new Date());
@@ -557,15 +594,20 @@
         gente.forEach(g => dias.forEach(fecha => {
           if (noDispoEn(g, fecha)) return; // no genera filas para días no disponibles
           const hrs = (planiHoras[b.id] && planiHoras[b.id][g]!=null) ? planiHoras[b.id][g] : 8;
-          if (b.estacion === SUP_ESTKEY) {
-            // supervisión: subtarea = nombres de proyectos supervisados; una sola fila de 8h
-            const ids = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
-            const nombres = ids.map(nombreProy).join(", ") || "Supervisión de proyecto";
-            filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: nombres, estacion_real: b.estacion, subtarea_real: nombres, modulos_plan: null, modulos_real: null, horas_normales: hrs, horas_extra: 0, ausente: false });
-            return;
-          }
           filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, modulos_plan: b.modulos||null, modulos_real: b.modulos||null, horas_normales: hrs, horas_extra: 0, ausente: false });
         }));
+      });
+      // supervisión: una fila por supervisor por día, con la marca SUP_MARK y los proyectos como "tarea"
+      supervisiones.forEach(s => {
+        const ids = (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean);
+        if (!ids.length) return; // sin proyecto no genera (validado más arriba)
+        const nombres = ids.map(nombreProy).join(", ");
+        const dias = diasHabiles(s.fecha_desde, s.fecha_hasta).filter(d => d >= hoy);
+        const hrs = (s.horas != null ? s.horas : 8);
+        dias.forEach(fecha => {
+          if (noDispoEn(s.supervisor_id, fecha)) return;
+          filas.push({ fecha, persona_plan: s.supervisor_id, persona_real: s.supervisor_id, proyecto_id: ids[0], estacion_plan: SUP_MARK, subtarea_plan: nombres, estacion_real: SUP_MARK, subtarea_real: nombres, modulos_plan: null, modulos_real: null, horas_normales: hrs, horas_extra: 0, ausente: false });
+        });
       });
       if (filas.length > 0) {
         const { error: eIns } = await sb.from("detalle_diario").insert(filas);
@@ -582,8 +624,8 @@
       // horas por persona/día para detectar sobreasignación.
       // Las filas de supervisión corren en paralelo: no se suman con el trabajo en estación.
       const horasDia = {};
-      detalle.forEach(f => { if (f.ausente) return; if (f.estacion_real === SUP_ESTKEY) return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
-      const exceso = (f) => !f.ausente && f.estacion_real !== SUP_ESTKEY && horasDia[f.persona_real + "|" + f.fecha] > 8;
+      detalle.forEach(f => { if (f.ausente) return; if (f.estacion_real === SUP_MARK) return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
+      const exceso = (f) => !f.ausente && f.estacion_real !== SUP_MARK && horasDia[f.persona_real + "|" + f.fecha] > 8;
       const opcPersona = (sel) => personas.map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
       const opcEst = (sel) => STKEYS.map(k => '<option value="'+k+'" '+(k===sel?'selected':'')+'>'+STATIONS[k].label+'</option>').join('');
       const opcSub = (est, sel) => { const base = STATIONS[est]?STATIONS[est].subs.slice():[]; if(sel && !base.includes(sel)) base.unshift(sel); return base.map(s => '<option '+(s===sel?'selected':'')+'>'+s+'</option>').join(''); };
@@ -603,9 +645,9 @@
           + '<td style="white-space:nowrap;color:#888780">'+dm(f.fecha)+(pasado?' 🔒':'')+'</td>'
           + '<td><select '+dis+' onchange="cambiarProyDet(\''+f.id+'\',this.value)" style="min-width:130px">'+opcProy(f.proyecto_id)+'</select></td>'
           + '<td><select '+dis+' onchange="editarDet(\''+f.id+'\',\'persona_real\',this.value)">'+opcPersona(f.persona_real)+'</select></td>'
-          + '<td>'+(f.ausente?'<span style="color:#A32D2D;font-size:11.5px">— ausente —</span>':'<select '+dis+' onchange="cambiarEstDet(\''+f.id+'\',this.value)" style="'+(f.estacion_real!==f.estacion_plan?'border-color:#BA7517;background:#FAEEDA':'')+'">'+opcEst(f.estacion_real)+'</select>')+'</td>'
-          + '<td>'+(f.ausente?'<span style="color:#A8A69E">—</span>':(f.estacion_real===SUP_ESTKEY?'<span style="font-size:12px;color:#0F6E56">'+(f.subtarea_real||'Supervisión de proyecto')+'</span>':'<select '+dis+' onchange="editarDet(\''+f.id+'\',\'subtarea_real\',this.value)">'+opcSub(f.estacion_real,f.subtarea_real)+'</select>'))+'</td>'
-          + '<td>'+(f.ausente||f.estacion_real===SUP_ESTKEY?'<span style="color:#A8A69E">—</span>':celdaModulos(f,pasado))+'</td>'
+          + '<td>'+(f.ausente?'<span style="color:#A32D2D;font-size:11.5px">— ausente —</span>':(f.estacion_real===SUP_MARK?'<span style="background:'+SUP_BG+';color:'+SUP_COLOR+';padding:2px 8px;border-radius:6px;font-size:11.5px">'+SUP_LABEL+'</span>':'<select '+dis+' onchange="cambiarEstDet(\''+f.id+'\',this.value)" style="'+(f.estacion_real!==f.estacion_plan?'border-color:#BA7517;background:#FAEEDA':'')+'">'+opcEst(f.estacion_real)+'</select>'))+'</td>'
+          + '<td>'+(f.ausente?'<span style="color:#A8A69E">—</span>':(f.estacion_real===SUP_MARK?'<span style="font-size:12px;color:#0F6E56">'+(f.subtarea_real||'Supervisión de proyecto')+'</span>':'<select '+dis+' onchange="editarDet(\''+f.id+'\',\'subtarea_real\',this.value)">'+opcSub(f.estacion_real,f.subtarea_real)+'</select>'))+'</td>'
+          + '<td>'+(f.ausente||f.estacion_real===SUP_MARK?'<span style="color:#A8A69E">—</span>':celdaModulos(f,pasado))+'</td>'
           + '<td style="text-align:center"><input type="checkbox" '+dis+' '+(f.ausente?'checked':'')+' onchange="toggleAusente(\''+f.id+'\',this.checked)"></td>'
           + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_normales||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_normales\',Number(this.value))" style="width:42px;text-align:center;'+(exceso(f)?'border-color:#A32D2D;background:#FCEBEB;color:#A32D2D':'')+'" '+(f.ausente?'disabled':'')+'></td>'
           + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_extra||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_extra\',Number(this.value))" style="width:42px;text-align:center;'+(f.horas_extra>0?'color:#BA7517':'')+'" '+(f.ausente?'disabled':'')+'></td>'
@@ -645,7 +687,9 @@
     /* ---- DASHBOARD ---- */
     let vistaDash = "pm", dashProy = "";
     function costoHora(pid){ const p = personas.find(x=>x.id===pid); return p ? (Number(p.costo_hora)||0) : 0; }
-    function nombreEstacion(k){ return STATIONS[k] ? STATIONS[k].label : k; }
+    function nombreEstacion(k){ if(k===SUP_MARK) return SUP_LABEL; return STATIONS[k] ? STATIONS[k].label : k; }
+    function estBg(k){ if(k===SUP_MARK) return SUP_BG; return STATIONS[k] ? STATIONS[k].bg : "#eee"; }
+    function estColor(k){ if(k===SUP_MARK) return SUP_COLOR; return STATIONS[k] ? STATIONS[k].color : "#555"; }
     function proyDeDetalle(f){ return f.proyecto_id; }
     function renderDash() {
       const proyVig = proyectos.filter(p => p.estado !== "Cerrado");
@@ -692,13 +736,13 @@
           + card("Personal utilizado", usados.size+"/"+personas.filter(p=>p.tipo!=='Contratista').length, "asignados / plantel")
           + '</div>';
         // agenda
-        const ag=(titulo,fch,lista)=>{ let x='<div style="flex:1;min-width:260px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">'+titulo+(fch?' ('+dm(fch)+')':'')+'</div>'; if(!lista.length)x+='<div style="font-size:12.5px;color:#A8A69E">Sin tareas.</div>'; lista.forEach((t,i)=>{x+='<div style="padding:6px 0;border-top:'+(i?'1px solid #F1EFE8':'none')+';font-size:12.5px"><span style="background:'+STATIONS[t.est].bg+';color:'+STATIONS[t.est].color+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+STATIONS[t.est].label+'</span> <span style="color:#888780">'+t.sub+'</span><div style="font-size:11px;color:#A8A69E;margin-top:2px">'+t.g.join(", ")+'</div></div>';}); return x+'</div>'; };
+        const ag=(titulo,fch,lista)=>{ let x='<div style="flex:1;min-width:260px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">'+titulo+(fch?' ('+dm(fch)+')':'')+'</div>'; if(!lista.length)x+='<div style="font-size:12.5px;color:#A8A69E">Sin tareas.</div>'; lista.forEach((t,i)=>{x+='<div style="padding:6px 0;border-top:'+(i?'1px solid #F1EFE8':'none')+';font-size:12.5px"><span style="background:'+estBg(t.est)+';color:'+estColor(t.est)+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(t.est)+'</span> <span style="color:#888780">'+t.sub+'</span><div style="font-size:11px;color:#A8A69E;margin-top:2px">'+t.g.join(", ")+'</div></div>';}); return x+'</div>'; };
         h+='<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">'+ag("📋 Tareas de hoy",diaHoy,tareasDe(diaHoy))+ag("⏭️ Preparar para mañana",diaMan,tareasDe(diaMan))+'</div>';
       }
       // gráfico de barras costo por estación (común a ambas vistas)
       h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:12px">Costo real por estación</div>';
       if(!estArr.length) h+='<div style="font-size:12.5px;color:#A8A69E">Sin datos.</div>';
-      estArr.forEach(([k,v])=>{ const pct=v.real/maxEst*100; h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px"><span style="width:150px;color:#5F5E5A">'+nombreEstacion(k)+'</span><div style="flex:1;background:#F1EFE8;border-radius:4px;height:18px;position:relative"><div style="width:'+pct+'%;background:'+STATIONS[k].color+';height:100%;border-radius:4px"></div></div><span style="width:90px;text-align:right">$'+Math.round(v.real).toLocaleString("es-AR")+'</span></div>'; });
+      estArr.forEach(([k,v])=>{ const pct=v.real/maxEst*100; h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px"><span style="width:150px;color:#5F5E5A">'+nombreEstacion(k)+'</span><div style="flex:1;background:#F1EFE8;border-radius:4px;height:18px;position:relative"><div style="width:'+pct+'%;background:'+estColor(k)+';height:100%;border-radius:4px"></div></div><span style="width:90px;text-align:right">$'+Math.round(v.real).toLocaleString("es-AR")+'</span></div>'; });
       h+='</div>';
       h+='</div>';
       contenido.innerHTML=h;
@@ -735,7 +779,7 @@
       fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:50px">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
       pers.forEach(pid=>{ h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+nombrePersona(pid)+'</td>';
-        fechas.forEach(d=>{ const t=cell[pid+"|"+d]; let c='<span style="color:#D3D1C7">—</span>'; if(t==="__aus")c='<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>'; else if(t&&STATIONS[t])c='<span style="display:inline-block;width:100%;background:'+STATIONS[t].bg+';color:'+STATIONS[t].color+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+STATIONS[t].label.slice(0,8)+'</span>'; h+='<td style="padding:4px;text-align:center">'+c+'</td>'; });
+        fechas.forEach(d=>{ const t=cell[pid+"|"+d]; let c='<span style="color:#D3D1C7">—</span>'; if(t==="__aus")c='<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>'; else if(t===SUP_MARK)c='<span style="display:inline-block;width:100%;background:'+SUP_BG+';color:'+SUP_COLOR+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+SUP_LABEL.slice(0,8)+'</span>'; else if(t&&STATIONS[t])c='<span style="display:inline-block;width:100%;background:'+STATIONS[t].bg+';color:'+STATIONS[t].color+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+STATIONS[t].label.slice(0,8)+'</span>'; h+='<td style="padding:4px;text-align:center">'+c+'</td>'; });
         h+='</tr>';
       });
       h+='</tbody></table></div></div>';
@@ -764,7 +808,7 @@
       h+='</div>';
       h+='<div id="parteBox" style="border:1px solid #E6E4DC;border-radius:12px;padding:18px 20px;max-width:480px"><div style="font-size:16px;font-weight:600">Parte diario '+(fSel?dmy(fSel):"")+'</div><div style="font-size:12.5px;color:#888780;margin-bottom:6px">'+proyNom+(parteEst?' · '+STATIONS[parteEst].label:'')+(partePersona?' · '+nombrePersona(partePersona):'')+'</div><div style="border-top:1px solid #F1EFE8;margin-top:6px;padding-top:6px">';
       if(!rows.length) h+='<div style="font-size:13px;color:#A8A69E;padding:8px 0">'+(detalle.length?'Sin asignaciones para este filtro.':'Generá el detalle diario primero.')+'</div>';
-      rows.forEach(f=>{ const mm=(f.modulos_real||"").trim(); h+='<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #F1EFE8;font-size:13px"><span style="font-weight:600;min-width:140px">'+nombrePersona(f.persona_real)+'</span><span><span style="background:'+STATIONS[f.estacion_real].bg+';color:'+STATIONS[f.estacion_real].color+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(f.estacion_real)+'</span>'+(mm?' <span style="background:#E6F1FB;color:#185FA5;padding:2px 6px;border-radius:6px;font-size:10.5px">'+mm+'</span>':'')+' <span style="color:#888780">'+f.subtarea_real+'</span>'+(f.horas_extra>0?' <span style="color:#BA7517;font-size:11px">+'+f.horas_extra+'h</span>':'')+'</span></div>'; });
+      rows.forEach(f=>{ const mm=(f.modulos_real||"").trim(); h+='<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #F1EFE8;font-size:13px"><span style="font-weight:600;min-width:140px">'+nombrePersona(f.persona_real)+'</span><span><span style="background:'+estBg(f.estacion_real)+';color:'+estColor(f.estacion_real)+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(f.estacion_real)+'</span>'+(mm?' <span style="background:#E6F1FB;color:#185FA5;padding:2px 6px;border-radius:6px;font-size:10.5px">'+mm+'</span>':'')+' <span style="color:#888780">'+f.subtarea_real+'</span>'+(f.horas_extra>0?' <span style="color:#BA7517;font-size:11px">+'+f.horas_extra+'h</span>':'')+'</span></div>'; });
       h+='</div></div>';
       h+='<textarea id="parteTexto" style="position:absolute;left:-9999px">'+texto+'</textarea>';
       contenido.innerHTML=h;
@@ -849,7 +893,7 @@
       const estArr=Object.entries(est).filter(([,v])=>v.realD.size>0||v.planD.size>0).sort((a,b)=>b[1].costo-a[1].costo);
       h+='<div style="font-size:14px;font-weight:600;margin:18px 0 8px">📊 Desglose por estación</div>';
       h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:8px 10px">Estación</th><th style="text-align:center;padding:8px 10px">Días plan</th><th style="text-align:center;padding:8px 10px">Días real</th><th style="text-align:center;padding:8px 10px">Desvío</th><th style="text-align:right;padding:8px 10px">Costo real</th><th style="text-align:center;padding:8px 10px">Hs extra</th><th style="text-align:left;padding:8px 10px">Módulos plan</th><th style="text-align:left;padding:8px 10px">Módulos real</th></tr></thead><tbody>';
-      estArr.forEach(([k,v])=>{ const dp=v.planD.size, dr=v.realD.size, dv=dr-dp; const mP=[...v.modsPlan].join(", ")||"—"; const mR=[...v.modsReal].join(", ")||"—"; h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px"><span style="background:'+(STATIONS[k]?STATIONS[k].bg:'#eee')+';color:'+(STATIONS[k]?STATIONS[k].color:'#555')+';padding:2px 7px;border-radius:6px">'+nombreEstacion(k)+'</span></td><td style="text-align:center">'+dp+'</td><td style="text-align:center">'+dr+'</td><td style="text-align:center;color:'+(dv>0?'#A32D2D':dv<0?'#3B6D11':'#888780')+'">'+(dv>=0?"+":"")+dv+'</td><td style="text-align:right">'+fmt(v.costo)+'</td><td style="text-align:center;color:'+(v.hsExtra>0?'#BA7517':'#A8A69E')+'">'+(v.hsExtra||0)+'h</td><td style="padding:7px 10px;font-size:11.5px;color:#5F5E5A">'+mP+'</td><td style="padding:7px 10px;font-size:11.5px;color:#5F5E5A">'+mR+'</td></tr>'; });
+      estArr.forEach(([k,v])=>{ const dp=v.planD.size, dr=v.realD.size, dv=dr-dp; const mP=[...v.modsPlan].join(", ")||"—"; const mR=[...v.modsReal].join(", ")||"—"; h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px"><span style="background:'+estBg(k)+';color:'+estColor(k)+';padding:2px 7px;border-radius:6px">'+nombreEstacion(k)+'</span></td><td style="text-align:center">'+dp+'</td><td style="text-align:center">'+dr+'</td><td style="text-align:center;color:'+(dv>0?'#A32D2D':dv<0?'#3B6D11':'#888780')+'">'+(dv>=0?"+":"")+dv+'</td><td style="text-align:right">'+fmt(v.costo)+'</td><td style="text-align:center;color:'+(v.hsExtra>0?'#BA7517':'#A8A69E')+'">'+(v.hsExtra||0)+'h</td><td style="padding:7px 10px;font-size:11.5px;color:#5F5E5A">'+mP+'</td><td style="padding:7px 10px;font-size:11.5px;color:#5F5E5A">'+mR+'</td></tr>'; });
       h+='</tbody></table></div>';
 
       // lectura del desvío (descriptiva, basada en datos)
@@ -880,12 +924,11 @@
       setEstado("\u2713 Guardado.", "ok"); renderPlani();
     }
     // suma de horas de una persona en un día dado, entre las estaciones cuyo rango incluye ese día.
-    // Por defecto excluye la supervisión, que corre en paralelo y no se suma con el trabajo en estación.
-    function horasPersonaDia(personaId, fecha, exceptoPlaniId, incluirSupervision) {
+    // La supervisión vive en su propia tabla y corre en paralelo, así que no entra en esta suma.
+    function horasPersonaDia(personaId, fecha, exceptoPlaniId) {
       let tot = 0;
       plani.forEach(b => {
         if (b.id === exceptoPlaniId) return;
-        if (!incluirSupervision && b.estacion === SUP_ESTKEY) return;
         if (!(planiPers[b.id]||[]).includes(personaId)) return;
         if (!diasHabiles(b.fecha_desde, b.fecha_hasta).includes(fecha)) return;
         tot += (planiHoras[b.id] && planiHoras[b.id][personaId] != null) ? planiHoras[b.id][personaId] : 8;
