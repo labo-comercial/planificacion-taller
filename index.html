@@ -212,6 +212,10 @@
     let stockItems = [];           // catálogo de ítems de stock (Neuquén)
     let stockFiltroFam = "";       // filtro por familia
     let stockSoloBajos = false;    // mostrar solo ítems bajo mínimo
+    let stockSub = "items";        // sub-vista de la pestaña stock: "items" | "movs"
+    let stockMovs = [];            // historial de vales (cabeceras)
+    let stockMovDet = {};          // movId -> { items:[{...renglón, repartos:[...]}] }
+    let valeDraft = null;          // borrador del vale en carga
     // Estados de tarea de mantenimiento
     const MANT_ESTADOS = {
       pendiente: { label:"Pendiente", color:"#854F0B", bg:"#FAEEDA" },
@@ -293,6 +297,17 @@
         const { data, error } = await sb.from("stock_items").select("*").eq("sede","neuquen");
         if (error) return errLoad(error);
         stockItems = (data||[]).sort((a,b)=>{ const f=(a.familia||"").localeCompare(b.familia||"","es"); if(f!==0)return f; return (a.codigo||"").localeCompare(b.codigo||"","es",{numeric:true}); });
+        if (stockSub === "movs") {
+          // trailers (para reparto) + historial de vales con su detalle
+          { const { data:tr } = await sb.from("trailers").select("*").eq("sede","neuquen"); trailers = (tr||[]).sort((a,b)=> (a.codigo||"").localeCompare(b.codigo||"","es",{numeric:true})); }
+          { const { data:mv, error:e2 } = await sb.from("stock_mov").select("*").eq("sede","neuquen"); if(e2) return errLoad(e2); stockMovs = (mv||[]).sort((a,b)=> (b.fecha||"").localeCompare(a.fecha||"") || (b.creado_en||"").localeCompare(a.creado_en||"")); }
+          { const { data:mi } = await sb.from("stock_mov_item").select("*"); const { data:mt } = await sb.from("stock_mov_trailer").select("*");
+            stockMovDet = {};
+            (mi||[]).forEach(r=>{ if(!stockMovDet[r.mov_id]) stockMovDet[r.mov_id]={items:[]}; r.repartos=(mt||[]).filter(x=>x.mov_item_id===r.id); stockMovDet[r.mov_id].items.push(r); }); }
+          setEstado("\u2713 " + stockMovs.length + " vale(s) registrados.", "ok");
+          renderStockMovs();
+          return;
+        }
         const bajos = stockItems.filter(i=> Number(i.cantidad) <= Number(i.minimo)).length;
         setEstado("\u2713 " + stockItems.length + " ítem(s)" + (bajos?(" · "+bajos+" bajo mínimo"):"") + ".", bajos?"err":"ok");
         renderStock();
@@ -600,7 +615,8 @@
       const totalValor = stockItems.reduce((a,i)=> a + (Number(i.cantidad)||0)*(Number(i.costo)||0), 0);
       const nBajos = stockItems.filter(bajoMinimo).length;
 
-      let h = '<p style="font-size:13px;color:#888780;margin-top:0">Catálogo de materiales y consumibles. La <b>Familia</b> agrupa los ítems. Se marca en rojo lo que está en o por debajo del mínimo. Los movimientos (entradas/salidas) se cargan en la Etapa 4b.</p>';
+      let h = subnavStock("items");
+      h += '<p style="font-size:13px;color:#888780;margin-top:0">Catálogo de materiales y consumibles. La <b>Familia</b> agrupa los ítems. Se marca en rojo lo que está en o por debajo del mínimo. Las entradas y salidas se cargan en la pestaña <b>Movimientos</b>.</p>';
 
       // Barra de resumen + filtros
       h += '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px">';
@@ -639,6 +655,140 @@
       const it=stockItems.find(x=>x.id===id); if(it){ it[c]=val; if(c==="cantidad"||c==="minimo"||c==="familia") renderStock(); } setEstado("\u2713 Guardado.","ok");
     }
     async function eliminarStk(id){ if(!confirm("¿Eliminar este ítem del catálogo? (no se puede si tiene movimientos registrados)")) return; const{error}=await sb.from("stock_items").delete().eq("id",id); if(error)return setEstado("Error: "+error.message+(error.message.indexOf("foreign")>=0?" — tiene movimientos asociados.":""),"err"); cargar(); }
+
+    /* ---- STOCK — sub-navegación y MOVIMIENTOS (vales) ---- */
+    function subnavStock(activo){
+      const mk=(id,lbl)=> '<button class="tab'+(id===activo?' active':'')+'" onclick="irStockSub(\''+id+'\')" style="--c:#FAEEDA">'+lbl+'</button>';
+      return '<div class="tabs" style="margin-bottom:14px">'+mk("items","Catálogo")+mk("movs","Movimientos")+'</div>';
+    }
+    function irStockSub(s){ stockSub=s; valeDraft=null; cargar(); }
+    function nombreItem(id){ const i=stockItems.find(x=>x.id===id); return i? ((i.codigo?i.codigo+" · ":"")+(i.descripcion||"(sin desc.)")) : "—"; }
+    function itemPorId(id){ return stockItems.find(x=>x.id===id); }
+
+    function renderStockMovs(){
+      let h = subnavStock("movs");
+      // ----- Formulario de vale (si hay borrador abierto) -----
+      if (valeDraft){
+        h += renderValeForm();
+      } else {
+        h += '<div style="display:flex;gap:10px;margin-bottom:16px"><button class="btn btn-primary" style="background:#3B6D11" onclick="nuevoVale(\'entrada\')">+ Nueva entrada</button><button class="btn btn-primary" style="background:#993556" onclick="nuevoVale(\'salida\')">+ Nueva salida</button></div>';
+      }
+      // ----- Historial -----
+      h += '<h3 style="margin:14px 0 8px;font-size:14px">Historial de vales</h3>';
+      if(!stockMovs.length){ h += '<p style="color:#A8A69E;font-size:13px">Sin movimientos registrados.</p>'; contenido.innerHTML=h; return; }
+      stockMovs.forEach(m=>{
+        const det = stockMovDet[m.id] || {items:[]};
+        const esEnt = m.tipo==="entrada";
+        const col = esEnt? "#3B6D11":"#993556"; const bg = esEnt? "#E8F3DE":"#FBEAF0";
+        h += '<div class="card">'
+          + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="background:'+bg+';color:'+col+';padding:2px 9px;border-radius:6px;font-size:12px;font-weight:700">'+(esEnt?"ENTRADA":"SALIDA")+'</span>'
+          + '<span style="font-size:13px;font-weight:600">'+dmy(m.fecha)+'</span>'
+          + (m.responsable?'<span style="font-size:12px;color:#888780">· '+m.responsable+'</span>':'')
+          + (m.notas?'<span style="font-size:12px;color:#888780">· '+m.notas.replace(/</g,"&lt;")+'</span>':'')+'</div>';
+        h += '<table style="margin-top:8px"><thead><tr><th>Material</th><th style="text-align:right">Cantidad</th>'+(esEnt?'':'<th>Reparto por trailer</th>')+'</tr></thead><tbody>';
+        det.items.forEach(r=>{
+          const reparto = esEnt? '' : '<td style="font-size:12px">'+(r.repartos||[]).map(x=>nombreTrailer(x.trailer_id)+': '+fmtNum(x.cantidad)).join(' · ')+'</td>';
+          h += '<tr><td>'+nombreItem(r.item_id)+'</td><td style="text-align:right">'+fmtNum(r.cantidad)+'</td>'+reparto+'</tr>';
+        });
+        h += '</tbody></table></div>';
+      });
+      contenido.innerHTML = h;
+    }
+
+    function nuevoVale(tipo){ valeDraft = { tipo:tipo, fecha:fechaStr(new Date()), responsable:"", notas:"", lineas:[ nuevaLineaDraft() ] }; renderStockMovs(); }
+    function nuevaLineaDraft(){ return { item_id:"", cantidad:"", repartos:[] }; }
+    function renderValeForm(){
+      const esEnt = valeDraft.tipo==="entrada";
+      const col = esEnt? "#3B6D11":"#993556";
+      let h = '<div class="card" style="border-color:'+col+';border-width:2px">';
+      h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="background:'+(esEnt?'#E8F3DE':'#FBEAF0')+';color:'+col+';padding:3px 10px;border-radius:6px;font-weight:700;font-size:13px">Nuevo vale · '+(esEnt?"ENTRADA":"SALIDA")+'</span></div>';
+      h += '<div class="pl-row"><label style="font-size:11.5px;color:#888780">Fecha<br><input type="date" value="'+valeDraft.fecha+'" onchange="valeDraft.fecha=this.value" style="margin-top:3px"></label>'
+        + '<label style="font-size:11.5px;color:#888780;flex:1">Responsable<br><input value="'+valeDraft.responsable.replace(/"/g,'&quot;')+'" placeholder="quién retira/ingresa" onchange="valeDraft.responsable=this.value" style="margin-top:3px;width:100%"></label></div>';
+      h += '<div class="pl-row"><label style="font-size:11.5px;color:#888780;flex:1">Notas<br><input value="'+valeDraft.notas.replace(/"/g,'&quot;')+'" placeholder="opcional" onchange="valeDraft.notas=this.value" style="margin-top:3px;width:100%"></label></div>';
+
+      h += '<div style="font-size:12px;color:#888780;margin:10px 0 4px;font-weight:600">Materiales</div>';
+      valeDraft.lineas.forEach((ln,idx)=>{
+        const it = itemPorId(ln.item_id);
+        const disp = it? Number(it.cantidad) : null;
+        const optItems = '<option value="">(elegir material)</option>'+stockItems.map(i=>'<option value="'+i.id+'" '+(i.id===ln.item_id?'selected':'')+'>'+(i.codigo?i.codigo+" · ":"")+(i.descripcion||"(sin desc.)")+(i.unidad?" ("+i.unidad+")":"")+'</option>').join('');
+        h += '<div style="border:1px solid #EEEce4;border-radius:8px;padding:10px;margin-bottom:8px">';
+        h += '<div class="pl-row"><select onchange="setLinea('+idx+',\'item_id\',this.value)" style="flex:1;min-width:200px">'+optItems+'</select>'
+          + '<input type="number" step="any" min="0" value="'+ln.cantidad+'" placeholder="cant." onchange="setLinea('+idx+',\'cantidad\',this.value)" style="width:90px;text-align:right">'
+          + (it?'<span style="font-size:11px;color:'+(disp!=null?'#888780':'#A8A69E')+'">disp: '+fmtNum(disp)+(it.unidad?" "+it.unidad:"")+'</span>':'')
+          + '<button class="btn-del" onclick="quitarLinea('+idx+')" style="margin-left:auto">×</button></div>';
+        // Reparto por trailer (solo salidas)
+        if (!esEnt){
+          h += '<div style="margin-top:6px;padding-left:6px;border-left:2px solid #F1EFE8">';
+          h += '<div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Reparto por trailer (debe sumar '+fmtNum(ln.cantidad||0)+'):</div>';
+          (ln.repartos||[]).forEach((rp,ridx)=>{
+            const optTr = '<option value="">(trailer)</option>'+trailers.map(t=>'<option value="'+t.id+'" '+(t.id===rp.trailer_id?'selected':'')+'>'+(t.codigo||"(s/c)")+(t.alias?" · "+t.alias:"")+'</option>').join('');
+            h += '<div class="pl-row" style="margin-bottom:4px"><select onchange="setReparto('+idx+','+ridx+',\'trailer_id\',this.value)" style="min-width:180px">'+optTr+'</select>'
+              + '<input type="number" step="any" min="0" value="'+rp.cantidad+'" placeholder="cant." onchange="setReparto('+idx+','+ridx+',\'cantidad\',this.value)" style="width:90px;text-align:right">'
+              + '<button class="btn-del" onclick="quitarReparto('+idx+','+ridx+')">×</button></div>';
+          });
+          const sumRep = (ln.repartos||[]).reduce((a,r)=>a+(Number(r.cantidad)||0),0);
+          const cuadra = Math.abs(sumRep - (Number(ln.cantidad)||0)) < 1e-9;
+          h += '<div style="display:flex;align-items:center;gap:10px"><button class="btn-add" onclick="agregarReparto('+idx+')">+ trailer</button>'
+            + '<span style="font-size:11px;color:'+(cuadra?'#3B6D11':'#993556')+'">suma reparto: '+fmtNum(sumRep)+(cuadra?' ✓':' ✗ (debe ser '+fmtNum(ln.cantidad||0)+')')+'</span></div>';
+          h += '</div>';
+        }
+        h += '</div>';
+      });
+      h += '<button class="btn-add" onclick="agregarLinea()">+ Agregar material</button>';
+      h += '<div class="row-actions" style="margin-top:14px"><button class="btn btn-primary" style="background:'+col+'" onclick="guardarVale()">Guardar vale</button><button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#888780" onclick="cancelarVale()">Cancelar</button></div>';
+      h += '</div>';
+      return h;
+    }
+    // edición del borrador
+    function setLinea(idx,c,v){ valeDraft.lineas[idx][c]=v; renderStockMovs(); }
+    function agregarLinea(){ valeDraft.lineas.push(nuevaLineaDraft()); renderStockMovs(); }
+    function quitarLinea(idx){ valeDraft.lineas.splice(idx,1); if(!valeDraft.lineas.length) valeDraft.lineas.push(nuevaLineaDraft()); renderStockMovs(); }
+    function agregarReparto(idx){ valeDraft.lineas[idx].repartos.push({ trailer_id:"", cantidad:"" }); renderStockMovs(); }
+    function setReparto(idx,ridx,c,v){ valeDraft.lineas[idx].repartos[ridx][c]=v; renderStockMovs(); }
+    function quitarReparto(idx,ridx){ valeDraft.lineas[idx].repartos.splice(ridx,1); renderStockMovs(); }
+    function cancelarVale(){ valeDraft=null; renderStockMovs(); }
+
+    async function guardarVale(){
+      const v = valeDraft; const esEnt = v.tipo==="entrada";
+      // Validaciones
+      const lineas = v.lineas.filter(l=> l.item_id && Number(l.cantidad)>0);
+      if(!lineas.length) return setEstado("Agregá al menos un material con cantidad mayor a cero.","err");
+      for(const l of lineas){
+        const it = itemPorId(l.item_id); const cant = Number(l.cantidad);
+        if(!esEnt){
+          // bloqueo de stock negativo
+          if(cant > Number(it.cantidad)) return setEstado("No hay stock suficiente de \""+nombreItem(l.item_id)+"\": disponible "+fmtNum(it.cantidad)+", salida "+fmtNum(cant)+".","err");
+          // reparto obligatorio y debe cuadrar
+          const reps = (l.repartos||[]).filter(r=> r.trailer_id && Number(r.cantidad)>0);
+          if(!reps.length) return setEstado("Falta el reparto por trailer en \""+nombreItem(l.item_id)+"\".","err");
+          const sum = reps.reduce((a,r)=>a+Number(r.cantidad),0);
+          if(Math.abs(sum-cant) > 1e-9) return setEstado("El reparto de \""+nombreItem(l.item_id)+"\" suma "+fmtNum(sum)+" y debe ser "+fmtNum(cant)+".","err");
+        }
+      }
+      setEstado("Guardando vale…","cargando");
+      // 1) cabecera
+      const { data:mv, error:e1 } = await sb.from("stock_mov").insert({ sede:"neuquen", tipo:v.tipo, fecha:v.fecha, responsable:v.responsable||null, notas:v.notas||null }).select().single();
+      if(e1) return setEstado("Error: "+e1.message,"err");
+      // 2) renglones + 3) repartos + 4) ajuste de stock
+      for(const l of lineas){
+        const cant = Number(l.cantidad);
+        const { data:mi, error:e2 } = await sb.from("stock_mov_item").insert({ mov_id:mv.id, item_id:l.item_id, cantidad:cant }).select().single();
+        if(e2) return setEstado("Error en renglón: "+e2.message,"err");
+        if(!esEnt){
+          const reps = l.repartos.filter(r=> r.trailer_id && Number(r.cantidad)>0).map(r=>({ mov_item_id:mi.id, trailer_id:r.trailer_id, cantidad:Number(r.cantidad) }));
+          if(reps.length){ const { error:e3 } = await sb.from("stock_mov_trailer").insert(reps); if(e3) return setEstado("Error en reparto: "+e3.message,"err"); }
+        }
+        // ajustar cantidad del ítem
+        const it = itemPorId(l.item_id);
+        const nueva = Number(it.cantidad) + (esEnt? cant : -cant);
+        const { error:e4 } = await sb.from("stock_items").update({ cantidad:nueva }).eq("id",l.item_id);
+        if(e4) return setEstado("Error al ajustar stock: "+e4.message,"err");
+        it.cantidad = nueva;
+      }
+      valeDraft = null;
+      setEstado("\u2713 Vale registrado y stock actualizado.","ok");
+      cargar();
+    }
 
     /* ---- DISPONIBILIDAD ---- */
     function renderDispo() {
