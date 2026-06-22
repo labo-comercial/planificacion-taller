@@ -37,9 +37,9 @@
     .panel { background: #fff; border: 1px solid #E6E4DC; border-top: none; border-radius: 0 0 14px 14px; padding: 18px; }
     .estado { font-size: 12.5px; padding: 8px 12px; border-radius: 8px; margin-bottom: 14px; }
     .ok { background: #E1F5EE; color: #0F6E56; } .err { background: #FCEBEB; color: #A32D2D; } .cargando { background: #F1EFE8; color: #5F5E5A; }
-    table { width: 100%; border-collapse: collapse; border: 1px solid #E6E4DC; border-radius: 12px; overflow: hidden; font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; border: 1px solid #E6E4DC; border-radius: 12px; font-size: 13px; }
     thead tr { background: #F1EFE8; }
-    th { text-align: left; padding: 9px 12px; font-weight: 600; color: #5F5E5A; font-size: 12px; position: sticky; top: 0; background: #F1EFE8; z-index: 5; }
+    th { text-align: left; padding: 9px 12px; font-weight: 600; color: #5F5E5A; font-size: 12px; position: sticky; top: 0; background: #F1EFE8; z-index: 10; box-shadow: inset 0 -1px 0 #E6E4DC; }
     td { padding: 6px 10px; border-top: 1px solid #F1EFE8; }
     input, select { border: 1px solid #E6E4DC; border-radius: 6px; padding: 5px 7px; font-size: 12.5px; width: 100%; }
     .btn { border: none; border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
@@ -1082,7 +1082,7 @@
         gente.forEach(g => dias.forEach(fecha => {
           if (noDispoEn(g, fecha)) return; // no genera filas para días no disponibles
           const hrs = (planiHoras[b.id] && planiHoras[b.id][g]!=null) ? planiHoras[b.id][g] : 8;
-          filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, modulos_plan: b.modulos||null, modulos_real: b.modulos||null, horas_normales: hrs, horas_extra: 0, ausente: false });
+          filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, modulos_plan: b.modulos||null, modulos_real: b.modulos||null, horas_plan: hrs, horas_normales: hrs, horas_extra: 0, ausente: false });
         }));
       });
       // supervisión: una fila por supervisor por día, con la marca SUP_MARK y los proyectos como "tarea"
@@ -1094,7 +1094,7 @@
         const hrs = (s.horas != null ? s.horas : 8);
         dias.forEach(fecha => {
           if (noDispoEn(s.supervisor_id, fecha)) return;
-          filas.push({ fecha, persona_plan: s.supervisor_id, persona_real: s.supervisor_id, proyecto_id: ids[0], estacion_plan: SUP_MARK, subtarea_plan: nombres, estacion_real: SUP_MARK, subtarea_real: nombres, modulos_plan: null, modulos_real: null, horas_normales: hrs, horas_extra: 0, ausente: false });
+          filas.push({ fecha, persona_plan: s.supervisor_id, persona_real: s.supervisor_id, proyecto_id: ids[0], estacion_plan: SUP_MARK, subtarea_plan: nombres, estacion_real: SUP_MARK, subtarea_real: nombres, modulos_plan: null, modulos_real: null, horas_plan: hrs, horas_normales: hrs, horas_extra: 0, ausente: false });
         });
       });
       if (filas.length > 0) {
@@ -1105,6 +1105,69 @@
       tab = "detalle"; ["personal","proyectos","dispo","plani","detalle"].forEach(x => document.getElementById("tab-"+x).className = "tab" + (x==="detalle"?" active":""));
       cargar();
     }
+
+    /* ===== MOTOR DE IMPACTO (costo y tiempo, con signo) =====
+       Devuelve:
+       - porFila[id] = { costoDelta, costoTipo }  (costoDelta>0 sobrecosto, <0 ahorro)
+       - porEstacion[key] = { diasPlan, diasReal, diasDelta, finPlan, finReal, atrasoDias, costoDiasDelta }
+       - totales = { sobrecosto, ahorro, costoNeto, atraso, adelanto, tiempoNeto }
+       key de estación = estacion_plan + "|" + proyecto_id  */
+    function calcularImpacto(){
+      const porFila = {};
+      const porEstacion = {};
+      // --- Costo por fila: (horas reales - horas plan) * costo/hora; extra cuenta x2 ---
+      detalle.forEach(f=>{
+        const ch = costoHora(f.persona_real);
+        const hPlan = (f.horas_plan!=null ? Number(f.horas_plan) : Number(f.horas_normales)||0);
+        const hReal = f.ausente ? 0 : (Number(f.horas_normales)||0);
+        const hExtra = f.ausente ? 0 : (Number(f.horas_extra)||0);
+        // costo real incluye extra a x2; costo plan es horas planificadas normales
+        const costoReal = hReal*ch + hExtra*ch*2;
+        const costoPlan = hPlan*ch;
+        const delta = costoReal - costoPlan;  // >0 sobrecosto, <0 ahorro
+        let tipo = "neutro";
+        if (Math.abs(delta) > 0.5) tipo = delta>0 ? "sobrecosto" : "ahorro";
+        porFila[f.id] = { costoDelta: delta, costoTipo: tipo, ch };
+      });
+      // --- Tiempo y días por estación/proyecto ---
+      // Plan: de la tabla plani (bloques). Real: fechas efectivas del detalle.
+      plani.forEach(b=>{
+        const key = b.estacion + "|" + b.proyecto_id;
+        const diasPlan = diasHabiles(b.fecha_desde, b.fecha_hasta);
+        if (!porEstacion[key]) porEstacion[key] = { diasPlanSet:new Set(), diasRealSet:new Set(), finPlan:null, finReal:null, costoDiasDelta:0 };
+        diasPlan.forEach(d=> porEstacion[key].diasPlanSet.add(d));
+        if (diasPlan.length){ const fin = diasPlan[diasPlan.length-1]; if(!porEstacion[key].finPlan || fin>porEstacion[key].finPlan) porEstacion[key].finPlan = fin; }
+      });
+      // Real: fechas trabajadas en el detalle por estación_real+proyecto
+      detalle.forEach(f=>{
+        if (f.ausente) return;
+        const key = f.estacion_real + "|" + f.proyecto_id;
+        if (!porEstacion[key]) porEstacion[key] = { diasPlanSet:new Set(), diasRealSet:new Set(), finPlan:null, finReal:null, costoDiasDelta:0 };
+        porEstacion[key].diasRealSet.add(f.fecha);
+        if (!porEstacion[key].finReal || f.fecha>porEstacion[key].finReal) porEstacion[key].finReal = f.fecha;
+      });
+      // Consolidar métricas por estación
+      Object.values(porEstacion).forEach(e=>{
+        e.diasPlan = e.diasPlanSet.size;
+        e.diasReal = e.diasRealSet.size;
+        e.diasDelta = e.diasReal - e.diasPlan;       // >0 más días, <0 menos
+        // atraso/adelanto en días hábiles entre finPlan y finReal
+        if (e.finPlan && e.finReal){
+          const signo = e.finReal > e.finPlan ? 1 : (e.finReal < e.finPlan ? -1 : 0);
+          const a = e.finReal>e.finPlan ? e.finPlan : e.finReal;
+          const b = e.finReal>e.finPlan ? e.finReal : e.finPlan;
+          const span = Math.max(0, diasHabiles(a,b).length - 1);
+          e.atrasoDias = signo * span;               // >0 atraso, <0 adelanto
+        } else e.atrasoDias = 0;
+      });
+      // Totales
+      let sobrecosto=0, ahorro=0, atraso=0, adelanto=0;
+      Object.values(porFila).forEach(f=>{ if(f.costoDelta>0) sobrecosto+=f.costoDelta; else if(f.costoDelta<0) ahorro+=(-f.costoDelta); });
+      Object.values(porEstacion).forEach(e=>{ if(e.atrasoDias>0) atraso+=e.atrasoDias; else if(e.atrasoDias<0) adelanto+=(-e.atrasoDias); });
+      const totales = { sobrecosto, ahorro, costoNeto: sobrecosto-ahorro, atraso, adelanto, tiempoNeto: atraso-adelanto };
+      return { porFila, porEstacion, totales };
+    }
+    function fmtPlata(n){ const s=n<0?"-":""; return s+"$"+Math.abs(Math.round(n)).toLocaleString("es-AR"); }
 
     function renderDetalle() {
       if (detalle.length === 0) { contenido.innerHTML = '<p style="font-size:13px;color:#888780">Todavía no hay detalle. Andá a Planificación General, completá la asignación y tocá "Generar detalle diario".</p>'; return; }
@@ -1136,7 +1199,20 @@
       h += '</div>';
       const conf = Object.entries(horasDia).filter(([,v])=>v>8);
       if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación:</b> '+conf.map(([k,v])=>{const [pid,f]=k.split("|");return nombrePersona(pid)+" ("+dm(f)+"): "+v+"h";}).join(" · ")+'</div>';
-      h += '<div style="overflow:auto;max-height:70vh"><table style="min-width:1240px"><thead><tr><th>Fecha</th><th>Proyecto</th><th>Persona</th><th>Estación</th><th>Tarea</th><th>Módulos</th><th style="text-align:center">Aus.</th><th style="text-align:center">Hs</th><th style="text-align:center">Ext.</th><th>Motivo desvío</th></tr></thead><tbody>';
+
+      // ---- Resumen de impacto (costo y tiempo, con signo) ----
+      const imp = calcularImpacto();
+      const T = imp.totales;
+      const tarjeta = (titulo, valor, signo, sub) => {
+        const col = signo>0 ? '#A32D2D' : signo<0 ? '#3B6D11' : '#888780';
+        const bg  = signo>0 ? '#FCEBEB' : signo<0 ? '#E8F3DE' : '#F1EFE8';
+        return '<div style="background:'+bg+';border-radius:10px;padding:10px 14px;min-width:150px"><div style="font-size:11px;color:#888780;margin-bottom:2px">'+titulo+'</div><div style="font-size:18px;font-weight:700;color:'+col+'">'+valor+'</div><div style="font-size:10.5px;color:#888780">'+sub+'</div></div>';
+      };
+      h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">';
+      h += tarjeta("Costo · saldo neto", fmtPlata(T.costoNeto), T.costoNeto>0?1:T.costoNeto<0?-1:0, "sobrecosto "+fmtPlata(T.sobrecosto)+" · ahorro "+fmtPlata(-T.ahorro));
+      h += tarjeta("Tiempo · saldo neto", (T.tiempoNeto>0?"+":"")+T.tiempoNeto+" días", T.tiempoNeto>0?1:T.tiempoNeto<0?-1:0, "atraso +"+T.atraso+" · adelanto -"+T.adelanto);
+      h += '</div>';
+      h += '<div style="overflow:auto;max-height:70vh"><table style="min-width:1380px"><thead><tr><th>Fecha</th><th>Proyecto</th><th>Persona</th><th>Estación</th><th>Tarea</th><th>Módulos</th><th style="text-align:center">Aus.</th><th style="text-align:center">Hs</th><th style="text-align:center">Ext.</th><th style="text-align:right">Impacto costo</th><th>Motivo desvío</th></tr></thead><tbody>';
       filasVisibles.forEach(f => {
         const pasado = f.fecha < hoy;
         const norm = (x) => (x==null ? "" : String(x));
@@ -1153,10 +1229,29 @@
           + '<td style="text-align:center"><input type="checkbox" '+dis+' '+(f.ausente?'checked':'')+' onchange="toggleAusente(\''+f.id+'\',this.checked)"></td>'
           + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_normales||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_normales\',Number(this.value))" style="width:42px;text-align:center;'+(exceso(f)?'border-color:#A32D2D;background:#FCEBEB;color:#A32D2D':'')+'" '+(f.ausente?'disabled':'')+'></td>'
           + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_extra||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_extra\',Number(this.value))" style="width:42px;text-align:center;'+(f.horas_extra>0?'color:#BA7517':'')+'" '+(f.ausente?'disabled':'')+'></td>'
+          + (function(){ const fi=imp.porFila[f.id]; if(!fi||fi.costoTipo==="neutro") return '<td style="text-align:right"><span style="color:#D3D1C7;font-size:11px">—</span></td>'; const col=fi.costoDelta>0?'#A32D2D':'#3B6D11'; const et=fi.costoDelta>0?'sobrecosto':'ahorro'; return '<td style="text-align:right"><span style="color:'+col+';font-size:11.5px;font-weight:600" title="'+et+'">'+fmtPlata(fi.costoDelta)+'</span></td>'; })()
           + '<td>'+(reasig?'<select '+dis+' onchange="editarDet(\''+f.id+'\',\'motivo_desvio\',this.value)" style="min-width:160px;border-color:'+(f.motivo_desvio?'#BA7517':'#A32D2D')+';'+(f.motivo_desvio?'':'background:#FCEBEB')+'">'+opcMotivo(f.motivo_desvio)+'</select>':'<span style="color:#D3D1C7;font-size:11px">—</span>')+'</td>'
           + '</tr>';
       });
       h += '</tbody></table></div><div class="row-actions"><button class="btn btn-primary" onclick="cargar()">↻ Recargar</button></div>';
+
+      // ---- Impacto en tiempo por estación (atraso / adelanto) ----
+      const estCon = Object.entries(imp.porEstacion).filter(([k,e])=> e.atrasoDias!==0 || e.diasDelta!==0);
+      if (estCon.length){
+        h += '<h3 style="font-size:14px;margin:18px 0 8px">Impacto en tiempo por estación</h3>';
+        h += '<p style="font-size:12px;color:#A8A69E;margin:0 0 8px">Compara las fechas reales (del detalle) contra las planificadas. Atraso = terminó después; adelanto = terminó antes.</p>';
+        h += '<table style="max-width:880px"><thead><tr><th>Estación</th><th>Proyecto</th><th style="text-align:center">Días plan</th><th style="text-align:center">Días real</th><th style="text-align:right">Tiempo</th></tr></thead><tbody>';
+        estCon.forEach(([k,e])=>{
+          const [est,proyId] = k.split("|");
+          const nEst = est===SUP_MARK ? SUP_LABEL : (STATIONS[est]?STATIONS[est].label:est);
+          let tiempoTxt, col;
+          if (e.atrasoDias>0){ tiempoTxt = "+"+e.atrasoDias+" días atraso"; col="#A32D2D"; }
+          else if (e.atrasoDias<0){ tiempoTxt = e.atrasoDias+" días adelanto"; col="#3B6D11"; }
+          else { tiempoTxt = "en fecha"; col="#888780"; }
+          h += '<tr><td>'+nEst+'</td><td style="font-size:12px;color:#888780">'+nombreProy(proyId)+'</td><td style="text-align:center">'+e.diasPlan+'</td><td style="text-align:center">'+e.diasReal+'</td><td style="text-align:right;color:'+col+';font-weight:600;font-size:12px">'+tiempoTxt+'</td></tr>';
+        });
+        h += '</tbody></table>';
+      }
       h += '<p style="font-size:12px;color:#A8A69E;margin-top:10px">🔒 = día anterior a hoy (historia, no editable). Las filas con fondo crema tienen desvío (estación o persona distinta a lo planificado) y piden un motivo. Para sumar o cambiar tareas futuras, hacelo en Planificación General y regenerá el detalle.</p>';
       contenido.innerHTML = h;
     }
