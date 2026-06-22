@@ -27,7 +27,7 @@
   <style>
     * { box-sizing: border-box; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; background: #F7F6F2; color: #2C2C2A; margin: 0; padding: 24px; }
-    .wrap { max-width: 980px; margin: 0 auto; }
+    .wrap { max-width: 1400px; margin: 0 auto; }
     h1 { font-size: 22px; font-weight: 600; margin: 0 0 2px; }
     .sub { font-size: 13px; color: #888780; margin: 0 0 16px; }
     .tabs { display: flex; gap: 4px; border-bottom: 1px solid #E6E4DC; overflow-x: auto; }
@@ -39,7 +39,7 @@
     .ok { background: #E1F5EE; color: #0F6E56; } .err { background: #FCEBEB; color: #A32D2D; } .cargando { background: #F1EFE8; color: #5F5E5A; }
     table { width: 100%; border-collapse: collapse; border: 1px solid #E6E4DC; border-radius: 12px; overflow: hidden; font-size: 13px; }
     thead tr { background: #F1EFE8; }
-    th { text-align: left; padding: 9px 12px; font-weight: 600; color: #5F5E5A; font-size: 12px; }
+    th { text-align: left; padding: 9px 12px; font-weight: 600; color: #5F5E5A; font-size: 12px; position: sticky; top: 0; background: #F1EFE8; z-index: 5; }
     td { padding: 6px 10px; border-top: 1px solid #F1EFE8; }
     input, select { border: 1px solid #E6E4DC; border-radius: 6px; padding: 5px 7px; font-size: 12.5px; width: 100%; }
     .btn { border: none; border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
@@ -205,6 +205,8 @@
       cargar();
     }
     let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, planiHoras = {}, detalle = [], feriados = [], supervisiones = [];
+    let detalleDesde = null;   // filtro de visualización en Detalle diario (null = aún sin fijar)
+    let detalleVerTodo = false;
     let trailers = [];
     let mantTareas = [], mantPers = {}, mantTipicas = [];
     let mantParte = {};            // clave "tareaId|fecha" -> avance (texto)
@@ -947,7 +949,8 @@
               const algoNoDispo=diasNoDispo.length>0;
               if(algoNoDispo && !on){ const tipo=tipoNoDispoEn(p.id,diasNoDispo[0])||"No disp."; return '<button class="chip" disabled title="No disponible ('+tipo+') en '+diasNoDispo.length+' día(s) del rango" style="text-decoration:line-through;opacity:0.45;cursor:not-allowed">'+p.nombre+'</button>'; }
               const horas = (planiHoras[b.id] && planiHoras[b.id][p.id]!=null) ? planiHoras[b.id][p.id] : 8;
-              const chipBtn = '<button class="chip'+(on?' on':'')+'" onclick="toggleGente(\''+b.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+(algoNoDispo?' \u26a0':'')+'</button>';
+              const esContrP = p.tipo==="Contratista";
+              const chipBtn = '<button class="chip'+(on?' on':'')+'" onclick="toggleGente(\''+b.id+'\',\''+p.id+'\','+(on?'true':'false')+')" '+(esContrP?'title="Contratista (no cuenta para cobertura)"':'')+'>'+p.nombre+(esContrP?' ◇':'')+(algoNoDispo?' \u26a0':'')+'</button>';
               if(!on) return chipBtn;
               return '<span style="display:inline-flex;align-items:center;gap:3px">'+chipBtn+'<input type="number" value="'+horas+'" min="0" max="8" onchange="editarHoras(\''+b.id+'\',\''+p.id+'\',Number(this.value))" title="Horas en esta estación" style="width:42px;padding:2px 4px;font-size:11px;text-align:center">h</span>';
             }).join('')+'</div>'
@@ -1118,12 +1121,26 @@
       const opcMotivo = (sel) => '<option value="">— motivo —</option>'+MOTIVOS_DESVIO.map(m => '<option '+(m===sel?'selected':'')+'>'+m+'</option>').join('');
 
       let h = '<p style="font-size:13px;color:#888780;margin-top:0">Registro real día por día. Editá lo que pasó: reasignar proyecto/persona/estación/tarea, marcar ausente, cargar horas extra. Cuando hay desvío respecto a lo planificado, justificá el motivo. Los días anteriores a hoy son historia.</p>';
+
+      // ---- Filtro de visualización: por defecto desde AYER (oculta lo más viejo) ----
+      const ayer = fechaStr(new Date(Date.now() - 86400000));
+      if (detalleDesde === null) detalleDesde = ayer;
+      const filasVisibles = detalleVerTodo ? detalle : detalle.filter(f => f.fecha >= detalleDesde);
+      const ocultas = detalle.length - filasVisibles.length;
+      h += '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;background:#FAFAF8;border:1px solid #EEECE4;border-radius:10px;padding:8px 12px">';
+      h += '<span style="font-size:12px;color:#888780">Ver desde:</span>';
+      h += '<input type="date" value="'+detalleDesde+'" '+(detalleVerTodo?'disabled':'')+' onchange="detalleDesde=this.value;detalleVerTodo=false;renderDetalle()" style="width:auto">';
+      h += '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:5px 10px;font-size:12px" onclick="detalleDesde=\''+ayer+'\';detalleVerTodo=false;renderDetalle()">Ayer + hoy en adelante</button>';
+      h += '<label style="font-size:12px;color:#888780;display:flex;align-items:center;gap:5px;margin-left:auto"><input type="checkbox" '+(detalleVerTodo?'checked':'')+' onchange="detalleVerTodo=this.checked;renderDetalle()" style="width:auto">Ver todo el historial</label>';
+      if (ocultas > 0 && !detalleVerTodo) h += '<span style="font-size:11.5px;color:#A8A69E;width:100%">'+ocultas+' registro(s) más antiguos ocultos. Cambiá la fecha o tildá "Ver todo" para consultarlos.</span>';
+      h += '</div>';
       const conf = Object.entries(horasDia).filter(([,v])=>v>8);
       if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación:</b> '+conf.map(([k,v])=>{const [pid,f]=k.split("|");return nombrePersona(pid)+" ("+dm(f)+"): "+v+"h";}).join(" · ")+'</div>';
-      h += '<div style="overflow-x:auto"><table style="min-width:1240px"><thead><tr><th>Fecha</th><th>Proyecto</th><th>Persona</th><th>Estación</th><th>Tarea</th><th>Módulos</th><th style="text-align:center">Aus.</th><th style="text-align:center">Hs</th><th style="text-align:center">Ext.</th><th>Motivo desvío</th></tr></thead><tbody>';
-      detalle.forEach(f => {
+      h += '<div style="overflow:auto;max-height:70vh"><table style="min-width:1240px"><thead><tr><th>Fecha</th><th>Proyecto</th><th>Persona</th><th>Estación</th><th>Tarea</th><th>Módulos</th><th style="text-align:center">Aus.</th><th style="text-align:center">Hs</th><th style="text-align:center">Ext.</th><th>Motivo desvío</th></tr></thead><tbody>';
+      filasVisibles.forEach(f => {
         const pasado = f.fecha < hoy;
-        const reasig = f.estacion_real !== f.estacion_plan || f.persona_real !== f.persona_plan;
+        const norm = (x) => (x==null ? "" : String(x));
+        const reasig = (norm(f.estacion_real) !== norm(f.estacion_plan)) || (norm(f.persona_real) !== norm(f.persona_plan)) || !!f.ausente;
         const bg = f.ausente ? 'background:#FCEBEB' : reasig ? 'background:#FBFAF5' : '';
         const dis = pasado ? 'disabled' : '';
         h += '<tr style="'+bg+'">'
@@ -1242,12 +1259,12 @@
       const todas=[]; plani.forEach(b=>{ diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>todas.push(d)); if(b.fecha_real_desde&&b.fecha_real_hasta)diasHabiles(b.fecha_real_desde,b.fecha_real_hasta).forEach(d=>todas.push(d)); });
       const fechas=[...new Set(todas)].sort();
       if(!fechas.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">Las estaciones no tienen fechas cargadas.</p>'; return; }
-      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Barra clara: planificado. Barra sólida: real (de las fechas reales del detalle).</p>'+botonesExport("gantt-print","gantt")+'</div><div id="gantt-print"><div style="overflow-x:auto"><table style="min-width:'+(200+fechas.length*42)+'px;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Estación</th>';
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0"><span style="display:inline-block;width:14px;height:9px;background:#AEB6C2;border:1px solid #8C95A3;border-radius:2px;vertical-align:middle"></span> planificado &nbsp; <span style="display:inline-block;width:14px;height:9px;background:#185FA5;border-radius:2px;vertical-align:middle"></span> real (fechas reales del detalle).</p>'+botonesExport("gantt-print","gantt")+'</div><div id="gantt-print"><div style="overflow-x:auto"><table style="min-width:'+(200+fechas.length*42)+'px;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8;z-index:6">Estación</th>';
       fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:40px">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
       plani.forEach(b=>{ const st=STATIONS[b.estacion]; if(!st)return; const dP=diasHabiles(b.fecha_desde,b.fecha_hasta); const dR=(b.fecha_real_desde&&b.fecha_real_hasta)?diasHabiles(b.fecha_real_desde,b.fecha_real_hasta):[];
         h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+st.label+'<div style="font-size:9.5px;color:#A8A69E">'+(b.subtarea||'')+'</div></td>';
-        fechas.forEach(d=>{ const oP=dP.includes(d), oR=dR.includes(d); h+='<td style="padding:3px 2px;vertical-align:middle">'+(oP?'<div style="background:#C9C6BC;height:8px;border-radius:2px;margin-bottom:2px"></div>':'')+(oR?'<div style="background:'+st.color+';height:8px;border-radius:2px"></div>':'')+'</td>'; });
+        fechas.forEach(d=>{ const oP=dP.includes(d), oR=dR.includes(d); h+='<td style="padding:3px 2px;vertical-align:middle">'+(oP?'<div style="background:#AEB6C2;border:1px solid #8C95A3;height:9px;border-radius:2px;margin-bottom:2px" title="Planificado"></div>':'')+(oR?'<div style="background:'+st.color+';height:9px;border-radius:2px" title="Real"></div>':'')+'</td>'; });
         h+='</tr>';
       });
       h+='</tbody></table></div></div>';
@@ -1282,7 +1299,7 @@
       if(partePersona) rows=rows.filter(f=>f.persona_real===partePersona);
       const proyNom = parteProy ? nombreProy(parteProy) : "Todos los proyectos";
       const modTxt = (f)=>{ const m=(f.modulos_real||"").trim(); return m?" ["+m+"]":""; };
-      const texto = "*Parte diario "+(fSel?dmy(fSel):"")+"*\n"+proyNom+"\n\n"+rows.map(f=>"• "+nombrePersona(f.persona_real)+" → "+nombreEstacion(f.estacion_real)+modTxt(f)+": "+f.subtarea_real+(f.horas_extra>0?" (+"+f.horas_extra+"h extra)":"")).join("\n");
+      const texto = "*Parte diario "+(fSel?dmy(fSel):"")+"*\n"+proyNom+"\n\n"+rows.map(f=>{const pp=personas.find(x=>x.id===f.persona_real);const ec=pp&&pp.tipo==="Contratista";return "• "+nombrePersona(f.persona_real)+(ec?" (contratista)":"")+" → "+nombreEstacion(f.estacion_real)+modTxt(f)+": "+f.subtarea_real+(f.horas_extra>0?" (+"+f.horas_extra+"h extra)":"");}).join("\n");
       let h='<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">';
       h+='<label style="font-size:11.5px;color:#888780">Fecha<br><select onchange="setParte(\'fecha\',this.value)" style="margin-top:3px">'+(fechas.length?fechas.map(d=>'<option value="'+d+'" '+(d===fSel?'selected':'')+'>'+dmy(d)+'</option>').join(''):'<option>—</option>')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Proyecto<br><select onchange="setParte(\'proy\',this.value)" style="margin-top:3px"><option value="">Todos</option>'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===parteProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
@@ -1293,7 +1310,7 @@
       h+='</div>';
       h+='<div id="parteBox" style="border:1px solid #E6E4DC;border-radius:12px;padding:18px 20px;max-width:480px"><div style="font-size:16px;font-weight:600">Parte diario '+(fSel?dmy(fSel):"")+'</div><div style="font-size:12.5px;color:#888780;margin-bottom:6px">'+proyNom+(parteEst?' · '+STATIONS[parteEst].label:'')+(partePersona?' · '+nombrePersona(partePersona):'')+'</div><div style="border-top:1px solid #F1EFE8;margin-top:6px;padding-top:6px">';
       if(!rows.length) h+='<div style="font-size:13px;color:#A8A69E;padding:8px 0">'+(detalle.length?'Sin asignaciones para este filtro.':'Generá el detalle diario primero.')+'</div>';
-      rows.forEach(f=>{ const mm=(f.modulos_real||"").trim(); h+='<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #F1EFE8;font-size:13px"><span style="font-weight:600;min-width:140px">'+nombrePersona(f.persona_real)+'</span><span><span style="background:'+estBg(f.estacion_real)+';color:'+estColor(f.estacion_real)+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(f.estacion_real)+'</span>'+(mm?' <span style="background:#E6F1FB;color:#185FA5;padding:2px 6px;border-radius:6px;font-size:10.5px">'+mm+'</span>':'')+' <span style="color:#888780">'+f.subtarea_real+'</span>'+(f.horas_extra>0?' <span style="color:#BA7517;font-size:11px">+'+f.horas_extra+'h</span>':'')+'</span></div>'; });
+      rows.forEach(f=>{ const mm=(f.modulos_real||"").trim(); const pp=personas.find(x=>x.id===f.persona_real); const esContr=pp&&pp.tipo==="Contratista"; h+='<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #F1EFE8;font-size:13px"><span style="font-weight:600;min-width:140px">'+nombrePersona(f.persona_real)+(esContr?' <span style="background:#EFE7FB;color:#6B3FA0;padding:1px 5px;border-radius:5px;font-size:9.5px;font-weight:500">contratista</span>':'')+'</span><span><span style="background:'+estBg(f.estacion_real)+';color:'+estColor(f.estacion_real)+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(f.estacion_real)+'</span>'+(mm?' <span style="background:#E6F1FB;color:#185FA5;padding:2px 6px;border-radius:6px;font-size:10.5px">'+mm+'</span>':'')+' <span style="color:#888780">'+f.subtarea_real+'</span>'+(f.horas_extra>0?' <span style="color:#BA7517;font-size:11px">+'+f.horas_extra+'h</span>':'')+'</span></div>'; });
       h+='</div></div>';
       h+='<textarea id="parteTexto" style="position:absolute;left:-9999px">'+texto+'</textarea>';
       contenido.innerHTML=h;
