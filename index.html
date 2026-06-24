@@ -207,6 +207,8 @@
     let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, planiHoras = {}, detalle = [], feriados = [], supervisiones = [];
     let detalleDesde = null;   // filtro de visualización en Detalle diario (null = aún sin fijar)
     let detalleVerTodo = false;
+    let planiDesde = null;     // filtro de visualización en Planificación General (null = aún sin fijar)
+    let planiVerTodo = false;
     let impactoProy = "";      // filtro de proyecto del panel de impacto ("" = todos)
     function setImpactoProy(pid){ impactoProy = (impactoProy===pid ? "" : pid); renderDetalle(); }
     let trailers = [];
@@ -934,7 +936,26 @@
       } else if (plani.length > 0 && val.ok) {
         h += '<div class="estado ok" style="margin-bottom:12px">✓ Cobertura completa. Todo el personal directo disponible está asignado cada día.</div>';
       }
-      plani.forEach(b => {
+      // ---- Filtro de visualización: por defecto desde AYER (oculta lo más viejo), igual que Detalle ----
+      const ayerPl = fechaStr(new Date(Date.now() - 86400000));
+      if (planiDesde === null) planiDesde = ayerPl;
+      // una estación se oculta solo si TIENE fecha_hasta y terminó antes del filtro.
+      // sin fechas = configuración pendiente → siempre visible.
+      const planiVisibles = planiVerTodo ? plani : plani.filter(b => !b.fecha_hasta || b.fecha_hasta >= planiDesde);
+      const planiOcultas = plani.length - planiVisibles.length;
+      h += '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;background:#FAFAF8;border:1px solid #EEECE4;border-radius:10px;padding:8px 12px">';
+      h += '<span style="font-size:12px;color:#888780">Ver desde:</span>';
+      h += '<input type="date" value="'+planiDesde+'" '+(planiVerTodo?'disabled':'')+' onchange="planiDesde=this.value;planiVerTodo=false;renderPlani()" style="width:auto">';
+      h += '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:5px 10px;font-size:12px" onclick="planiDesde=\''+ayerPl+'\';planiVerTodo=false;renderPlani()">Ayer + en adelante</button>';
+      h += '<label style="font-size:12px;color:#888780;display:flex;align-items:center;gap:5px;margin-left:auto"><input type="checkbox" '+(planiVerTodo?'checked':'')+' onchange="planiVerTodo=this.checked;renderPlani()" style="width:auto">Ver todo</label>';
+      if (planiOcultas > 0 && !planiVerTodo) h += '<span style="font-size:11.5px;color:#A8A69E;width:100%">'+planiOcultas+' estación(es) ya terminada(s) ocultas. Cambiá la fecha o tildá "Ver todo" para consultarlas.</span>';
+      h += '</div>';
+
+      // ---- Supervisores primero (es lo primero que se establece) ----
+      h += renderPanelSupervision();
+
+      // ---- Estaciones (filtradas por fecha) ----
+      planiVisibles.forEach(b => {
         const st = STATIONS[b.estacion]; if (!st) return;
         const gente = planiPers[b.id] || [];
         const subsSel = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
@@ -958,7 +979,6 @@
             }).join('')+'</div>'
           + '</div>';
       });
-      h += renderPanelSupervision();
       h += '<div class="row-actions"><select id="selAgregar" style="width:auto;color:#185FA5"><option value="">+ Agregar estación…</option>'+STKEYS.map(k=>'<option value="'+k+'">'+STATIONS[k].label+'</option>').join('')+'</select>';
       h += '<button class="btn btn-add" onclick="agregarEstacionDefault()">Cargar las 20 estaciones</button>';
       h += '<button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button>';
