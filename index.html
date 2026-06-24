@@ -207,6 +207,8 @@
     let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, planiHoras = {}, detalle = [], feriados = [], supervisiones = [];
     let detalleDesde = null;   // filtro de visualización en Detalle diario (null = aún sin fijar)
     let detalleVerTodo = false;
+    let impactoProy = "";      // filtro de proyecto del panel de impacto ("" = todos)
+    function setImpactoProy(pid){ impactoProy = (impactoProy===pid ? "" : pid); renderDetalle(); }
     let trailers = [];
     let mantTareas = [], mantPers = {}, mantTipicas = [];
     let mantParte = {};            // clave "tareaId|fecha" -> avance (texto)
@@ -1116,6 +1118,7 @@
     function calcularImpacto(){
       const porFila = {};
       const porEstacion = {};
+      const ensureEst = (key)=>{ if(!porEstacion[key]) porEstacion[key] = { diasPlanSet:new Set(), diasRealSet:new Set(), finPlan:null, finReal:null, costoDiasDelta:0, costoReal:0, costoPlan:0, tieneExtra:false }; return porEstacion[key]; };
       // --- Costo por fila: (horas reales - horas plan) * costo/hora; extra cuenta x2 ---
       detalle.forEach(f=>{
         const ch = costoHora(f.persona_real);
@@ -1129,29 +1132,35 @@
         let tipo = "neutro";
         if (Math.abs(delta) > 0.5) tipo = delta>0 ? "sobrecosto" : "ahorro";
         porFila[f.id] = { costoDelta: delta, costoTipo: tipo, ch };
+        // acumular costo en la estación real del proyecto
+        const ke = f.estacion_real + "|" + f.proyecto_id;
+        const e = ensureEst(ke);
+        e.costoReal += costoReal; e.costoPlan += costoPlan;
+        if(f.es_extra) e.tieneExtra = true;
       });
       // --- Tiempo y días por estación/proyecto ---
       // Plan: de la tabla plani (bloques). Real: fechas efectivas del detalle.
       plani.forEach(b=>{
         const key = b.estacion + "|" + b.proyecto_id;
         const diasPlan = diasHabiles(b.fecha_desde, b.fecha_hasta);
-        if (!porEstacion[key]) porEstacion[key] = { diasPlanSet:new Set(), diasRealSet:new Set(), finPlan:null, finReal:null, costoDiasDelta:0 };
-        diasPlan.forEach(d=> porEstacion[key].diasPlanSet.add(d));
-        if (diasPlan.length){ const fin = diasPlan[diasPlan.length-1]; if(!porEstacion[key].finPlan || fin>porEstacion[key].finPlan) porEstacion[key].finPlan = fin; }
+        const pe = ensureEst(key);
+        diasPlan.forEach(d=> pe.diasPlanSet.add(d));
+        if (diasPlan.length){ const fin = diasPlan[diasPlan.length-1]; if(!pe.finPlan || fin>pe.finPlan) pe.finPlan = fin; }
       });
       // Real: fechas trabajadas en el detalle por estación_real+proyecto
       detalle.forEach(f=>{
         if (f.ausente) return;
         const key = f.estacion_real + "|" + f.proyecto_id;
-        if (!porEstacion[key]) porEstacion[key] = { diasPlanSet:new Set(), diasRealSet:new Set(), finPlan:null, finReal:null, costoDiasDelta:0 };
-        porEstacion[key].diasRealSet.add(f.fecha);
-        if (!porEstacion[key].finReal || f.fecha>porEstacion[key].finReal) porEstacion[key].finReal = f.fecha;
+        const pe = ensureEst(key);
+        pe.diasRealSet.add(f.fecha);
+        if (!pe.finReal || f.fecha>pe.finReal) pe.finReal = f.fecha;
       });
       // Consolidar métricas por estación
       Object.values(porEstacion).forEach(e=>{
         e.diasPlan = e.diasPlanSet.size;
         e.diasReal = e.diasRealSet.size;
         e.diasDelta = e.diasReal - e.diasPlan;       // >0 más días, <0 menos
+        e.costoDelta = e.costoReal - e.costoPlan;    // >0 sobrecosto, <0 ahorro (real vs plan)
         // atraso/adelanto en días hábiles entre finPlan y finReal
         if (e.finPlan && e.finReal){
           const signo = e.finReal > e.finPlan ? 1 : (e.finReal < e.finPlan ? -1 : 0);
@@ -1162,19 +1171,25 @@
         } else e.atrasoDias = 0;
       });
       // --- Agregación POR PROYECTO ---
-      // Costo del proyecto: suma de costoDelta de las filas de ese proyecto.
-      // Tiempo del proyecto: derivado de finPlan vs finReal del PROYECTO COMPLETO
-      // (último día planificado vs último día trabajado de cualquier estación del proyecto).
+      // COSTO (dos cifras):
+      //   - costoNetoPlan = sobrecosto - ahorro  (real vs plan, fila por fila)
+      //   - costoReal vs presupuesto_mo          (real vs presupuesto)
+      // TIEMPO (dos cifras):
+      //   - atrasoProy = fin plan vs fin real del PROYECTO COMPLETO
+      //   - atrasoEst  = suma de atrasos/adelantos de las estaciones del proyecto
       const porProyecto = {};
-      const ensureProy = (pid)=>{ if(!porProyecto[pid]) porProyecto[pid] = { sobrecosto:0, ahorro:0, costoNeto:0, finPlan:null, finReal:null, atrasoDias:0, tieneExtra:false }; return porProyecto[pid]; };
-      // costo por proyecto (desde las filas)
+      const ensureProy = (pid)=>{ if(!porProyecto[pid]) porProyecto[pid] = { sobrecosto:0, ahorro:0, costoNetoPlan:0, costoReal:0, presup:0, costoVsPresup:0, finPlan:null, finReal:null, atrasoProy:0, atrasoEst:0, tieneExtra:false }; return porProyecto[pid]; };
+      // costo por proyecto (desde las filas): delta vs plan + costo real absoluto
       detalle.forEach(f=>{
         const pid = f.proyecto_id; if(pid==null) return;
         const pp = ensureProy(pid);
         const d = porFila[f.id] ? porFila[f.id].costoDelta : 0;
         if(d>0) pp.sobrecosto += d; else if(d<0) pp.ahorro += (-d);
+        if(!f.ausente){ const ch=costoHora(f.persona_real); pp.costoReal += (Number(f.horas_normales)||0)*ch + (Number(f.horas_extra)||0)*ch*2; }
         if(f.es_extra) pp.tieneExtra = true;
       });
+      // presupuesto MO por proyecto (de la tabla proyectos)
+      proyectos.forEach(p=>{ const pp = porProyecto[p.id]; if(pp) pp.presup = Number(p.presupuesto_mo)||0; });
       // fin planificado por proyecto (desde plani)
       plani.forEach(b=>{
         const dP = diasHabiles(b.fecha_desde, b.fecha_hasta);
@@ -1189,15 +1204,22 @@
         const pp = ensureProy(pid);
         if(!pp.finReal || f.fecha>pp.finReal) pp.finReal = f.fecha;
       });
+      // suma de atrasos de estaciones, agrupada por proyecto (segundo corte de tiempo)
+      Object.entries(porEstacion).forEach(([k,e])=>{
+        const proyId = k.split("|")[1];
+        const pp = porProyecto[proyId]; if(!pp) return;
+        pp.atrasoEst += (e.atrasoDias||0);
+      });
       Object.values(porProyecto).forEach(pp=>{
-        pp.costoNeto = pp.sobrecosto - pp.ahorro;
+        pp.costoNetoPlan = pp.sobrecosto - pp.ahorro;
+        pp.costoVsPresup = pp.presup ? (pp.costoReal - pp.presup) : null; // null = sin presupuesto cargado
         if(pp.finPlan && pp.finReal){
           const signo = pp.finReal>pp.finPlan ? 1 : (pp.finReal<pp.finPlan ? -1 : 0);
           const a = pp.finReal>pp.finPlan ? pp.finPlan : pp.finReal;
           const b = pp.finReal>pp.finPlan ? pp.finReal : pp.finPlan;
           const span = Math.max(0, diasHabiles(a,b).length - 1);
-          pp.atrasoDias = signo * span;
-        } else pp.atrasoDias = 0;
+          pp.atrasoProy = signo * span;
+        } else pp.atrasoProy = 0;
       });
       // Totales
       let sobrecosto=0, ahorro=0, atraso=0, adelanto=0;
@@ -1239,64 +1261,86 @@
       const conf = Object.entries(horasDia).filter(([,v])=>v>8);
       if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación:</b> '+conf.map(([k,v])=>{const [pid,f]=k.split("|");return nombrePersona(pid)+" ("+dm(f)+"): "+v+"h";}).join(" · ")+'</div>';
 
-      // ---- Resumen de impacto (costo y tiempo, con signo) ----
+      // ---- Resumen de impacto (costo y tiempo, plan vs real) ----
       const imp = calcularImpacto();
-      const T = imp.totales;
-      const tarjeta = (titulo, valor, signo, sub) => {
-        const col = signo>0 ? '#A32D2D' : signo<0 ? '#3B6D11' : '#888780';
-        const bg  = signo>0 ? '#FCEBEB' : signo<0 ? '#E8F3DE' : '#F1EFE8';
-        return '<div style="background:'+bg+';border-radius:10px;padding:10px 14px;min-width:150px"><div style="font-size:11px;color:#888780;margin-bottom:2px">'+titulo+'</div><div style="font-size:18px;font-weight:700;color:'+col+'">'+valor+'</div><div style="font-size:10.5px;color:#888780">'+sub+'</div></div>';
-      };
+
       // ====== PANEL DE IMPACTO (arriba de todo) ======
       h += '<div style="border:1px solid #E6E4DC;border-radius:14px;padding:16px 18px;margin-bottom:18px;background:#FCFBF8">';
-      h += '<div style="font-size:15px;font-weight:700;margin-bottom:2px">📊 Impacto de costo y tiempo</div>';
-      h += '<p style="font-size:11.5px;color:#A8A69E;margin:0 0 12px">Compara lo real (detalle diario) contra lo planificado. Costo: sobrecosto/ahorro en pesos. Tiempo: atraso/adelanto en días hábiles.</p>';
-      // saldo neto global
-      h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">';
-      h += tarjeta("Costo · saldo neto", fmtPlata(T.costoNeto), T.costoNeto>0?1:T.costoNeto<0?-1:0, "sobrecosto "+fmtPlata(T.sobrecosto)+" · ahorro "+fmtPlata(-T.ahorro));
-      h += tarjeta("Tiempo · saldo neto", (T.tiempoNeto>0?"+":"")+T.tiempoNeto+" días", T.tiempoNeto>0?1:T.tiempoNeto<0?-1:0, "atraso +"+T.atraso+" · adelanto -"+T.adelanto);
-      h += '</div>';
-      // ---- Por proyecto (costo y tiempo) ----
+      h += '<div style="font-size:15px;font-weight:700;margin-bottom:2px">📊 Desvíos plan vs real — costo y tiempo</div>';
+      h += '<p style="font-size:11.5px;color:#A8A69E;margin:0 0 14px">Tocá una tarjeta de proyecto para filtrar el desglose por estación de abajo. Costo: positivo = sobrecosto, negativo = ahorro. Tiempo: positivo = atraso, negativo = adelanto.</p>';
+
+      // ---- Tarjetas por proyecto ----
       const proyCon = Object.entries(imp.porProyecto)
-        .filter(([,p])=> Math.abs(p.costoNeto)>0.5 || p.atrasoDias!==0)
-        .sort((a,b)=> Math.abs(b[1].costoNeto)-Math.abs(a[1].costoNeto));
-      h += '<div style="font-size:13px;font-weight:600;margin:6px 0 8px">Por proyecto</div>';
+        .filter(([,p])=> Math.abs(p.costoNetoPlan)>0.5 || p.atrasoProy!==0 || p.atrasoEst!==0 || p.costoReal>0)
+        .sort((a,b)=> Math.abs(b[1].costoNetoPlan)-Math.abs(a[1].costoNetoPlan));
       if(proyCon.length){
-        h += '<div style="overflow-x:auto;margin-bottom:16px"><table style="width:100%;max-width:920px;border-collapse:collapse;font-size:12.5px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:7px 10px">Proyecto</th><th style="text-align:right;padding:7px 10px">Costo (neto)</th><th style="text-align:left;padding:7px 10px">&nbsp;</th><th style="text-align:right;padding:7px 10px">Tiempo</th></tr></thead><tbody>';
+        h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
         proyCon.forEach(([pid,p])=>{
-          const cCol = p.costoNeto>0?'#A32D2D':p.costoNeto<0?'#3B6D11':'#888780';
-          const cTxt = (p.costoNeto>0?'sobrecosto ':p.costoNeto<0?'ahorro ':'')+fmtPlata(Math.abs(p.costoNeto));
-          let tCol, tTxt;
-          if(p.atrasoDias>0){ tCol='#A32D2D'; tTxt='+'+p.atrasoDias+' días atraso'; }
-          else if(p.atrasoDias<0){ tCol='#3B6D11'; tTxt=Math.abs(p.atrasoDias)+' días adelanto'; }
-          else { tCol='#888780'; tTxt='en fecha'; }
-          const extraTag = p.tieneExtra ? ' <span style="background:#FCEBEB;color:#A32D2D;font-size:9.5px;padding:1px 5px;border-radius:5px;vertical-align:middle">con días extra</span>' : '';
-          h += '<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px;font-weight:500">'+nombreProy(pid)+extraTag+'</td>'
-            + '<td style="text-align:right;padding:7px 10px;font-weight:600;color:'+cCol+'">'+(p.costoNeto>=0?'+':'')+fmtPlata(p.costoNeto)+'</td>'
-            + '<td style="padding:7px 10px;font-size:10.5px;color:#A8A69E">'+cTxt+'</td>'
-            + '<td style="text-align:right;padding:7px 10px;font-weight:600;color:'+tCol+'">'+tTxt+'</td></tr>';
+          const sel = impactoProy===pid;
+          // costo
+          const cPlanCol = p.costoNetoPlan>0.5?'#A32D2D':p.costoNetoPlan<-0.5?'#3B6D11':'#888780';
+          const cPlanTxt = (p.costoNetoPlan>=0?'+':'')+fmtPlata(p.costoNetoPlan);
+          const cPresTxt = (p.costoVsPresup==null) ? 's/presup' : ((p.costoVsPresup>=0?'+':'')+fmtPlata(p.costoVsPresup));
+          const cPresCol = (p.costoVsPresup==null)?'#A8A69E':(p.costoVsPresup>0?'#A32D2D':'#3B6D11');
+          // tiempo
+          const tProyCol = p.atrasoProy>0?'#A32D2D':p.atrasoProy<0?'#3B6D11':'#888780';
+          const tProyTxt = (p.atrasoProy>0?'+':'')+p.atrasoProy+'d';
+          const tEstCol = p.atrasoEst>0?'#A32D2D':p.atrasoEst<0?'#3B6D11':'#888780';
+          const tEstTxt = (p.atrasoEst>0?'+':'')+p.atrasoEst+'d';
+          const extraTag = p.tieneExtra ? '<span style="background:#BA7517;color:#fff;font-size:8.5px;padding:1px 5px;border-radius:5px;font-weight:600;margin-left:6px">EXTRA</span>' : '';
+          h += '<div onclick="setImpactoProy(\''+pid+'\')" style="cursor:pointer;flex:1;min-width:230px;max-width:300px;background:#fff;border:2px solid '+(sel?'#185FA5':'#E6E4DC')+';border-radius:12px;padding:12px 14px;transition:border-color .15s">'
+            + '<div style="font-size:13px;font-weight:600;margin-bottom:8px;display:flex;align-items:center">'+nombreProy(pid)+extraTag+(sel?'<span style="margin-left:auto;font-size:10px;color:#185FA5;font-weight:600">● filtrando</span>':'')+'</div>'
+            + '<div style="display:flex;gap:12px">'
+            +   '<div style="flex:1">'
+            +     '<div style="font-size:10px;color:#A8A69E;margin-bottom:2px">COSTO</div>'
+            +     '<div style="font-size:16px;font-weight:700;color:'+cPlanCol+'">'+cPlanTxt+'</div>'
+            +     '<div style="font-size:9.5px;color:#A8A69E">vs plan</div>'
+            +     '<div style="font-size:12px;font-weight:600;color:'+cPresCol+';margin-top:3px">'+cPresTxt+'</div>'
+            +     '<div style="font-size:9.5px;color:#A8A69E">vs presup.</div>'
+            +   '</div>'
+            +   '<div style="flex:1;border-left:1px solid #F1EFE8;padding-left:12px">'
+            +     '<div style="font-size:10px;color:#A8A69E;margin-bottom:2px">TIEMPO</div>'
+            +     '<div style="font-size:16px;font-weight:700;color:'+tProyCol+'">'+tProyTxt+'</div>'
+            +     '<div style="font-size:9.5px;color:#A8A69E">proyecto</div>'
+            +     '<div style="font-size:12px;font-weight:600;color:'+tEstCol+';margin-top:3px">'+tEstTxt+'</div>'
+            +     '<div style="font-size:9.5px;color:#A8A69E">suma estac.</div>'
+            +   '</div>'
+            + '</div></div>';
         });
-        h += '</tbody></table></div>';
+        h += '</div>';
+        if(impactoProy) h += '<div style="margin:8px 0 2px"><button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:4px 10px;font-size:11.5px" onclick="setImpactoProy(\''+impactoProy+'\')">✕ Quitar filtro · ver todos</button></div>';
       } else {
-        h += '<p style="font-size:12px;color:#A8A69E;margin:0 0 16px">Sin desvíos de costo ni de tiempo por proyecto todavía.</p>';
+        h += '<p style="font-size:12px;color:#A8A69E;margin:0 0 8px">Sin datos de desvío todavía. Generá el detalle o cargá trabajo real.</p>';
       }
-      // ---- Impacto en tiempo por estación ----
-      const estConTop = Object.entries(imp.porEstacion).filter(([k,e])=> e.atrasoDias!==0 || e.diasDelta!==0);
-      h += '<div style="font-size:13px;font-weight:600;margin:6px 0 8px">Impacto en tiempo por estación</div>';
+
+      // ---- Tabla de desvío por estación (filtrada por impactoProy) ----
+      const estConTop = Object.entries(imp.porEstacion)
+        .filter(([k,e])=> e.atrasoDias!==0 || e.diasDelta!==0 || Math.abs(e.costoDelta)>0.5)
+        .filter(([k])=> !impactoProy || k.split("|")[1]===impactoProy)
+        .sort((a,b)=> Math.abs(b[1].costoDelta)-Math.abs(a[1].costoDelta));
+      h += '<div style="font-size:13px;font-weight:600;margin:16px 0 8px">Desglose por estación — costo y tiempo'+(impactoProy?' · '+nombreProy(impactoProy):'')+'</div>';
       if(estConTop.length){
-        h += '<div style="overflow-x:auto"><table style="width:100%;max-width:920px;border-collapse:collapse;font-size:12.5px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:7px 10px">Estación</th><th style="text-align:left;padding:7px 10px">Proyecto</th><th style="text-align:center;padding:7px 10px">Días plan</th><th style="text-align:center;padding:7px 10px">Días real</th><th style="text-align:right;padding:7px 10px">Tiempo</th></tr></thead><tbody>';
+        h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:7px 10px">Estación</th>'+(impactoProy?'':'<th style="text-align:left;padding:7px 10px">Proyecto</th>')+'<th style="text-align:center;padding:7px 10px">Días plan</th><th style="text-align:center;padding:7px 10px">Días real</th><th style="text-align:right;padding:7px 10px">Tiempo</th><th style="text-align:right;padding:7px 10px">Costo (vs plan)</th></tr></thead><tbody>';
         estConTop.forEach(([k,e])=>{
           const [est,proyId] = k.split("|");
           const nEst = est===SUP_MARK ? SUP_LABEL : (STATIONS[est]?STATIONS[est].label:est);
-          let tiempoTxt, col;
-          if (e.atrasoDias>0){ tiempoTxt = "+"+e.atrasoDias+" días atraso"; col="#A32D2D"; }
-          else if (e.atrasoDias<0){ tiempoTxt = Math.abs(e.atrasoDias)+" días adelanto"; col="#3B6D11"; }
-          else { tiempoTxt = "en fecha"; col="#888780"; }
-          h += '<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px"><span style="background:'+estBg(est)+';color:'+estColor(est)+';padding:2px 7px;border-radius:6px">'+nEst+'</span></td><td style="padding:7px 10px;font-size:12px;color:#888780">'+nombreProy(proyId)+'</td><td style="text-align:center">'+e.diasPlan+'</td><td style="text-align:center">'+e.diasReal+'</td><td style="text-align:right;color:'+col+';font-weight:600">'+tiempoTxt+'</td></tr>';
+          let tiempoTxt, tCol;
+          if (e.atrasoDias>0){ tiempoTxt = "+"+e.atrasoDias+" días atraso"; tCol="#A32D2D"; }
+          else if (e.atrasoDias<0){ tiempoTxt = Math.abs(e.atrasoDias)+" días adelanto"; tCol="#3B6D11"; }
+          else { tiempoTxt = "en fecha"; tCol="#888780"; }
+          const cCol = e.costoDelta>0.5?'#A32D2D':e.costoDelta<-0.5?'#3B6D11':'#888780';
+          const cTxt = Math.abs(e.costoDelta)<=0.5 ? 'en plan' : ((e.costoDelta>0?'+':'')+fmtPlata(e.costoDelta));
+          const exTag = e.tieneExtra ? ' <span style="background:#BA7517;color:#fff;font-size:8px;padding:1px 4px;border-radius:4px;font-weight:600">EXTRA</span>' : '';
+          h += '<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px"><span style="background:'+estBg(est)+';color:'+estColor(est)+';padding:2px 7px;border-radius:6px">'+nEst+'</span>'+exTag+'</td>'
+            + (impactoProy?'':'<td style="padding:7px 10px;font-size:12px;color:#888780">'+nombreProy(proyId)+'</td>')
+            + '<td style="text-align:center">'+e.diasPlan+'</td><td style="text-align:center">'+e.diasReal+'</td>'
+            + '<td style="text-align:right;color:'+tCol+';font-weight:600">'+tiempoTxt+'</td>'
+            + '<td style="text-align:right;color:'+cCol+';font-weight:600">'+cTxt+'</td></tr>';
         });
         h += '</tbody></table></div>';
+        h += '<p style="font-size:11px;color:#A8A69E;margin:8px 0 0">El costo por estación es real vs plan (horas reales − horas planificadas × costo/hora; extra a x2). El neto del proyecto compensa sobrecostos de una estación con ahorros de otra.</p>';
       } else {
-        h += '<p style="font-size:12px;color:#A8A69E;margin:0">Sin desvíos de tiempo por estación todavía.</p>';
+        h += '<p style="font-size:12px;color:#A8A69E;margin:0">Sin desvíos por estación'+(impactoProy?' en este proyecto':'')+' todavía.</p>';
       }
       h += '</div>'; // cierre panel impacto
       // botón para agregar día extra (trabajo no planificado)
