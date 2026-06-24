@@ -1066,13 +1066,14 @@
       // traer detalle existente
       const { data: existente, error: eEx } = await sb.from("detalle_diario").select("*");
       if (eEx) return setEstado("Error: " + eEx.message, "err");
-      // ¿hay algo cargado (real) en días futuros (>= hoy)?
-      const futConDatos = (existente||[]).filter(d => d.fecha >= hoy && (d.ausente || d.horas_extra > 0 || d.estacion_real !== d.estacion_plan || d.persona_real !== d.persona_plan));
+      // ¿hay algo cargado (real) en días futuros (>= hoy)? (los días extra NO se borran, no cuentan acá)
+      const futConDatos = (existente||[]).filter(d => d.fecha >= hoy && !d.es_extra && (d.ausente || d.horas_extra > 0 || d.estacion_real !== d.estacion_plan || d.persona_real !== d.persona_plan));
       if (futConDatos.length > 0) {
-        if (!confirm("Hay " + futConDatos.length + " registro(s) ya cargados en días de hoy en adelante que se van a regenerar y perder. ¿Continuar?")) { setEstado("Generación cancelada.", "cargando"); return; }
+        if (!confirm("Hay " + futConDatos.length + " registro(s) ya cargados en días de hoy en adelante que se van a regenerar y perder. ¿Continuar? (Los días extra no se tocan.)")) { setEstado("Generación cancelada.", "cargando"); return; }
       }
-      // borrar SOLO el detalle de hoy en adelante (el pasado queda intacto)
-      const { error: eDel } = await sb.from("detalle_diario").delete().gte("fecha", hoy);
+      // borrar SOLO el detalle planificado de hoy en adelante; los días extra quedan intactos.
+      // (es_extra distinto de true cubre tanto false como NULL en filas viejas)
+      const { error: eDel } = await sb.from("detalle_diario").delete().gte("fecha", hoy).or("es_extra.is.null,es_extra.eq.false");
       if (eDel) return setEstado("Error al limpiar futuro: " + eDel.message, "err");
       // generar filas nuevas de hoy en adelante
       const filas = [];
@@ -1160,12 +1161,50 @@
           e.atrasoDias = signo * span;               // >0 atraso, <0 adelanto
         } else e.atrasoDias = 0;
       });
+      // --- Agregación POR PROYECTO ---
+      // Costo del proyecto: suma de costoDelta de las filas de ese proyecto.
+      // Tiempo del proyecto: derivado de finPlan vs finReal del PROYECTO COMPLETO
+      // (último día planificado vs último día trabajado de cualquier estación del proyecto).
+      const porProyecto = {};
+      const ensureProy = (pid)=>{ if(!porProyecto[pid]) porProyecto[pid] = { sobrecosto:0, ahorro:0, costoNeto:0, finPlan:null, finReal:null, atrasoDias:0, tieneExtra:false }; return porProyecto[pid]; };
+      // costo por proyecto (desde las filas)
+      detalle.forEach(f=>{
+        const pid = f.proyecto_id; if(pid==null) return;
+        const pp = ensureProy(pid);
+        const d = porFila[f.id] ? porFila[f.id].costoDelta : 0;
+        if(d>0) pp.sobrecosto += d; else if(d<0) pp.ahorro += (-d);
+        if(f.es_extra) pp.tieneExtra = true;
+      });
+      // fin planificado por proyecto (desde plani)
+      plani.forEach(b=>{
+        const dP = diasHabiles(b.fecha_desde, b.fecha_hasta);
+        if(!dP.length) return;
+        const pp = ensureProy(b.proyecto_id);
+        const fin = dP[dP.length-1];
+        if(!pp.finPlan || fin>pp.finPlan) pp.finPlan = fin;
+      });
+      // fin real por proyecto (desde detalle, días efectivamente trabajados)
+      detalle.forEach(f=>{
+        if(f.ausente) return; const pid=f.proyecto_id; if(pid==null) return;
+        const pp = ensureProy(pid);
+        if(!pp.finReal || f.fecha>pp.finReal) pp.finReal = f.fecha;
+      });
+      Object.values(porProyecto).forEach(pp=>{
+        pp.costoNeto = pp.sobrecosto - pp.ahorro;
+        if(pp.finPlan && pp.finReal){
+          const signo = pp.finReal>pp.finPlan ? 1 : (pp.finReal<pp.finPlan ? -1 : 0);
+          const a = pp.finReal>pp.finPlan ? pp.finPlan : pp.finReal;
+          const b = pp.finReal>pp.finPlan ? pp.finReal : pp.finPlan;
+          const span = Math.max(0, diasHabiles(a,b).length - 1);
+          pp.atrasoDias = signo * span;
+        } else pp.atrasoDias = 0;
+      });
       // Totales
       let sobrecosto=0, ahorro=0, atraso=0, adelanto=0;
       Object.values(porFila).forEach(f=>{ if(f.costoDelta>0) sobrecosto+=f.costoDelta; else if(f.costoDelta<0) ahorro+=(-f.costoDelta); });
       Object.values(porEstacion).forEach(e=>{ if(e.atrasoDias>0) atraso+=e.atrasoDias; else if(e.atrasoDias<0) adelanto+=(-e.atrasoDias); });
       const totales = { sobrecosto, ahorro, costoNeto: sobrecosto-ahorro, atraso, adelanto, tiempoNeto: atraso-adelanto };
-      return { porFila, porEstacion, totales };
+      return { porFila, porEstacion, porProyecto, totales };
     }
     function fmtPlata(n){ const s=n<0?"-":""; return s+"$"+Math.abs(Math.round(n)).toLocaleString("es-AR"); }
 
@@ -1208,19 +1247,70 @@
         const bg  = signo>0 ? '#FCEBEB' : signo<0 ? '#E8F3DE' : '#F1EFE8';
         return '<div style="background:'+bg+';border-radius:10px;padding:10px 14px;min-width:150px"><div style="font-size:11px;color:#888780;margin-bottom:2px">'+titulo+'</div><div style="font-size:18px;font-weight:700;color:'+col+'">'+valor+'</div><div style="font-size:10.5px;color:#888780">'+sub+'</div></div>';
       };
-      h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">';
+      // ====== PANEL DE IMPACTO (arriba de todo) ======
+      h += '<div style="border:1px solid #E6E4DC;border-radius:14px;padding:16px 18px;margin-bottom:18px;background:#FCFBF8">';
+      h += '<div style="font-size:15px;font-weight:700;margin-bottom:2px">📊 Impacto de costo y tiempo</div>';
+      h += '<p style="font-size:11.5px;color:#A8A69E;margin:0 0 12px">Compara lo real (detalle diario) contra lo planificado. Costo: sobrecosto/ahorro en pesos. Tiempo: atraso/adelanto en días hábiles.</p>';
+      // saldo neto global
+      h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">';
       h += tarjeta("Costo · saldo neto", fmtPlata(T.costoNeto), T.costoNeto>0?1:T.costoNeto<0?-1:0, "sobrecosto "+fmtPlata(T.sobrecosto)+" · ahorro "+fmtPlata(-T.ahorro));
       h += tarjeta("Tiempo · saldo neto", (T.tiempoNeto>0?"+":"")+T.tiempoNeto+" días", T.tiempoNeto>0?1:T.tiempoNeto<0?-1:0, "atraso +"+T.atraso+" · adelanto -"+T.adelanto);
       h += '</div>';
+      // ---- Por proyecto (costo y tiempo) ----
+      const proyCon = Object.entries(imp.porProyecto)
+        .filter(([,p])=> Math.abs(p.costoNeto)>0.5 || p.atrasoDias!==0)
+        .sort((a,b)=> Math.abs(b[1].costoNeto)-Math.abs(a[1].costoNeto));
+      h += '<div style="font-size:13px;font-weight:600;margin:6px 0 8px">Por proyecto</div>';
+      if(proyCon.length){
+        h += '<div style="overflow-x:auto;margin-bottom:16px"><table style="width:100%;max-width:920px;border-collapse:collapse;font-size:12.5px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:7px 10px">Proyecto</th><th style="text-align:right;padding:7px 10px">Costo (neto)</th><th style="text-align:left;padding:7px 10px">&nbsp;</th><th style="text-align:right;padding:7px 10px">Tiempo</th></tr></thead><tbody>';
+        proyCon.forEach(([pid,p])=>{
+          const cCol = p.costoNeto>0?'#A32D2D':p.costoNeto<0?'#3B6D11':'#888780';
+          const cTxt = (p.costoNeto>0?'sobrecosto ':p.costoNeto<0?'ahorro ':'')+fmtPlata(Math.abs(p.costoNeto));
+          let tCol, tTxt;
+          if(p.atrasoDias>0){ tCol='#A32D2D'; tTxt='+'+p.atrasoDias+' días atraso'; }
+          else if(p.atrasoDias<0){ tCol='#3B6D11'; tTxt=Math.abs(p.atrasoDias)+' días adelanto'; }
+          else { tCol='#888780'; tTxt='en fecha'; }
+          const extraTag = p.tieneExtra ? ' <span style="background:#FCEBEB;color:#A32D2D;font-size:9.5px;padding:1px 5px;border-radius:5px;vertical-align:middle">con días extra</span>' : '';
+          h += '<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px;font-weight:500">'+nombreProy(pid)+extraTag+'</td>'
+            + '<td style="text-align:right;padding:7px 10px;font-weight:600;color:'+cCol+'">'+(p.costoNeto>=0?'+':'')+fmtPlata(p.costoNeto)+'</td>'
+            + '<td style="padding:7px 10px;font-size:10.5px;color:#A8A69E">'+cTxt+'</td>'
+            + '<td style="text-align:right;padding:7px 10px;font-weight:600;color:'+tCol+'">'+tTxt+'</td></tr>';
+        });
+        h += '</tbody></table></div>';
+      } else {
+        h += '<p style="font-size:12px;color:#A8A69E;margin:0 0 16px">Sin desvíos de costo ni de tiempo por proyecto todavía.</p>';
+      }
+      // ---- Impacto en tiempo por estación ----
+      const estConTop = Object.entries(imp.porEstacion).filter(([k,e])=> e.atrasoDias!==0 || e.diasDelta!==0);
+      h += '<div style="font-size:13px;font-weight:600;margin:6px 0 8px">Impacto en tiempo por estación</div>';
+      if(estConTop.length){
+        h += '<div style="overflow-x:auto"><table style="width:100%;max-width:920px;border-collapse:collapse;font-size:12.5px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:7px 10px">Estación</th><th style="text-align:left;padding:7px 10px">Proyecto</th><th style="text-align:center;padding:7px 10px">Días plan</th><th style="text-align:center;padding:7px 10px">Días real</th><th style="text-align:right;padding:7px 10px">Tiempo</th></tr></thead><tbody>';
+        estConTop.forEach(([k,e])=>{
+          const [est,proyId] = k.split("|");
+          const nEst = est===SUP_MARK ? SUP_LABEL : (STATIONS[est]?STATIONS[est].label:est);
+          let tiempoTxt, col;
+          if (e.atrasoDias>0){ tiempoTxt = "+"+e.atrasoDias+" días atraso"; col="#A32D2D"; }
+          else if (e.atrasoDias<0){ tiempoTxt = Math.abs(e.atrasoDias)+" días adelanto"; col="#3B6D11"; }
+          else { tiempoTxt = "en fecha"; col="#888780"; }
+          h += '<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px"><span style="background:'+estBg(est)+';color:'+estColor(est)+';padding:2px 7px;border-radius:6px">'+nEst+'</span></td><td style="padding:7px 10px;font-size:12px;color:#888780">'+nombreProy(proyId)+'</td><td style="text-align:center">'+e.diasPlan+'</td><td style="text-align:center">'+e.diasReal+'</td><td style="text-align:right;color:'+col+';font-weight:600">'+tiempoTxt+'</td></tr>';
+        });
+        h += '</tbody></table></div>';
+      } else {
+        h += '<p style="font-size:12px;color:#A8A69E;margin:0">Sin desvíos de tiempo por estación todavía.</p>';
+      }
+      h += '</div>'; // cierre panel impacto
+      // botón para agregar día extra (trabajo no planificado)
+      h += '<div style="margin-bottom:12px"><button class="btn" style="background:#BA7517;color:#fff" onclick="abrirDiaExtra()">+ Día extra (trabajo no planificado)</button> <span style="font-size:11.5px;color:#A8A69E">Para cargar un día real que no estaba planificado, sin tocar la planificación.</span></div>';
       h += '<div style="overflow:auto;max-height:70vh"><table style="min-width:1380px"><thead><tr><th>Fecha</th><th>Proyecto</th><th>Persona</th><th>Estación</th><th>Tarea</th><th>Módulos</th><th style="text-align:center">Aus.</th><th style="text-align:center">Hs</th><th style="text-align:center">Ext.</th><th style="text-align:right">Impacto costo</th><th>Motivo desvío</th></tr></thead><tbody>';
       filasVisibles.forEach(f => {
         const pasado = f.fecha < hoy;
         const norm = (x) => (x==null ? "" : String(x));
         const reasig = (norm(f.estacion_real) !== norm(f.estacion_plan)) || (norm(f.persona_real) !== norm(f.persona_plan)) || !!f.ausente;
-        const bg = f.ausente ? 'background:#FCEBEB' : reasig ? 'background:#FBFAF5' : '';
+        const bg = f.es_extra ? 'background:#FAEEDA;box-shadow:inset 3px 0 0 #BA7517' : f.ausente ? 'background:#FCEBEB' : reasig ? 'background:#FBFAF5' : '';
         const dis = pasado ? 'disabled' : '';
+        const tagExtra = f.es_extra ? ' <span style="background:#BA7517;color:#fff;font-size:9px;padding:1px 5px;border-radius:5px;vertical-align:middle;font-weight:600">EXTRA</span>' : '';
         h += '<tr style="'+bg+'">'
-          + '<td style="white-space:nowrap;color:#888780">'+dm(f.fecha)+(pasado?' 🔒':'')+'</td>'
+          + '<td style="white-space:nowrap;color:#888780">'+dm(f.fecha)+(pasado?' 🔒':'')+tagExtra+'</td>'
           + '<td><select '+dis+' onchange="cambiarProyDet(\''+f.id+'\',this.value)" style="min-width:130px">'+opcProy(f.proyecto_id)+'</select></td>'
           + '<td><select '+dis+' onchange="editarDet(\''+f.id+'\',\'persona_real\',this.value)">'+opcPersona(f.persona_real)+'</select></td>'
           + '<td>'+(f.ausente?'<span style="color:#A32D2D;font-size:11.5px">— ausente —</span>':(f.estacion_real===SUP_MARK?'<span style="background:'+SUP_BG+';color:'+SUP_COLOR+';padding:2px 8px;border-radius:6px;font-size:11.5px">'+SUP_LABEL+'</span>':'<select '+dis+' onchange="cambiarEstDet(\''+f.id+'\',this.value)" style="'+(f.estacion_real!==f.estacion_plan?'border-color:#BA7517;background:#FAEEDA':'')+'">'+opcEst(f.estacion_real)+'</select>'))+'</td>'
@@ -1235,23 +1325,6 @@
       });
       h += '</tbody></table></div><div class="row-actions"><button class="btn btn-primary" onclick="cargar()">↻ Recargar</button></div>';
 
-      // ---- Impacto en tiempo por estación (atraso / adelanto) ----
-      const estCon = Object.entries(imp.porEstacion).filter(([k,e])=> e.atrasoDias!==0 || e.diasDelta!==0);
-      if (estCon.length){
-        h += '<h3 style="font-size:14px;margin:18px 0 8px">Impacto en tiempo por estación</h3>';
-        h += '<p style="font-size:12px;color:#A8A69E;margin:0 0 8px">Compara las fechas reales (del detalle) contra las planificadas. Atraso = terminó después; adelanto = terminó antes.</p>';
-        h += '<table style="max-width:880px"><thead><tr><th>Estación</th><th>Proyecto</th><th style="text-align:center">Días plan</th><th style="text-align:center">Días real</th><th style="text-align:right">Tiempo</th></tr></thead><tbody>';
-        estCon.forEach(([k,e])=>{
-          const [est,proyId] = k.split("|");
-          const nEst = est===SUP_MARK ? SUP_LABEL : (STATIONS[est]?STATIONS[est].label:est);
-          let tiempoTxt, col;
-          if (e.atrasoDias>0){ tiempoTxt = "+"+e.atrasoDias+" días atraso"; col="#A32D2D"; }
-          else if (e.atrasoDias<0){ tiempoTxt = e.atrasoDias+" días adelanto"; col="#3B6D11"; }
-          else { tiempoTxt = "en fecha"; col="#888780"; }
-          h += '<tr><td>'+nEst+'</td><td style="font-size:12px;color:#888780">'+nombreProy(proyId)+'</td><td style="text-align:center">'+e.diasPlan+'</td><td style="text-align:center">'+e.diasReal+'</td><td style="text-align:right;color:'+col+';font-weight:600;font-size:12px">'+tiempoTxt+'</td></tr>';
-        });
-        h += '</tbody></table>';
-      }
       h += '<p style="font-size:12px;color:#A8A69E;margin-top:10px">🔒 = día anterior a hoy (historia, no editable). Las filas con fondo crema tienen desvío (estación o persona distinta a lo planificado) y piden un motivo. Para sumar o cambiar tareas futuras, hacelo en Planificación General y regenerá el detalle.</p>';
       contenido.innerHTML = h;
     }
@@ -1280,6 +1353,74 @@
     }
     async function cambiarEstDet(id, est) { const sub = STATIONS[est].subs[0]; const { error } = await sb.from("detalle_diario").update({ estacion_real: est, subtarea_real: sub }).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const f = detalle.find(x=>x.id===id); if(f){f.estacion_real=est;f.subtarea_real=sub;} setEstado("\u2713 Guardado.", "ok"); renderDetalle(); }
     async function toggleAusente(id, val) { const u = val ? { ausente: true, horas_normales: 0, horas_extra: 0 } : { ausente: false, horas_normales: 8 }; const { error } = await sb.from("detalle_diario").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const f = detalle.find(x=>x.id===id); if(f) Object.assign(f,u); setEstado("\u2713 Guardado.", "ok"); renderDetalle(); }
+
+    /* ---- DÍA EXTRA (trabajo real no planificado) ---- */
+    function cerrarDiaExtra(){ const ov=document.getElementById("ovExtra"); if(ov) ov.remove(); }
+    function abrirDiaExtra(){
+      cerrarDiaExtra();
+      const hoy = fechaStr(new Date());
+      const optProy = proyectos.map(p=>'<option value="'+p.id+'">'+p.nombre+'</option>').join('');
+      const optPers = personas.map(p=>'<option value="'+p.id+'">'+p.nombre+(p.tipo==='Contratista'?' (contratista)':'')+'</option>').join('');
+      const optEst  = STKEYS.map(k=>'<option value="'+k+'">'+STATIONS[k].label+'</option>').join('');
+      const ov = document.createElement("div");
+      ov.id = "ovExtra";
+      ov.style.cssText = "position:fixed;inset:0;background:rgba(44,44,42,.45);display:flex;align-items:center;justify-content:center;z-index:2000;padding:16px";
+      ov.innerHTML =
+        '<div style="background:#fff;border-radius:16px;max-width:460px;width:100%;padding:22px;box-shadow:0 12px 40px rgba(0,0,0,.2)">'
+        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="background:#BA7517;color:#fff;font-size:10px;padding:2px 7px;border-radius:5px;font-weight:600">EXTRA</span><div style="font-size:17px;font-weight:700">Agregar día de trabajo no planificado</div></div>'
+        + '<p style="font-size:12px;color:#888780;margin:0 0 16px">Usalo cuando un trabajo se estiró más de lo planificado. Este día se carga como real (no toca la planificación), genera <b>sobrecosto</b> y, si corre el fin del proyecto, <b>atraso</b>. La regeneración del detalle no lo borra.</p>'
+        + '<div style="display:flex;flex-direction:column;gap:10px">'
+        + '<label style="font-size:12px;color:#5F5E5A">Fecha<input id="ex_fecha" type="date" value="'+hoy+'" style="width:100%;margin-top:3px"></label>'
+        + '<label style="font-size:12px;color:#5F5E5A">Proyecto<select id="ex_proy" style="width:100%;margin-top:3px">'+optProy+'</select></label>'
+        + '<label style="font-size:12px;color:#5F5E5A">Módulos (opcional)<div id="ex_mods" style="margin-top:4px"></div></label>'
+        + '<label style="font-size:12px;color:#5F5E5A">Persona<select id="ex_pers" style="width:100%;margin-top:3px">'+optPers+'</select></label>'
+        + '<label style="font-size:12px;color:#5F5E5A">Estación<select id="ex_est" style="width:100%;margin-top:3px">'+optEst+'</select></label>'
+        + '<label style="font-size:12px;color:#5F5E5A">Tarea<select id="ex_sub" style="width:100%;margin-top:3px"></select></label>'
+        + '<div style="display:flex;gap:10px">'
+        +   '<label style="font-size:12px;color:#5F5E5A;flex:1">Horas normales<input id="ex_hn" type="number" value="8" min="0" style="width:100%;margin-top:3px"></label>'
+        +   '<label style="font-size:12px;color:#5F5E5A;flex:1">Horas extra (x2)<input id="ex_he" type="number" value="0" min="0" style="width:100%;margin-top:3px"></label>'
+        + '</div>'
+        + '</div>'
+        + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">'
+        +   '<button class="btn" onclick="cerrarDiaExtra()">Cancelar</button>'
+        +   '<button class="btn btn-primary" style="background:#BA7517" onclick="guardarDiaExtra()">Agregar día extra</button>'
+        + '</div></div>';
+      document.body.appendChild(ov);
+      ov.addEventListener("mousedown", e=>{ if(e.target===ov) cerrarDiaExtra(); });
+      const syncSub = ()=>{ const est=document.getElementById("ex_est").value; const subs=STATIONS[est]?STATIONS[est].subs:[]; document.getElementById("ex_sub").innerHTML = subs.map(s=>'<option>'+s+'</option>').join(''); };
+      const syncMods = ()=>{ const pid=document.getElementById("ex_proy").value; const mods=modulosDeProy(pid); const cont=document.getElementById("ex_mods"); if(!mods.length){ cont.innerHTML='<span style="font-size:11px;color:#A8A69E">— este proyecto no tiene módulos —</span>'; return; } cont.innerHTML='<div class="chips" style="gap:4px">'+mods.map(m=>'<button type="button" class="chip" data-mod="'+m.replace(/"/g,'&quot;')+'" onclick="this.classList.toggle(\'on\')" style="padding:3px 9px;font-size:11px">'+m+'</button>').join('')+'</div>'; };
+      document.getElementById("ex_est").addEventListener("change", syncSub);
+      document.getElementById("ex_proy").addEventListener("change", syncMods);
+      syncSub(); syncMods();
+    }
+    async function guardarDiaExtra(){
+      const fecha = document.getElementById("ex_fecha").value;
+      const proyecto_id = document.getElementById("ex_proy").value;
+      const persona = document.getElementById("ex_pers").value;
+      const est = document.getElementById("ex_est").value;
+      const sub = document.getElementById("ex_sub").value;
+      const hn = Number(document.getElementById("ex_hn").value)||0;
+      const he = Number(document.getElementById("ex_he").value)||0;
+      if(!fecha){ setEstado("Falta la fecha.","err"); return; }
+      if(!proyecto_id){ setEstado("Falta el proyecto.","err"); return; }
+      if(!persona){ setEstado("Falta la persona.","err"); return; }
+      if(hn<=0 && he<=0){ setEstado("Cargá al menos horas normales o extra.","err"); return; }
+      const mods = [...document.querySelectorAll('#ex_mods .chip.on')].map(b=>b.getAttribute("data-mod")).join(", ");
+      // es_extra=true y horas_plan=0 → todo el peso cae como sobrecosto.
+      const fila = {
+        fecha, persona_plan: persona, persona_real: persona, proyecto_id,
+        estacion_plan: est, subtarea_plan: sub, estacion_real: est, subtarea_real: sub,
+        modulos_plan: mods||null, modulos_real: mods||null,
+        horas_plan: 0, horas_normales: hn, horas_extra: he, ausente: false, es_extra: true
+      };
+      const { data, error } = await sb.from("detalle_diario").insert(fila).select();
+      if(error) return setEstado("Error al agregar día extra: "+error.message,"err");
+      if(data && data[0]) detalle.push(data[0]);
+      detalle.sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0);
+      cerrarDiaExtra();
+      setEstado("\u2713 Día extra agregado. Se computa como sobrecosto y, si corre el fin del proyecto, como atraso.","ok");
+      renderDetalle();
+    }
 
     /* ---- DASHBOARD ---- */
     let vistaDash = "pm", dashProy = "";
