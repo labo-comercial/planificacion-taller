@@ -269,6 +269,7 @@
 
     async function cargar() {
       setEstado("Cargando…", "cargando");
+      draftPr = {}; // limpiar borrador de Proyectos en cada recarga completa
       // ===== Pestañas de Base Neuquén =====
       if (tab === "nqn_trailers") {
         const { data, error } = await sb.from("trailers").select("*").eq("sede","neuquen");
@@ -382,33 +383,75 @@
     async function eliminarP(id){const{error}=await sb.from("personal").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");cargar();}
 
     /* ---- PROYECTOS ---- */
+    // Borrador de proyectos: los cambios en la solapa NO se guardan hasta tocar "Guardar cambios".
+    let draftPr = {};
+    function prVal(pr, campo){ const d=draftPr[pr.id]; if(d && Object.prototype.hasOwnProperty.call(d,campo)) return d[campo]; return pr[campo]; }
+    function setDraftPr(id, campo, valor){ if(!draftPr[id]) draftPr[id]={}; draftPr[id][campo]=valor; marcarSucio(id); }
+    function marcarSucio(id){ const badge=document.getElementById("pr-dirty-"+id); if(badge) badge.style.display="inline-block"; const bar=document.getElementById("pr-savebar"); if(bar) bar.style.display="flex"; }
+    function hayCambiosPr(){ return Object.keys(draftPr).some(id => draftPr[id] && Object.keys(draftPr[id]).length); }
     function renderProyectos() {
       let h = '';
       if (!proyectos.length) h += '<p style="color:#A8A69E;font-size:13px">Sin proyectos.</p>';
-      proyectos.forEach((pr,i)=>{ h += '<div class="card"><div class="card-head"><span style="font-size:13px;font-weight:600;color:#185FA5">Proyecto '+(i+1)+'</span><div style="display:flex;gap:8px;align-items:center"><select onchange="editarPr(\''+pr.id+'\',\'estado\',this.value)" style="width:auto;color:'+(pr.estado==='Cerrado'?'#888780':'#3B6D11')+'"><option '+(pr.estado!=='Cerrado'?'selected':'')+'>Vigente</option><option '+(pr.estado==='Cerrado'?'selected':'')+'>Cerrado</option></select><button class="btn-del" onclick="eliminarPr(\''+pr.id+'\')">×</button></div></div><div class="grid">'
-        + li(pr.id,'nombre','Nombre',pr.nombre) + li(pr.id,'codigo','Código',pr.codigo)
-        + '<label class="lbl" style="grid-column:1/-1">Descripción<input value="'+(pr.descripcion||'')+'" onchange="editarPr(\''+pr.id+'\',\'descripcion\',this.value)"></label>'
-        + ln(pr.id,'cant_modulos','Cantidad de módulos',pr.cant_modulos) + li(pr.id,'tam_modulos','Tamaño de módulos',pr.tam_modulos)
-        + ld(pr.id,'fecha_entrega','Fecha de entrega',pr.fecha_entrega) + ld(pr.id,'fecha_montaje','Fecha de montaje',pr.fecha_montaje)
-        + ln(pr.id,'presupuesto_mo','Presupuesto mano de obra',pr.presupuesto_mo) + li(pr.id,'planos','Planos (link o ref.)',pr.planos)
+      proyectos.forEach((pr,i)=>{
+        const dirty = draftPr[pr.id] && Object.keys(draftPr[pr.id]).length;
+        h += '<div class="card"><div class="card-head"><span style="font-size:13px;font-weight:600;color:#185FA5">Proyecto '+(i+1)+' <span id="pr-dirty-'+pr.id+'" style="display:'+(dirty?'inline-block':'none')+';background:#FAEEDA;color:#BA7517;font-size:10px;padding:1px 7px;border-radius:8px;font-weight:600;margin-left:6px">sin guardar</span></span><div style="display:flex;gap:8px;align-items:center"><select onchange="editarPrEstado(\''+pr.id+'\',this.value)" style="width:auto;color:'+(pr.estado==='Cerrado'?'#888780':'#3B6D11')+'"><option '+(pr.estado!=='Cerrado'?'selected':'')+'>Vigente</option><option '+(pr.estado==='Cerrado'?'selected':'')+'>Cerrado</option></select><button class="btn-del" onclick="eliminarPr(\''+pr.id+'\')">×</button></div></div><div class="grid">'
+        + li(pr.id,'nombre','Nombre',prVal(pr,'nombre')) + li(pr.id,'codigo','Código',prVal(pr,'codigo'))
+        + '<label class="lbl" style="grid-column:1/-1">Descripción<input value="'+(prVal(pr,'descripcion')||'')+'" onchange="setDraftPr(\''+pr.id+'\',\'descripcion\',this.value)"></label>'
+        + ln(pr.id,'cant_modulos','Cantidad de módulos',prVal(pr,'cant_modulos')) + li(pr.id,'tam_modulos','Tamaño de módulos',prVal(pr,'tam_modulos'))
+        // Fechas (solo informativas para el coordinador): inicio → montaje → entrega
+        + ld(pr.id,'fecha_inicio','Fecha de inicio',prVal(pr,'fecha_inicio'))
+        + ld(pr.id,'fecha_montaje','Fecha de montaje',prVal(pr,'fecha_montaje'))
+        + ld(pr.id,'fecha_entrega','Fecha de entrega',prVal(pr,'fecha_entrega'))
+        + '<div class="lbl" style="grid-column:1/-1;font-size:11px;color:#A8A69E;margin:-4px 0 2px">Las fechas son solo informativas para el coordinador de producción; no afectan la planificación ni los cálculos.</div>'
+        // Presupuesto desdoblado
+        + ln(pr.id,'presupuesto_mo_huella','Presupuesto MO La Huella',prVal(pr,'presupuesto_mo_huella'))
+        + ln(pr.id,'presupuesto_mo_montaje','Presupuesto MO Montaje',prVal(pr,'presupuesto_mo_montaje'))
+        + li(pr.id,'planos','Planos (link o ref.)',prVal(pr,'planos'))
         + editorModulos(pr) + '</div></div>';
       });
       h += '<button class="btn-add" onclick="agregarPr()">+ Agregar proyecto</button>';
+      // Barra de guardado fija
+      h += '<div id="pr-savebar" style="display:'+(hayCambiosPr()?'flex':'none')+';position:sticky;bottom:0;gap:10px;align-items:center;justify-content:flex-end;background:#FFFDF7;border:1px solid #F0E6CE;border-radius:12px;padding:12px 16px;margin-top:16px;box-shadow:0 -2px 12px rgba(0,0,0,0.06)">'
+        + '<span style="font-size:12.5px;color:#BA7517;margin-right:auto">Tenés cambios sin guardar.</span>'
+        + '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A" onclick="descartarCambiosPr()">Descartar</button>'
+        + '<button class="btn btn-primary" style="background:#185FA5" onclick="guardarCambiosPr()">Guardar cambios</button>'
+        + '</div>';
       contenido.innerHTML = h;
     }
-    function li(id,c,l,v){return '<label class="lbl">'+l+'<input value="'+(v||'')+'" onchange="editarPr(\''+id+'\',\''+c+'\',this.value)"></label>';}
-    function ln(id,c,l,v){return '<label class="lbl">'+l+'<input type="number" value="'+(v||0)+'" onchange="editarPr(\''+id+'\',\''+c+'\',Number(this.value))"></label>';}
-    function ld(id,c,l,v){return '<label class="lbl">'+l+'<input type="date" value="'+(v||'')+'" onchange="editarPr(\''+id+'\',\''+c+'\',this.value)"></label>';}
-    async function agregarPr(){const{error}=await sb.from("proyectos").insert({nombre:"Nuevo proyecto",estado:"Vigente"});if(error)return setEstado("Error: "+error.message,"err");cargar();}
-    async function editarPr(id,c,v){const u={};u[c]=v;const{error}=await sb.from("proyectos").update(u).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");setEstado("\u2713 Guardado.","ok");}
-    async function eliminarPr(id){const{error}=await sb.from("proyectos").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");cargar();}
+    function li(id,c,l,v){return '<label class="lbl">'+l+'<input value="'+(v==null?'':String(v).replace(/"/g,'&quot;'))+'" onchange="setDraftPr(\''+id+'\',\''+c+'\',this.value)"></label>';}
+    function ln(id,c,l,v){return '<label class="lbl">'+l+'<input type="number" value="'+(v||0)+'" onchange="setDraftPr(\''+id+'\',\''+c+'\',Number(this.value))"></label>';}
+    function ld(id,c,l,v){return '<label class="lbl">'+l+'<input type="date" value="'+(v||'')+'" onchange="setDraftPr(\''+id+'\',\''+c+'\',this.value)"></label>';}
+    async function agregarPr(){ if(hayCambiosPr() && !confirm("Tenés cambios sin guardar que se perderán al recargar. ¿Continuar y agregar un proyecto nuevo?")) return; draftPr={}; const{error}=await sb.from("proyectos").insert({nombre:"Nuevo proyecto",estado:"Vigente"});if(error)return setEstado("Error: "+error.message,"err");cargar();}
+    // El estado (Vigente/Cerrado) se guarda al instante (no es parte del borrador editable).
+    async function editarPrEstado(id,v){const{error}=await sb.from("proyectos").update({estado:v}).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");const pr=proyectos.find(p=>p.id===id);if(pr)pr.estado=v;setEstado("\u2713 Estado guardado.","ok");}
+    async function eliminarPr(id){ if(!confirm("¿Eliminar este proyecto? Esta acción no se puede deshacer.")) return; const{error}=await sb.from("proyectos").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");delete draftPr[id];cargar();}
+    function descartarCambiosPr(){ if(!hayCambiosPr()){ return; } if(!confirm("¿Descartar todos los cambios sin guardar?")) return; draftPr={}; renderProyectos(); setEstado("Cambios descartados.","ok"); }
+    async function guardarCambiosPr(){
+      const ids = Object.keys(draftPr).filter(id => draftPr[id] && Object.keys(draftPr[id]).length);
+      if(!ids.length){ setEstado("No hay cambios para guardar.","ok"); return; }
+      // Resumen legible de lo que se va a cambiar, para confirmar conscientemente.
+      const ETIQ = {nombre:"Nombre",codigo:"Código",descripcion:"Descripción",cant_modulos:"Cant. módulos",tam_modulos:"Tamaño módulos",fecha_inicio:"Fecha de inicio",fecha_montaje:"Fecha de montaje",fecha_entrega:"Fecha de entrega",presupuesto_mo_huella:"Presup. MO La Huella",presupuesto_mo_montaje:"Presup. MO Montaje",planos:"Planos"};
+      let resumen = "Vas a guardar estos cambios:\n";
+      ids.forEach(id=>{ const pr=proyectos.find(p=>p.id===id); resumen += "\n• "+(pr?pr.nombre:id)+":\n"; Object.keys(draftPr[id]).forEach(c=>{ resumen += "   - "+(ETIQ[c]||c)+" → "+(draftPr[id][c]===null||draftPr[id][c]===""?"(vacío)":draftPr[id][c])+"\n"; }); });
+      resumen += "\n¿Confirmás guardar estos cambios?";
+      if(!confirm(resumen)) return;
+      let guardados=0;
+      for(const id of ids){
+        const { error } = await sb.from("proyectos").update(draftPr[id]).eq("id", id);
+        if(error){ setEstado("Error al guardar "+id+": "+error.message,"err"); continue; }
+        const pr=proyectos.find(p=>p.id===id); if(pr) Object.assign(pr, draftPr[id]);
+        delete draftPr[id]; guardados++;
+      }
+      renderProyectos();
+      setEstado("\u2713 "+guardados+" proyecto(s) guardado(s).","ok");
+    }
     // --- MÓDULOS ---
     function modulosDe(pr){ return (pr && pr.modulos ? String(pr.modulos) : "").split(",").map(s=>s.trim()).filter(Boolean); }
     function modulosDeProy(proyId){ const pr=proyectos.find(p=>p.id===proyId); return modulosDe(pr); }
     function editorModulos(pr){
       const mods = modulosDe(pr);
       let h = '<div class="lbl" style="grid-column:1/-1"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span>Módulos (identificación)</span>';
-      h += '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#185FA5;padding:3px 9px;font-size:11px" onclick="autonumerarModulos(\''+pr.id+'\')">↻ Autonumerar (M1…M'+(pr.cant_modulos||0)+')</button></div>';
+      h += '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#185FA5;padding:3px 9px;font-size:11px" onclick="autonumerarModulos(\''+pr.id+'\')">↻ Autonumerar (M1…M'+(prVal(pr,'cant_modulos')||0)+')</button></div>';
       if(!mods.length){ h += '<div style="font-size:11.5px;color:#A8A69E;margin-bottom:6px">Sin módulos definidos. Cargá la cantidad y tocá Autonumerar, o agregá uno a uno.</div>'; }
       h += '<div class="chips" style="margin-top:0">';
       mods.forEach((m,idx)=>{ h += '<span style="display:inline-flex;align-items:center;gap:2px;border:1px solid #E6E4DC;border-radius:16px;padding:2px 4px 2px 8px"><input value="'+m.replace(/"/g,'&quot;')+'" onchange="editarModulo(\''+pr.id+'\','+idx+',this.value)" style="width:58px;border:none;background:transparent;padding:2px;font-size:11.5px;text-align:center"><button class="btn-del" style="width:18px;height:18px;line-height:1" onclick="eliminarModulo(\''+pr.id+'\','+idx+')">×</button></span>'; });
@@ -425,7 +468,7 @@
     }
     function autonumerarModulos(proyId){
       const pr = proyectos.find(p=>p.id===proyId); if(!pr) return;
-      const n = Number(pr.cant_modulos)||0;
+      const n = Number(prVal(pr,'cant_modulos'))||0;
       if(n<=0){ setEstado("Cargá primero la cantidad de módulos.","err"); return; }
       const mods=[]; for(let i=1;i<=n;i++) mods.push("M"+i);
       guardarModulos(proyId, mods);
@@ -867,6 +910,13 @@
     /* ---- PLANIFICACIÓN ---- */
     function esFeriado(f){ return feriados.some(h => h.fecha === f && !h.se_trabaja); }
     function diasHabiles(a,b){const o=[];if(!a||!b)return o;let d=new Date(a+"T12:00:00");const e=new Date(b+"T12:00:00");while(d<=e){const w=d.getDay();const f=fechaStr(d);if(w!==0&&w!==6&&!esFeriado(f))o.push(f);d=new Date(d.getTime()+86400000);}return o;}
+    // ---- DESPLAZAMIENTO POR REPLANIFICACIÓN ----
+    // Diferencia en días corridos entre dos fechas ISO (b - a). Positivo = b es posterior.
+    function diffDiasCorridos(a,b){ if(!a||!b) return 0; const da=new Date(a+"T12:00:00"), db=new Date(b+"T12:00:00"); return Math.round((db-da)/86400000); }
+    // Suma N días HÁBILES a una fecha ISO (saltea fines de semana y feriados). N puede ser negativo.
+    function sumarDiasHabiles(iso, n){ if(!iso||!n) return iso; let d=new Date(iso+"T12:00:00"); let restantes=Math.abs(n); const paso=n>0?1:-1; while(restantes>0){ d=new Date(d.getTime()+paso*86400000); const w=d.getDay(); const f=fechaStr(d); if(w!==0&&w!==6&&!esFeriado(f)) restantes--; } return fechaStr(d); }
+    // hoy en ISO (zona AR, mediodía para evitar corrimiento)
+    function hoyISO(){ return fechaStr(new Date()); }
 
     function noDispoEn(personaId, fecha) { return dispo.some(n => n.persona_id === personaId && fecha >= n.desde && fecha <= n.hasta); }
     function tipoNoDispoEn(personaId, fecha) { const n = dispo.find(x => x.persona_id === personaId && fecha >= x.desde && fecha <= x.hasta); return n ? n.tipo : null; }
@@ -999,7 +1049,57 @@
       const { error } = await sb.from("planificacion").insert(filas);
       if (error) return setEstado("Error: " + error.message, "err"); cargar();
     }
-    async function editarPl(id, c, v) { const u = {}; u[c] = (v === "" ? null : v); if(c==="proyecto_id"){ u.modulos = null; } const { error } = await sb.from("planificacion").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const b = plani.find(x=>x.id===id); if(b){ b[c]=u[c]; if(c==="proyecto_id") b.modulos=null; } setEstado("\u2713 Guardado.", "ok"); if(c==="fecha_desde"||c==="fecha_hasta"||c==="proyecto_id") renderPlani(); }
+    async function editarPl(id, c, v) {
+      const b = plani.find(x=>x.id===id);
+      const fechaPrevia = b ? b.fecha_desde : null;
+      const u = {}; u[c] = (v === "" ? null : v); if(c==="proyecto_id"){ u.modulos = null; }
+      const { error } = await sb.from("planificacion").update(u).eq("id", id);
+      if (error) return setEstado("Error: " + error.message, "err");
+      if(b){ b[c]=u[c]; if(c==="proyecto_id") b.modulos=null; }
+      setEstado("\u2713 Guardado.", "ok");
+      // Replanificación: si cambió el INICIO de un bloque, ofrecer desplazar las tareas
+      // futuras de las mismas personas la misma cantidad de días hábiles. Pasado congelado.
+      if(c==="fecha_desde" && b && fechaPrevia && v && v!==fechaPrevia){
+        await ofrecerDesplazar(b, fechaPrevia, v);
+      }
+      if(c==="fecha_desde"||c==="fecha_hasta"||c==="proyecto_id") renderPlani();
+    }
+    // Desplaza los bloques futuros de las mismas personas, en días hábiles, según el corrimiento del inicio.
+    async function ofrecerDesplazar(bloque, inicioPrevio, inicioNuevo){
+      const delta = diffDiasCorridos(inicioPrevio, inicioNuevo); // en días corridos
+      // convertir a días hábiles equivalentes para preservar la cadencia laboral
+      const a = delta>0 ? inicioPrevio : inicioNuevo, z = delta>0 ? inicioNuevo : inicioPrevio;
+      let habiles = Math.max(0, diasHabiles(a, z).length - 1);
+      if(delta<0) habiles = -habiles;
+      if(habiles===0) return;
+      const personasBloque = (planiPers[bloque.id] || []);
+      if(!personasBloque.length) return;
+      const hoy = hoyISO();
+      // candidatos: otros bloques que (1) comparten al menos una persona, (2) arrancan después del
+      // inicio PREVIO del bloque editado, y (3) no están en el pasado (inicio >= hoy).
+      const candidatos = plani.filter(x => x.id!==bloque.id && x.fecha_desde
+        && x.fecha_desde > inicioPrevio && x.fecha_desde >= hoy
+        && (planiPers[x.id]||[]).some(pid => personasBloque.includes(pid)));
+      if(!candidatos.length) return;
+      const dir = habiles>0 ? "hacia adelante" : "hacia atrás";
+      const nombres = [...new Set(personasBloque)].map(nombrePersona).join(", ");
+      const msg = "Replanificaste el inicio de «"+(STATIONS[bloque.estacion]?STATIONS[bloque.estacion].label:bloque.estacion)+"» "+Math.abs(habiles)+" día(s) hábil(es) "+dir+".\n\n"
+        + "¿Desplazar también las "+candidatos.length+" tarea(s) futura(s) de "+nombres+" la misma cantidad?\n\n"
+        + "(Solo se mueven tareas de esas personas con inicio de hoy en adelante. El pasado no se toca.)";
+      if(!confirm(msg)) return;
+      let movidos = 0;
+      for(const x of candidatos){
+        const nuevoDesde = sumarDiasHabiles(x.fecha_desde, habiles);
+        const nuevoHasta = x.fecha_hasta ? sumarDiasHabiles(x.fecha_hasta, habiles) : null;
+        // nunca dejar un bloque arrancando antes de hoy por un desplazamiento hacia atrás
+        if(nuevoDesde < hoy){ continue; }
+        const upd = { fecha_desde: nuevoDesde }; if(nuevoHasta) upd.fecha_hasta = nuevoHasta;
+        const { error } = await sb.from("planificacion").update(upd).eq("id", x.id);
+        if(error){ setEstado("Error al desplazar una tarea: "+error.message,"err"); continue; }
+        x.fecha_desde = nuevoDesde; if(nuevoHasta) x.fecha_hasta = nuevoHasta; movidos++;
+      }
+      setEstado("\u2713 "+movidos+" tarea(s) desplazada(s) "+Math.abs(habiles)+" día(s) hábil(es) "+dir+".","ok");
+    }
     async function toggleModuloPl(id, mod, estaba) {
       const b = plani.find(x=>x.id===id); if(!b) return;
       let mods = (b.modulos||"").split(",").map(s=>s.trim()).filter(Boolean);
@@ -1227,8 +1327,8 @@
         if(!f.ausente){ const ch=costoHora(f.persona_real); pp.costoReal += (Number(f.horas_normales)||0)*ch + (Number(f.horas_extra)||0)*ch*2; }
         if(f.es_extra) pp.tieneExtra = true;
       });
-      // presupuesto MO por proyecto (de la tabla proyectos)
-      proyectos.forEach(p=>{ const pp = porProyecto[p.id]; if(pp) pp.presup = Number(p.presupuesto_mo)||0; });
+      // presupuesto MO por proyecto (de la tabla proyectos): total = La Huella + Montaje
+      proyectos.forEach(p=>{ const pp = porProyecto[p.id]; if(pp){ pp.presup = presupMO(p); pp.presupHuella = presupHuella(p); pp.presupMontaje = presupMontaje(p); } });
       // fin planificado por proyecto (desde plani)
       plani.forEach(b=>{
         const dP = diasHabiles(b.fecha_desde, b.fecha_hasta);
@@ -1463,7 +1563,47 @@
       f.modulos_real = nuevo; setEstado("\u2713 Guardado.","ok"); renderDetalle();
     }
     async function cambiarEstDet(id, est) { const sub = STATIONS[est].subs[0]; const { error } = await sb.from("detalle_diario").update({ estacion_real: est, subtarea_real: sub }).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const f = detalle.find(x=>x.id===id); if(f){f.estacion_real=est;f.subtarea_real=sub;} setEstado("\u2713 Guardado.", "ok"); renderDetalle(); }
-    async function toggleAusente(id, val) { const u = val ? { ausente: true, horas_normales: 0, horas_extra: 0 } : { ausente: false, horas_normales: 8 }; const { error } = await sb.from("detalle_diario").update(u).eq("id", id); if (error) return setEstado("Error: " + error.message, "err"); const f = detalle.find(x=>x.id===id); if(f) Object.assign(f,u); setEstado("\u2713 Guardado.", "ok"); renderDetalle(); }
+    async function toggleAusente(id, val) {
+      const u = val ? { ausente: true, horas_normales: 0, horas_extra: 0 } : { ausente: false, horas_normales: 8 };
+      const { error } = await sb.from("detalle_diario").update(u).eq("id", id);
+      if (error) return setEstado("Error: " + error.message, "err");
+      const f = detalle.find(x=>x.id===id); if(f) Object.assign(f,u);
+      setEstado("\u2713 Guardado.", "ok");
+      // Replanificación en el detalle: si marcaste ausente, la tarea de esa persona no se hizo ese día.
+      // Ofrecer correr sus días futuros (misma persona, mismo proyecto+estación) un día hábil hacia adelante.
+      if(val && f && !f.es_extra){ await ofrecerCorrerDetalle(f); }
+      renderDetalle();
+    }
+    // Empuja un día hábil hacia adelante los días futuros de la misma persona en el mismo proyecto+estación.
+    async function ofrecerCorrerDetalle(filaAusente){
+      const hoy = hoyISO();
+      // candidatos: filas de la MISMA persona, MISMO proyecto y MISMA estación, con fecha POSTERIOR
+      // a la ausencia y de hoy en adelante (pasado congelado), no ausentes y no día extra.
+      const cand = detalle.filter(x => x.id!==filaAusente.id
+        && x.persona_real===filaAusente.persona_real
+        && x.proyecto_id===filaAusente.proyecto_id
+        && x.estacion_real===filaAusente.estacion_real
+        && !x.ausente && !x.es_extra
+        && x.fecha > filaAusente.fecha && x.fecha >= hoy)
+        .sort((a,b)=> a.fecha<b.fecha?-1:1);
+      if(!cand.length) return;
+      const msg = nombrePersona(filaAusente.persona_real)+" quedó ausente el "+dmy(filaAusente.fecha)+" en "+nombreEstacion(filaAusente.estacion_real)+".\n\n"
+        + "¿Correr sus "+cand.length+" día(s) futuro(s) de esta tarea un día hábil hacia adelante?\n\n"
+        + "(Solo días de esta persona en esta tarea, de hoy en adelante. El pasado no se toca.)";
+      if(!confirm(msg)) return;
+      // Recalcular fechas hábiles: tomar el bloque de días reales y desplazar cada uno un hábil adelante.
+      // Procesar de la última a la primera para no colisionar fechas.
+      let ok=0;
+      for(let i=cand.length-1;i>=0;i--){
+        const x=cand[i];
+        const nueva = sumarDiasHabiles(x.fecha, 1);
+        const { error } = await sb.from("detalle_diario").update({ fecha: nueva }).eq("id", x.id);
+        if(error){ setEstado("Error al correr un día: "+error.message,"err"); continue; }
+        x.fecha = nueva; ok++;
+      }
+      detalle.sort((a,b)=> a.fecha<b.fecha?-1:a.fecha>b.fecha?1:0);
+      setEstado("\u2713 "+ok+" día(s) corrido(s) un día hábil hacia adelante.","ok");
+    }
 
     /* ---- DÍA EXTRA (trabajo real no planificado) ---- */
     function cerrarDiaExtra(){ const ov=document.getElementById("ovExtra"); if(ov) ov.remove(); }
@@ -1539,6 +1679,12 @@
     function nombreEstacion(k){ if(k===SUP_MARK) return SUP_LABEL; return STATIONS[k] ? STATIONS[k].label : k; }
     function estBg(k){ if(k===SUP_MARK) return SUP_BG; return STATIONS[k] ? STATIONS[k].bg : "#eee"; }
     function estColor(k){ if(k===SUP_MARK) return SUP_COLOR; return STATIONS[k] ? STATIONS[k].color : "#555"; }
+    // Presupuesto: desdoblado en La Huella (todas las estaciones menos Montaje) y Montaje.
+    function presupHuella(pr){ return Number(pr && pr.presupuesto_mo_huella)||0; }
+    function presupMontaje(pr){ return Number(pr && pr.presupuesto_mo_montaje)||0; }
+    function presupMO(pr){ return presupHuella(pr)+presupMontaje(pr); }
+    // ¿esta estación va contra el presupuesto de Montaje?
+    function esMontaje(estKey){ return estKey==="montaje"; }
     function proyDeDetalle(f){ return f.proyecto_id; }
     function renderDash() {
       const proyVig = proyectos.filter(p => p.estado !== "Cerrado");
@@ -1548,7 +1694,7 @@
       let jornal=0, extra=0, ausencias=0, hsExtra=0; const usados=new Set();
       det.forEach(f => { if (f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*2; hsExtra+=(Number(f.horas_extra)||0); if(f.persona_real)usados.add(f.persona_real); });
       const real = jornal+extra;
-      const presup = (dashProy ? proyectos.filter(p=>p.id===dashProy) : proyectos).reduce((s,p)=>s+(Number(p.presupuesto_mo)||0),0);
+      const presup = (dashProy ? proyectos.filter(p=>p.id===dashProy) : proyectos).reduce((s,p)=>s+presupMO(p),0);
       // costo por estación
       const porEst = {};
       det.forEach(f => { if(f.ausente)return; const k=f.estacion_real; if(!porEst[k])porEst[k]={real:0,hs:0}; const ch=costoHora(f.persona_real); porEst[k].real+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*2; porEst[k].hs+=(Number(f.horas_normales)||0)+(Number(f.horas_extra)||0); });
@@ -1602,16 +1748,41 @@
     /* ---- GANTT ---- */
     function renderGantt() {
       if(!plani.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">No hay planificación cargada.</p>'; return; }
-      // rango de fechas total
-      const todas=[]; plani.forEach(b=>{ diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>todas.push(d)); if(b.fecha_real_desde&&b.fecha_real_hasta)diasHabiles(b.fecha_real_desde,b.fecha_real_hasta).forEach(d=>todas.push(d)); });
+      // Acumular por ESTACIÓN (una sola fila por estación). Supervisor queda EXCLUIDO.
+      // Plan: de plani (todos los bloques de esa estación). Real: del detalle (días trabajados).
+      const porEst = {}; // estKey -> { planByDay:{fecha:Set(proyId)}, realByDay:{fecha:Set(proyId)} }
+      const ensure = (k)=>{ if(!porEst[k]) porEst[k]={planByDay:{}, realByDay:{}}; return porEst[k]; };
+      plani.forEach(b=>{
+        if(b.estacion===SUP_MARK || !STATIONS[b.estacion]) return;
+        const e=ensure(b.estacion);
+        diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ (e.planByDay[d]=e.planByDay[d]||new Set()).add(b.proyecto_id); });
+      });
+      detalle.forEach(f=>{
+        if(f.ausente) return; if(f.estacion_real===SUP_MARK || !STATIONS[f.estacion_real]) return;
+        const e=ensure(f.estacion_real);
+        (e.realByDay[f.fecha]=e.realByDay[f.fecha]||new Set()).add(f.proyecto_id);
+      });
+      // rango de fechas total (plan + real)
+      const todas=[]; Object.values(porEst).forEach(e=>{ Object.keys(e.planByDay).forEach(d=>todas.push(d)); Object.keys(e.realByDay).forEach(d=>todas.push(d)); });
       const fechas=[...new Set(todas)].sort();
       if(!fechas.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">Las estaciones no tienen fechas cargadas.</p>'; return; }
-      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0"><span style="display:inline-block;width:14px;height:9px;background:#AEB6C2;border:1px solid #8C95A3;border-radius:2px;vertical-align:middle"></span> planificado &nbsp; <span style="display:inline-block;width:14px;height:9px;background:#185FA5;border-radius:2px;vertical-align:middle"></span> real (fechas reales del detalle).</p>'+botonesExport("gantt-print","gantt")+'</div><div id="gantt-print"><div style="overflow-x:auto"><table style="min-width:'+(200+fechas.length*42)+'px;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8;z-index:6">Estación</th>';
-      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:40px">'+dm(d)+'</th>');
+      // orden de estaciones: el orden canónico de STKEYS, solo las que tienen datos
+      const estaciones = STKEYS.filter(k=>porEst[k]);
+      const proyAbbr=(pid)=>{ const p=proyectos.find(x=>x.id===pid); if(!p) return "?"; return (p.codigo||p.nombre||"?").toString().slice(0,8); };
+      const proyTitle=(set)=>[...set].map(nombreProy).join(", ");
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0"><span style="display:inline-block;width:14px;height:9px;background:#AEB6C2;border:1px solid #8C95A3;border-radius:2px;vertical-align:middle"></span> planificado &nbsp; <span style="display:inline-block;width:14px;height:9px;background:#185FA5;border-radius:2px;vertical-align:middle"></span> real (días trabajados del detalle). Cada barra muestra el proyecto.</p>'+botonesExport("gantt-print","gantt")+'</div><div id="gantt-print"><div style="overflow-x:auto"><table style="min-width:'+(200+fechas.length*48)+'px;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8;z-index:6">Estación</th>';
+      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:46px">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
-      plani.forEach(b=>{ const st=STATIONS[b.estacion]; if(!st)return; const dP=diasHabiles(b.fecha_desde,b.fecha_hasta); const dR=(b.fecha_real_desde&&b.fecha_real_hasta)?diasHabiles(b.fecha_real_desde,b.fecha_real_hasta):[];
-        h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+st.label+'<div style="font-size:9.5px;color:#A8A69E">'+(b.subtarea||'')+'</div></td>';
-        fechas.forEach(d=>{ const oP=dP.includes(d), oR=dR.includes(d); h+='<td style="padding:3px 2px;vertical-align:middle">'+(oP?'<div style="background:#AEB6C2;border:1px solid #8C95A3;height:9px;border-radius:2px;margin-bottom:2px" title="Planificado"></div>':'')+(oR?'<div style="background:'+st.color+';height:9px;border-radius:2px" title="Real"></div>':'')+'</td>'; });
+      estaciones.forEach(k=>{
+        const st=STATIONS[k]; const e=porEst[k];
+        h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+st.color+';vertical-align:middle;margin-right:6px"></span>'+st.label+'</td>';
+        fechas.forEach(d=>{
+          const pSet=e.planByDay[d], rSet=e.realByDay[d];
+          let cell='';
+          if(pSet){ cell+='<div style="background:#AEB6C2;border:1px solid #8C95A3;height:13px;border-radius:2px;margin-bottom:2px;font-size:8px;line-height:12px;color:#33373D;text-align:center;overflow:hidden" title="Planificado · '+proyTitle(pSet)+'">'+proyAbbr([...pSet][0])+'</div>'; }
+          if(rSet){ cell+='<div style="background:'+st.color+';height:13px;border-radius:2px;font-size:8px;line-height:13px;color:#fff;text-align:center;overflow:hidden" title="Real · '+proyTitle(rSet)+'">'+proyAbbr([...rSet][0])+'</div>'; }
+          h+='<td style="padding:3px 2px;vertical-align:middle">'+cell+'</td>';
+        });
         h+='</tr>';
       });
       h+='</tbody></table></div></div>';
@@ -1689,13 +1860,16 @@
       const planDur=planDias.length, realDur=realDias.length;
       const desvDias=realDur-planDur;
 
-      // --- COSTOS ---
-      const presup=Number(pr.presupuesto_mo)||0;
+      // --- COSTOS (desdoblados: La Huella vs Montaje) ---
+      const presupH = presupHuella(pr), presupM = presupMontaje(pr), presup = presupH + presupM;
       let jornal=0, extra=0, hsExtra=0, ausencias=0;
-      det.forEach(f=>{ if(f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*2; hsExtra+=(Number(f.horas_extra)||0); });
+      let realH=0, realM=0; // costo real contra cada presupuesto
+      det.forEach(f=>{ if(f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real); const cn=(Number(f.horas_normales)||0)*ch; const ce=(Number(f.horas_extra)||0)*ch*2; jornal+=cn; extra+=ce; hsExtra+=(Number(f.horas_extra)||0); if(esMontaje(f.estacion_real)) realM+=cn+ce; else realH+=cn+ce; });
       const real=jornal+extra;
       const desvCosto=real-presup;
       const desvPct=presup?(desvCosto/presup*100):0;
+      const desvH=realH-presupH, desvM=realM-presupM;
+      const pctH=presupH?(desvH/presupH*100):0, pctM=presupM?(desvM/presupM*100):0;
 
       // --- POR ESTACIÓN ---
       const est={};
@@ -1734,8 +1908,14 @@
       h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px">Jornales (horas normales)</td><td style="text-align:right;padding:7px 10px">'+fmt(jornal)+'</td></tr>';
       h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px">Horas extra ('+hsExtra+'h, x2)</td><td style="text-align:right;padding:7px 10px;color:#BA7517">'+fmt(extra)+'</td></tr>';
       h+='<tr style="border-top:1px solid #F1EFE8;font-weight:600"><td style="padding:7px 10px">Costo real total</td><td style="text-align:right;padding:7px 10px">'+fmt(real)+'</td></tr>';
-      h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px">Presupuesto MO</td><td style="text-align:right;padding:7px 10px">'+(presup?fmt(presup):"s/dato")+'</td></tr>';
-      h+='<tr style="border-top:1px solid #F1EFE8;background:'+(desvCosto>0?'#FCEBEB':'#F1F8EC')+';font-weight:600"><td style="padding:7px 10px">Desvío de costo</td><td style="text-align:right;padding:7px 10px;color:'+(desvCosto>0?'#A32D2D':'#3B6D11')+'">'+(desvCosto>=0?"+":"")+fmt(desvCosto)+(presup?' ('+(desvPct>=0?"+":"")+desvPct.toFixed(0)+'%)':'')+'</td></tr>';
+      h+='</tbody></table>';
+
+      // desglose de presupuesto por destino (La Huella vs Montaje)
+      h+='<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:8px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:7px 10px">Presupuesto</th><th style="text-align:right;padding:7px 10px">Presupuesto MO</th><th style="text-align:right;padding:7px 10px">Costo real</th><th style="text-align:right;padding:7px 10px">Desvío</th></tr></thead><tbody>';
+      const filaPres=(lbl,pb,rc,dv,pct)=>'<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px">'+lbl+'</td><td style="text-align:right;padding:7px 10px">'+(pb?fmt(pb):"s/dato")+'</td><td style="text-align:right;padding:7px 10px">'+fmt(rc)+'</td><td style="text-align:right;padding:7px 10px;color:'+(dv>0?'#A32D2D':'#3B6D11')+'">'+(dv>=0?"+":"")+fmt(dv)+(pb?' ('+(pct>=0?"+":"")+pct.toFixed(0)+'%)':'')+'</td></tr>';
+      h+=filaPres("La Huella (todas las estaciones menos Montaje)",presupH,realH,desvH,pctH);
+      h+=filaPres("Montaje (estación Montaje)",presupM,realM,desvM,pctM);
+      h+='<tr style="border-top:1px solid #F1EFE8;background:'+(desvCosto>0?'#FCEBEB':'#F1F8EC')+';font-weight:600"><td style="padding:7px 10px">Total</td><td style="text-align:right;padding:7px 10px">'+(presup?fmt(presup):"s/dato")+'</td><td style="text-align:right;padding:7px 10px">'+fmt(real)+'</td><td style="text-align:right;padding:7px 10px;color:'+(desvCosto>0?'#A32D2D':'#3B6D11')+'">'+(desvCosto>=0?"+":"")+fmt(desvCosto)+(presup?' ('+(desvPct>=0?"+":"")+desvPct.toFixed(0)+'%)':'')+'</td></tr>';
       h+='</tbody></table>';
 
       // desglose por estación
