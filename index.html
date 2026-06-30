@@ -387,7 +387,7 @@
     let draftPr = {};
     function prVal(pr, campo){ const d=draftPr[pr.id]; if(d && Object.prototype.hasOwnProperty.call(d,campo)) return d[campo]; return pr[campo]; }
     function setDraftPr(id, campo, valor){ if(!draftPr[id]) draftPr[id]={}; draftPr[id][campo]=valor; marcarSucio(id); }
-    function marcarSucio(id){ const badge=document.getElementById("pr-dirty-"+id); if(badge) badge.style.display="inline-block"; const bar=document.getElementById("pr-savebar"); if(bar) bar.style.display="flex"; }
+    function marcarSucio(id){ const badge=document.getElementById("pr-dirty-"+id); if(badge) badge.style.display="inline-block"; const btn=document.getElementById("pr-savebtn"); if(btn){ btn.style.background="#185FA5"; btn.style.cursor="pointer"; } const msg=document.getElementById("pr-savebar-msg"); if(msg){ msg.textContent="Tenés cambios sin guardar."; msg.style.color="#BA7517"; } }
     function hayCambiosPr(){ return Object.keys(draftPr).some(id => draftPr[id] && Object.keys(draftPr[id]).length); }
     function renderProyectos() {
       let h = '';
@@ -410,11 +410,12 @@
         + editorModulos(pr) + '</div></div>';
       });
       h += '<button class="btn-add" onclick="agregarPr()">+ Agregar proyecto</button>';
-      // Barra de guardado fija
-      h += '<div id="pr-savebar" style="display:'+(hayCambiosPr()?'flex':'none')+';position:sticky;bottom:0;gap:10px;align-items:center;justify-content:flex-end;background:#FFFDF7;border:1px solid #F0E6CE;border-radius:12px;padding:12px 16px;margin-top:16px;box-shadow:0 -2px 12px rgba(0,0,0,0.06)">'
-        + '<span style="font-size:12.5px;color:#BA7517;margin-right:auto">Tenés cambios sin guardar.</span>'
+      // Barra de guardado SIEMPRE visible en la solapa Proyectos.
+      const sucio = hayCambiosPr();
+      h += '<div id="pr-savebar" style="display:flex;position:sticky;bottom:0;gap:10px;align-items:center;justify-content:flex-end;background:#FFFDF7;border:1px solid #F0E6CE;border-radius:12px;padding:12px 16px;margin-top:16px;box-shadow:0 -2px 12px rgba(0,0,0,0.06)">'
+        + '<span id="pr-savebar-msg" style="font-size:12.5px;margin-right:auto;color:'+(sucio?'#BA7517':'#A8A69E')+'">'+(sucio?'Tenés cambios sin guardar.':'Editá un campo y después tocá «Guardar cambios».')+'</span>'
         + '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A" onclick="descartarCambiosPr()">Descartar</button>'
-        + '<button class="btn btn-primary" style="background:#185FA5" onclick="guardarCambiosPr()">Guardar cambios</button>'
+        + '<button id="pr-savebtn" class="btn btn-primary" style="background:'+(sucio?'#185FA5':'#A8A69E')+';cursor:'+(sucio?'pointer':'not-allowed')+'" onclick="guardarCambiosPr()">Guardar cambios</button>'
         + '</div>';
       contenido.innerHTML = h;
     }
@@ -1768,10 +1769,10 @@
       if(!fechas.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">Las estaciones no tienen fechas cargadas.</p>'; return; }
       // orden de estaciones: el orden canónico de STKEYS, solo las que tienen datos
       const estaciones = STKEYS.filter(k=>porEst[k]);
-      const proyAbbr=(pid)=>{ const p=proyectos.find(x=>x.id===pid); if(!p) return "?"; return (p.codigo||p.nombre||"?").toString().slice(0,8); };
+      const proyAbbr=(pid)=>{ const p=proyectos.find(x=>x.id===pid); if(!p) return "?"; return (p.codigo||p.nombre||"?").toString().slice(0,10); };
       const proyTitle=(set)=>[...set].map(nombreProy).join(", ");
-      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0"><span style="display:inline-block;width:14px;height:9px;background:#AEB6C2;border:1px solid #8C95A3;border-radius:2px;vertical-align:middle"></span> planificado &nbsp; <span style="display:inline-block;width:14px;height:9px;background:#185FA5;border-radius:2px;vertical-align:middle"></span> real (días trabajados del detalle). Cada barra muestra el proyecto.</p>'+botonesExport("gantt-print","gantt")+'</div><div id="gantt-print"><div style="overflow-x:auto"><table style="min-width:'+(200+fechas.length*48)+'px;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8;z-index:6">Estación</th>';
-      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:46px">'+dm(d)+'</th>');
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0"><span style="display:inline-block;width:14px;height:11px;background:#AEB6C2;border:1px solid #8C95A3;border-radius:2px;vertical-align:middle"></span> planificado &nbsp; <span style="display:inline-block;width:14px;height:11px;background:#185FA5;border-radius:2px;vertical-align:middle"></span> real (días trabajados del detalle). Cada barra muestra el código del proyecto.</p>'+botonesExport("gantt-print","gantt")+'</div><div id="gantt-print"><div style="overflow-x:auto"><table style="min-width:'+(200+fechas.length*58)+'px;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8;z-index:6">Estación</th>';
+      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:56px">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
       estaciones.forEach(k=>{
         const st=STATIONS[k]; const e=porEst[k];
@@ -1779,8 +1780,8 @@
         fechas.forEach(d=>{
           const pSet=e.planByDay[d], rSet=e.realByDay[d];
           let cell='';
-          if(pSet){ cell+='<div style="background:#AEB6C2;border:1px solid #8C95A3;height:13px;border-radius:2px;margin-bottom:2px;font-size:8px;line-height:12px;color:#33373D;text-align:center;overflow:hidden" title="Planificado · '+proyTitle(pSet)+'">'+proyAbbr([...pSet][0])+'</div>'; }
-          if(rSet){ cell+='<div style="background:'+st.color+';height:13px;border-radius:2px;font-size:8px;line-height:13px;color:#fff;text-align:center;overflow:hidden" title="Real · '+proyTitle(rSet)+'">'+proyAbbr([...rSet][0])+'</div>'; }
+          if(pSet){ cell+='<div style="background:#AEB6C2;border:1px solid #8C95A3;height:17px;border-radius:3px;margin-bottom:2px;font-size:9.5px;font-weight:600;line-height:16px;color:#33373D;text-align:center;overflow:hidden;white-space:nowrap" title="Planificado · '+proyTitle(pSet)+'">'+proyAbbr([...pSet][0])+'</div>'; }
+          if(rSet){ cell+='<div style="background:#185FA5;height:17px;border-radius:3px;font-size:9.5px;font-weight:600;line-height:17px;color:#fff;text-align:center;overflow:hidden;white-space:nowrap" title="Real · '+proyTitle(rSet)+'">'+proyAbbr([...rSet][0])+'</div>'; }
           h+='<td style="padding:3px 2px;vertical-align:middle">'+cell+'</td>';
         });
         h+='</tr>';
