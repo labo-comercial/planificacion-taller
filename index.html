@@ -208,6 +208,10 @@
     // Histórico de valor-hora y especialidad por mes (YYYY-MM).
     // valorHoraHist[persona_id] = { 'YYYY-MM': valor, ... } (ordenado al consultar)
     let valorHoraHist = {}, especialidadHist = {};
+    // Personal de La Huella (excluye los de sede Neuquén). Sin sede = La Huella por compatibilidad.
+    function personasHuella(){ return personas.filter(p=> (p.sede||'la_huella')!=='neuquen'); }
+    function personasDe(sede){ return personas.filter(p=> (p.sede||'la_huella')===sede); }
+    function esNeuquen(pid){ const p=personas.find(x=>x.id===pid); return p && p.sede==='neuquen'; }
     let detalleDesde = null;   // filtro de visualización en Detalle diario (null = aún sin fijar)
     let detalleVerTodo = false;
     let planiDesde = null;     // filtro de visualización en Planificación General (null = aún sin fijar)
@@ -971,7 +975,7 @@
 
     /* ---- DISPONIBILIDAD ---- */
     function renderDispo() {
-      const oP=(s)=>personas.map(p=>'<option value="'+p.id+'" '+(p.id===s?'selected':'')+'>'+p.nombre+'</option>').join('');
+      const oP=(s)=>personasHuella().map(p=>'<option value="'+p.id+'" '+(p.id===s?'selected':'')+'>'+p.nombre+'</option>').join('');
       const oT=(s)=>TIPOS.map(t=>'<option '+(t===s?'selected':'')+'>'+t+'</option>').join('');
       let h='<p style="font-size:13px;color:#888780;margin-top:0">Períodos en que una persona no está disponible.</p><table><thead><tr><th>Persona</th><th>Tipo</th><th>Desde</th><th>Hasta</th><th></th></tr></thead><tbody>';
       if(!dispo.length) h+='<tr><td colspan="5" style="color:#A8A69E;padding:14px">Sin períodos cargados.</td></tr>';
@@ -1163,7 +1167,7 @@
           + '<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Tareas (tildá una o varias):</div><div class="chips">'+st.subs.map(s=>{const on=subsSel.includes(s);return '<button class="chip'+(on?' on':'')+'" onclick="toggleSub(\''+b.id+'\',\''+s.replace(/'/g,"\\\\'")+'\','+(on?'true':'false')+')">'+s+'</button>';}).join('')+'</div></div>'
           + (function(){ const mods=modulosDeProy(b.proyecto_id); const sel=(b.modulos||"").split(",").map(s=>s.trim()).filter(Boolean); let m='<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Módulos (opcional, tildá uno o varios):</div><div class="chips">'; if(!mods.length){ m+='<span style="font-size:11px;color:#A8A69E">El proyecto no tiene módulos definidos (cargalos en Proyectos).</span>'; } else { m+=mods.map(md=>{const on=sel.includes(md);return '<button class="chip'+(on?' on':'')+'" onclick="toggleModuloPl(\''+b.id+'\',\''+md.replace(/'/g,"\\\\'")+'\','+(on?'true':'false')+')">'+md+'</button>';}).join(''); } return m+'</div></div>'; })()
           + '<div class="pl-row"><input type="date" value="'+(b.fecha_desde||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(b.fecha_hasta||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+diasHabiles(b.fecha_desde,b.fecha_hasta).length+' días háb.</span></div>'
-          + '<div class="chips">'+personas.map(p=>{
+          + '<div class="chips">'+personasHuella().map(p=>{
               const on=gente.includes(p.id);
               const dias=diasHabiles(b.fecha_desde,b.fecha_hasta);
               const diasNoDispo=dias.filter(d=>noDispoEn(p.id,d));
@@ -1543,7 +1547,7 @@
       const horasDia = {};
       detalle.forEach(f => { if (f.ausente) return; if (f.estacion_real === SUP_MARK) return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
       const exceso = (f) => !f.ausente && f.estacion_real !== SUP_MARK && horasDia[f.persona_real + "|" + f.fecha] > 8;
-      const opcPersona = (sel) => personas.map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
+      const opcPersona = (sel) => personasHuella().map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
       const opcEst = (sel) => STKEYS.map(k => '<option value="'+k+'" '+(k===sel?'selected':'')+'>'+STATIONS[k].label+'</option>').join('');
       const opcSub = (est, sel) => { const base = STATIONS[est]?STATIONS[est].subs.slice():[]; if(sel && !base.includes(sel)) base.unshift(sel); return base.map(s => '<option '+(s===sel?'selected':'')+'>'+s+'</option>').join(''); };
       const opcProy = (sel) => proyectos.map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
@@ -1774,7 +1778,7 @@
       cerrarDiaExtra();
       const hoy = fechaStr(new Date());
       const optProy = proyectos.map(p=>'<option value="'+p.id+'">'+p.nombre+'</option>').join('');
-      const optPers = personas.map(p=>'<option value="'+p.id+'">'+p.nombre+(p.tipo==='Contratista'?' (contratista)':'')+'</option>').join('');
+      const optPers = personasHuella().map(p=>'<option value="'+p.id+'">'+p.nombre+(p.tipo==='Contratista'?' (contratista)':'')+'</option>').join('');
       const optEst  = STKEYS.map(k=>'<option value="'+k+'">'+STATIONS[k].label+'</option>').join('');
       const ov = document.createElement("div");
       ov.id = "ovExtra";
@@ -2026,7 +2030,7 @@
           + card("Cobertura próx. 5 días", sinCubrir===0?"OK":sinCubrir+" sin cubrir", sinCubrir===0?"todo el plan cubierto":"días-estación sin gente", sinCubrir===0?'#3B6D11':'#A32D2D', "Combinaciones estación-proyecto-día planificadas para los próximos 5 días hábiles que todavía no tienen ninguna persona asignada en el detalle.")
           + card("Horas extra", hsExtra+" h", "$"+Math.round(extra).toLocaleString("es-AR")+" en extra", hsExtra>0?'#BA7517':null, "Suma de horas extra de todas las jornadas del período visible. El monto es esas horas valorizadas al doble del valor-hora.")
           + card("Ausencias", ausencias, "jornadas no trabajadas", ausencias>0?'#A32D2D':'#3B6D11', "Cantidad de jornadas del detalle marcadas como ausente en el período visible.")
-          + card("Personal directo ocupado hoy", (function(){ const s=new Set(); det.forEach(f=>{ if(f.fecha!==hoy||f.ausente)return; const pp=personas.find(x=>x.id===f.persona_real); if(pp&&pp.tipo!=="Contratista") s.add(f.persona_real); }); return s.size; })()+"/"+personas.filter(p=>p.tipo!=='Contratista').length, "con tarea hoy / plantel directo", null, "Personas directas (no contratistas) con al menos una jornada no ausente con fecha de hoy, sobre el total de personas directas cargadas.")
+          + card("Personal directo ocupado hoy", (function(){ const s=new Set(); det.forEach(f=>{ if(f.fecha!==hoy||f.ausente)return; const pp=personas.find(x=>x.id===f.persona_real); if(pp&&pp.tipo!=="Contratista") s.add(f.persona_real); }); return s.size; })()+"/"+personasHuella().filter(p=>p.tipo!=='Contratista').length, "con tarea hoy / plantel directo", null, "Personas directas (no contratistas) con al menos una jornada no ausente con fecha de hoy, sobre el total de personas directas cargadas.")
           + '</div>';
         // agenda
         const ag=(titulo,fch,lista)=>{ let x='<div style="flex:1;min-width:260px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">'+titulo+(fch?' ('+dm(fch)+')':'')+'</div>'; if(!lista.length)x+='<div style="font-size:12.5px;color:#A8A69E">Sin tareas.</div>'; lista.forEach((t,i)=>{x+='<div style="padding:6px 0;border-top:'+(i?'1px solid #F1EFE8':'none')+';font-size:12.5px"><span style="background:'+estBg(t.est)+';color:'+estColor(t.est)+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(t.est)+'</span> <span style="color:#888780">'+t.sub+'</span><div style="font-size:11px;color:#A8A69E;margin-top:2px">'+t.g.join(", ")+'</div></div>';}); return x+'</div>'; };
@@ -2130,7 +2134,7 @@
       h+='<label style="font-size:11.5px;color:#888780">Fecha<br><select onchange="setParte(\'fecha\',this.value)" style="margin-top:3px">'+(fechas.length?fechas.map(d=>'<option value="'+d+'" '+(d===fSel?'selected':'')+'>'+dmy(d)+'</option>').join(''):'<option>—</option>')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Proyecto<br><select onchange="setParte(\'proy\',this.value)" style="margin-top:3px"><option value="">Todos</option>'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===parteProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Estación<br><select onchange="setParte(\'est\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+STKEYS.map(k=>'<option value="'+k+'" '+(k===parteEst?'selected':'')+'>'+STATIONS[k].label+'</option>').join('')+'</select></label>';
-      h+='<label style="font-size:11.5px;color:#888780">Persona<br><select onchange="setParte(\'pers\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+personas.map(p=>'<option value="'+p.id+'" '+(p.id===partePersona?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
+      h+='<label style="font-size:11.5px;color:#888780">Persona<br><select onchange="setParte(\'pers\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+personasHuella().map(p=>'<option value="'+p.id+'" '+(p.id===partePersona?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
       h+='<button class="btn" style="background:#25D366;color:#fff" onclick="copiarParte()">Copiar para WhatsApp</button>';
       h+=botonesExport("parteBox","parte_diario");
       h+='</div>';
