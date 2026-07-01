@@ -1922,6 +1922,15 @@
       bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ if(d<=hoyISO()) diasPlanHastaHoy.add(b.estacion+"|"+b.proyecto_id+"|"+d); }));
       det.forEach(f=>{ if(!f.ausente && f.estacion_real!==SUP_MARK) diasRealSet.add(f.estacion_real+"|"+f.proyecto_id+"|"+f.fecha); });
       const spi = diasPlanHastaHoy.size>0 ? (diasRealSet.size/diasPlanHastaHoy.size) : null;
+      // --- Completitud del detalle: de los DÍAS HÁBILES planificados hasta hoy, cuántos tienen
+      // al menos una fila cargada (trabajada o ausente). Mide cuán confiables son CPI/SPI/PPC.
+      let diasEsperados=new Set(), diasConRegistro=new Set();
+      bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ if(d<=hoyISO()) diasEsperados.add(b.proyecto_id+"|"+d); }));
+      det.forEach(f=>{ if(f.fecha<=hoyISO()) diasConRegistro.add(f.proyecto_id+"|"+f.fecha); });
+      const espN = diasEsperados.size;
+      const cargadosN = [...diasEsperados].filter(k=>diasConRegistro.has(k)).length;
+      const completPct = espN>0 ? (cargadosN/espN*100) : null;
+      const diasFaltantes = espN - cargadosN;
       const idxColor=(v)=> v==null?'#888780': v>=0.98?'#3B6D11': v>=0.90?'#BA7517':'#A32D2D';
       const idxTxt=(v)=> v==null?'s/dato': v.toFixed(2);
       // --- Indicadores adicionales ---
@@ -1979,6 +1988,18 @@
         + idxCard({abrev:"CPI",full:"Cost Performance Index (Índice de Desempeño de Costo)",title:"Cost Performance Index"},"Eficiencia de costo",cpi,"Costo planificado ÷ costo real. <b>1,00 = en presupuesto</b>; mayor a 1 = gastás menos de lo previsto; menor a 1 = sobrecosto.")
         + idxCard({abrev:"SPI",full:"Schedule Performance Index (Índice de Desempeño de Cronograma)",title:"Schedule Performance Index"},"Cumplimiento de plazo",spi,"Avance real ÷ avance planificado a hoy. <b>1,00 = al día</b>; mayor a 1 = adelantado; menor a 1 = atrasado.")
         + '</div>';
+      // Banner de completitud del detalle (contextualiza CPI/SPI/PPC)
+      if(completPct!=null){
+        const bCol = completPct>=99?'#3B6D11': completPct>=90?'#BA7517':'#A32D2D';
+        const bBg  = completPct>=99?'#F1F8EC': completPct>=90?'#FCF4E6':'#FCEBEB';
+        const bMsg = completPct>=99
+          ? 'Detalle completo hasta hoy: los indicadores son confiables.'
+          : 'Detalle cargado al '+completPct.toFixed(0)+'% ('+diasFaltantes+' día(s)-proyecto planificado(s) hasta hoy sin ningún registro). Los indicadores de arriba pueden estar subestimados hasta que completes esas jornadas.';
+        h+='<div style="background:'+bBg+';border:1px solid '+bCol+'33;border-left:4px solid '+bCol+';border-radius:10px;padding:11px 14px;margin-bottom:16px;font-size:12.5px;color:'+bCol+'">'
+          + '<b>Completitud del detalle diario: '+completPct.toFixed(0)+'%</b> — '+bMsg
+          + '<div style="font-size:10.5px;color:#A8A69E;margin-top:4px">Cómo se calcula: días-proyecto planificados desde el inicio hasta hoy que tienen al menos una fila cargada en el detalle (trabajada o ausente) ÷ total de días-proyecto planificados hasta hoy.</div>'
+          + '</div>';
+      }
       if(vistaDash==='pm'){
         const usoPct = presup ? (real/presup*100) : 0;
         const fmtAR=(n)=>'$'+Math.round(n).toLocaleString("es-AR");
