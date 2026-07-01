@@ -397,7 +397,7 @@
         const cc = esContr?'<span style="font-size:11px;color:#A8A69E;font-style:italic">s/valor (Compras)</span>':'<input type="number" value="'+(p.costo_hora||0)+'" onchange="editarP(\''+p.id+'\',\'costo_hora\',Number(this.value))" style="text-align:right" title="Valor base / fallback cuando un mes no tiene valor propio">';
         const abierto = !!personalAbierto[p.id];
         const nMeses = Object.keys(valorHoraHist[p.id]||{}).length;
-        h += '<tr><td style="width:90px"><input value="'+(p.legajo!=null?String(p.legajo).replace(/"/g,'&quot;'):'')+'" placeholder="—" onchange="editarP(\''+p.id+'\',\'legajo\',this.value)" style="width:100%"></td><td><input value="'+(p.nombre||'')+'" onchange="editarP(\''+p.id+'\',\'nombre\',this.value)"></td><td><input value="'+(p.especialidad||'')+'" onchange="editarP(\''+p.id+'\',\'especialidad\',this.value)"></td><td style="width:120px"><select onchange="editarP(\''+p.id+'\',\'tipo\',this.value)"><option '+(p.tipo==='Directo'?'selected':'')+'>Directo</option><option '+(p.tipo==='Contratista'?'selected':'')+'>Contratista</option></select></td><td style="width:120px">'+cc+'</td><td style="width:130px">'+(esContr?'<span style="font-size:11px;color:#A8A69E">—</span>':'<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#185FA5;padding:3px 9px;font-size:11px" onclick="togglePersonal(\''+p.id+'\')">'+(abierto?'▾ Ocultar':'▸ Ver')+(nMeses?' ('+nMeses+')':'')+'</button>')+'</td><td style="width:30px"><button class="btn-del" onclick="eliminarP(\''+p.id+'\')">×</button></td></tr>';
+        h += '<tr><td style="width:90px"><input value="'+(p.legajo!=null?String(p.legajo).replace(/"/g,'&quot;'):'')+'" placeholder="—" onchange="editarP(\''+p.id+'\',\'legajo\',this.value)" style="width:100%"></td><td><input value="'+(p.nombre||'').replace(/"/g,'&quot;')+'" onchange="editarP(\''+p.id+'\',\'nombre\',this.value)"></td><td><input value="'+(p.especialidad||'').replace(/"/g,'&quot;')+'" onchange="editarP(\''+p.id+'\',\'especialidad\',this.value)"></td><td style="width:120px"><select onchange="editarP(\''+p.id+'\',\'tipo\',this.value)"><option '+(p.tipo==='Directo'?'selected':'')+'>Directo</option><option '+(p.tipo==='Contratista'?'selected':'')+'>Contratista</option></select></td><td style="width:120px">'+cc+'</td><td style="width:130px">'+(esContr?'<span style="font-size:11px;color:#A8A69E">—</span>':'<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#185FA5;padding:3px 9px;font-size:11px" onclick="togglePersonal(\''+p.id+'\')">'+(abierto?'▾ Ocultar':'▸ Ver')+(nMeses?' ('+nMeses+')':'')+'</button>')+'</td><td style="width:30px"><button class="btn-del" onclick="eliminarP(\''+p.id+'\')">×</button></td></tr>';
         if(abierto && !esContr){
           h += '<tr><td colspan="7" style="background:#FAFAF8;padding:0"><div style="padding:12px 16px">'+panelHistorico(p)+'</div></td></tr>';
         }
@@ -522,7 +522,7 @@
         const dirty = draftPr[pr.id] && Object.keys(draftPr[pr.id]).length;
         const cerrado = pr.estado==='Cerrado';
         const acento = cerrado ? '#A8A69E' : '#185FA5';
-        h += '<div class="card" style="border:1.5px solid #D9D6CC;border-top:4px solid '+acento+';border-radius:14px;padding:18px;margin-bottom:22px;box-shadow:0 2px 10px rgba(44,44,42,0.07);background:#FFFEFB'+(dirty?';border-color:#E7C173':'')+'"><div class="card-head" style="border-bottom:1px solid #F1EFE8;padding-bottom:10px;margin-bottom:14px"><span style="font-size:15px;font-weight:700;color:'+acento+'">'+(prVal(pr,'nombre')||'Proyecto '+(i+1))+' <span style="font-size:12px;font-weight:500;color:#A8A69E">· Proyecto '+(i+1)+'</span> <span id="pr-dirty-'+pr.id+'" style="display:'+(dirty?'inline-block':'none')+';background:#FAEEDA;color:#BA7517;font-size:10px;padding:1px 7px;border-radius:8px;font-weight:600;margin-left:6px">sin guardar</span></span><div style="display:flex;gap:8px;align-items:center"><select onchange="editarPrEstado(\''+pr.id+'\',this.value)" style="width:auto;color:'+(cerrado?'#888780':'#3B6D11')+'"><option '+(pr.estado!=='Cerrado'?'selected':'')+'>Vigente</option><option '+(cerrado?'selected':'')+'>Cerrado</option></select><button class="btn-del" onclick="eliminarPr(\''+pr.id+'\')">×</button></div></div><div class="grid">'
+        h += '<div class="card" style="border:1.5px solid #D9D6CC;border-top:4px solid '+acento+';border-radius:14px;padding:18px;margin-bottom:22px;box-shadow:0 2px 10px rgba(44,44,42,0.07);background:#FFFEFB'+(dirty?';border-color:#E7C173':'')+'"><div class="card-head" style="border-bottom:1px solid #F1EFE8;padding-bottom:10px;margin-bottom:14px"><span style="font-size:15px;font-weight:700;color:'+acento+'">'+String(prVal(pr,'nombre')||'Proyecto '+(i+1)).replace(/</g,'&lt;').replace(/"/g,'&quot;')+' <span style="font-size:12px;font-weight:500;color:#A8A69E">· Proyecto '+(i+1)+'</span> <span id="pr-dirty-'+pr.id+'" style="display:'+(dirty?'inline-block':'none')+';background:#FAEEDA;color:#BA7517;font-size:10px;padding:1px 7px;border-radius:8px;font-weight:600;margin-left:6px">sin guardar</span></span><div style="display:flex;gap:8px;align-items:center"><select onchange="editarPrEstado(\''+pr.id+'\',this.value)" style="width:auto;color:'+(cerrado?'#888780':'#3B6D11')+'"><option '+(pr.estado!=='Cerrado'?'selected':'')+'>Vigente</option><option '+(cerrado?'selected':'')+'>Cerrado</option></select><button class="btn-del" onclick="eliminarPr(\''+pr.id+'\')">×</button></div></div><div class="grid">'
         + li(pr.id,'nombre','Nombre',prVal(pr,'nombre')) + li(pr.id,'codigo','Código',prVal(pr,'codigo'))
         + '<label class="lbl" style="grid-column:1/-1">Descripción<input value="'+(prVal(pr,'descripcion')||'')+'" onchange="setDraftPr(\''+pr.id+'\',\'descripcion\',this.value)"></label>'
         + ln(pr.id,'cant_modulos','Cantidad de módulos',prVal(pr,'cant_modulos')) + li(pr.id,'tam_modulos','Tamaño de módulos',prVal(pr,'tam_modulos'))
@@ -1898,8 +1898,8 @@
       let det = detalle.slice();
       if (dashProy) det = det.filter(f => f.proyecto_id === dashProy);
       // KPIs
-      let jornal=0, extra=0, ausencias=0, hsExtra=0; const usados=new Set();
-      det.forEach(f => { if (f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*2; hsExtra+=(Number(f.horas_extra)||0); if(f.persona_real){ const pp=personas.find(x=>x.id===f.persona_real); if(pp && pp.tipo!=="Contratista") usados.add(f.persona_real); } });
+      let jornal=0, extra=0, ausencias=0, hsExtra=0;
+      det.forEach(f => { if (f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*2; hsExtra+=(Number(f.horas_extra)||0); });
       const real = jornal+extra;
       const presup = (dashProy ? proyectos.filter(p=>p.id===dashProy) : proyectos).reduce((s,p)=>s+presupMO(p),0);
       // --- Índices de desempeño (Earned Value) ---
@@ -1920,7 +1920,7 @@
       const bloqDash = plani.filter(b=> !dashProy || b.proyecto_id===dashProy);
       let diasPlanHastaHoy=new Set(), diasRealSet=new Set();
       bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ if(d<=hoyISO()) diasPlanHastaHoy.add(b.estacion+"|"+b.proyecto_id+"|"+d); }));
-      det.forEach(f=>{ if(!f.ausente) diasRealSet.add(f.estacion_real+"|"+f.proyecto_id+"|"+f.fecha); });
+      det.forEach(f=>{ if(!f.ausente && f.estacion_real!==SUP_MARK) diasRealSet.add(f.estacion_real+"|"+f.proyecto_id+"|"+f.fecha); });
       const spi = diasPlanHastaHoy.size>0 ? (diasRealSet.size/diasPlanHastaHoy.size) : null;
       const idxColor=(v)=> v==null?'#888780': v>=0.98?'#3B6D11': v>=0.90?'#BA7517':'#A32D2D';
       const idxTxt=(v)=> v==null?'s/dato': v.toFixed(2);
@@ -1962,7 +1962,7 @@
       const diaMan = idx>=0 && idx+1<fechasDet.length ? fechasDet[idx+1] : null;
       const tareasDe = (fch)=>{ if(!fch)return[]; const s={}; det.filter(f=>f.fecha===fch&&!f.ausente).forEach(f=>{const k=f.estacion_real+"|"+f.subtarea_real; if(!s[k])s[k]={est:f.estacion_real,sub:f.subtarea_real,g:[]}; s[k].g.push(nombrePersona(f.persona_real));}); return Object.values(s); };
 
-      const card=(l,v,s,col)=>'<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 16px"><div style="font-size:12px;color:#888780">'+l+'</div><div style="font-size:22px;font-weight:600;color:'+(col||'#2C2C2A')+';margin-top:2px">'+v+'</div>'+(s?'<div style="font-size:11.5px;color:#A8A69E;margin-top:2px">'+s+'</div>':'')+'</div>';
+      const card=(l,v,s,col,calc)=>'<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 16px"><div style="font-size:12px;color:#888780">'+l+'</div><div style="font-size:22px;font-weight:600;color:'+(col||'#2C2C2A')+';margin-top:2px">'+v+'</div>'+(s?'<div style="font-size:11.5px;color:#A8A69E;margin-top:2px">'+s+'</div>':'')+(calc?'<div style="font-size:10.5px;color:#BDBBB2;margin-top:5px;line-height:1.4;border-top:1px solid #F4F2EC;padding-top:5px">Cómo se calcula: '+calc+'</div>':'')+'</div>';
       let h='<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">';
       h+='<div style="display:flex;border:1px solid #E6E4DC;border-radius:8px;overflow:hidden"><button onclick="setVista(\'pm\')" style="border:none;padding:7px 16px;font-size:13px;cursor:pointer;background:'+(vistaDash==='pm'?'#185FA5':'transparent')+';color:'+(vistaDash==='pm'?'#fff':'#888780')+'">Vista PM</button><button onclick="setVista(\'coord\')" style="border:none;padding:7px 16px;font-size:13px;cursor:pointer;background:'+(vistaDash==='coord'?'#185FA5':'transparent')+';color:'+(vistaDash==='coord'?'#fff':'#888780')+'">Vista Coordinador</button></div>';
       h+='<select onchange="setDashProy(this.value)" style="width:auto"><option value="">Todos los vigentes</option>'+proyVig.map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+'</option>').join('')+(proyectos.filter(p=>p.estado==='Cerrado').length?('<optgroup label="Cerrados">'+proyectos.filter(p=>p.estado==='Cerrado').map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+' (cerrado)</option>').join('')+'</optgroup>'):'')+'</select>';
@@ -1983,21 +1983,21 @@
         const usoPct = presup ? (real/presup*100) : 0;
         const fmtAR=(n)=>'$'+Math.round(n).toLocaleString("es-AR");
         h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
-          + card("Costo real acumulado",fmtAR(real),null)
-          + card("Uso del presupuesto MO", presup?usoPct.toFixed(0)+"%":"s/presup", fmtAR(real)+" de "+fmtAR(presup), usoPct>100?'#A32D2D':usoPct>85?'#BA7517':'#3B6D11')
-          + card("Proyección final (EAC)", eac!=null?fmtAR(eac):"s/dato", eac!=null?(eacDesv>=0?"+":"")+fmtAR(eacDesv)+" vs presupuesto":"necesita presupuesto y CPI", eac==null?null:(eacDesv>0?'#A32D2D':'#3B6D11'))
-          + card("Horas extra", pctExtra.toFixed(0)+"%", hsExtra+" h · "+fmtAR(extra)+" del costo", pctExtra>15?'#A32D2D':pctExtra>5?'#BA7517':'#3B6D11')
-          + card("Ausencias", ausencias, "jornadas no trabajadas", ausencias>0?'#A32D2D':'#3B6D11')
+          + card("Costo real acumulado",fmtAR(real),null,null,"Suma de (horas normales × valor-hora del mes) + (horas extra × valor-hora × 2) de todas las jornadas trabajadas del detalle.")
+          + card("Uso del presupuesto MO", presup?usoPct.toFixed(0)+"%":"s/presup", fmtAR(real)+" de "+fmtAR(presup), usoPct>100?'#A32D2D':usoPct>85?'#BA7517':'#3B6D11', "Costo real acumulado ÷ presupuesto de mano de obra cargado (La Huella + Montaje). Verde <85%, ámbar 85–100%, rojo >100%.")
+          + card("Proyección final (EAC)", eac!=null?fmtAR(eac):"s/dato", eac!=null?(eacDesv>=0?"+":"")+fmtAR(eacDesv)+" vs presupuesto":"necesita presupuesto y CPI", eac==null?null:(eacDesv>0?'#A32D2D':'#3B6D11'), "Presupuesto ÷ CPI: proyecta el costo final si seguís al ritmo de eficiencia actual. El desvío es EAC − presupuesto.")
+          + card("Horas extra", pctExtra.toFixed(0)+"%", hsExtra+" h · "+fmtAR(extra)+" del costo", pctExtra>15?'#A32D2D':pctExtra>5?'#BA7517':'#3B6D11', "Costo de horas extra (valorizadas ×2) ÷ costo real total. Verde <5%, ámbar 5–15%, rojo >15%.")
+          + card("Ausencias", ausencias, "jornadas no trabajadas", ausencias>0?'#A32D2D':'#3B6D11', "Cantidad de jornadas del detalle marcadas como ausente en el período visible.")
           + '</div>';
         // Origen del desvío (torta de barras) — por qué te estás desviando
         h+=bloqueOrigenDesvio(det);
       } else {
         h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
-          + card("Cumplimiento del plan", ppc!=null?(ppc*100).toFixed(0)+"%":"s/dato", ppc!=null?cumplidas+" de "+planHastaHoy+" jornadas según plan":"sin jornadas hasta hoy", ppc==null?null:(ppc>=0.9?'#3B6D11':ppc>=0.75?'#BA7517':'#A32D2D'))
-          + card("Cobertura próx. 5 días", sinCubrir===0?"OK":sinCubrir+" sin cubrir", sinCubrir===0?"todo el plan cubierto":"días-estación sin gente", sinCubrir===0?'#3B6D11':'#A32D2D')
-          + card("Horas extra", hsExtra+" h", "$"+Math.round(extra).toLocaleString("es-AR")+" en extra", hsExtra>0?'#BA7517':null)
-          + card("Ausencias", ausencias, "jornadas no trabajadas", ausencias>0?'#A32D2D':'#3B6D11')
-          + card("Personal directo utilizado", usados.size+"/"+personas.filter(p=>p.tipo!=='Contratista').length, "asignados / plantel directo")
+          + card("Cumplimiento del plan", ppc!=null?(ppc*100).toFixed(0)+"%":"s/dato", ppc!=null?cumplidas+" de "+planHastaHoy+" jornadas según plan":"sin jornadas hasta hoy", ppc==null?null:(ppc>=0.9?'#3B6D11':ppc>=0.75?'#BA7517':'#A32D2D'), "Jornadas planificadas hasta hoy que salieron tal cual (misma estación, misma persona, mismas horas, sin ausencia) ÷ total de jornadas planificadas hasta hoy. No cuenta días extra. Verde ≥90%, ámbar 75–89%, rojo <75%.")
+          + card("Cobertura próx. 5 días", sinCubrir===0?"OK":sinCubrir+" sin cubrir", sinCubrir===0?"todo el plan cubierto":"días-estación sin gente", sinCubrir===0?'#3B6D11':'#A32D2D', "Combinaciones estación-proyecto-día planificadas para los próximos 5 días hábiles que todavía no tienen ninguna persona asignada en el detalle.")
+          + card("Horas extra", hsExtra+" h", "$"+Math.round(extra).toLocaleString("es-AR")+" en extra", hsExtra>0?'#BA7517':null, "Suma de horas extra de todas las jornadas del período visible. El monto es esas horas valorizadas al doble del valor-hora.")
+          + card("Ausencias", ausencias, "jornadas no trabajadas", ausencias>0?'#A32D2D':'#3B6D11', "Cantidad de jornadas del detalle marcadas como ausente en el período visible.")
+          + card("Personal directo ocupado hoy", (function(){ const s=new Set(); det.forEach(f=>{ if(f.fecha!==hoy||f.ausente)return; const pp=personas.find(x=>x.id===f.persona_real); if(pp&&pp.tipo!=="Contratista") s.add(f.persona_real); }); return s.size; })()+"/"+personas.filter(p=>p.tipo!=='Contratista').length, "con tarea hoy / plantel directo", null, "Personas directas (no contratistas) con al menos una jornada no ausente con fecha de hoy, sobre el total de personas directas cargadas.")
           + '</div>';
         // agenda
         const ag=(titulo,fch,lista)=>{ let x='<div style="flex:1;min-width:260px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">'+titulo+(fch?' ('+dm(fch)+')':'')+'</div>'; if(!lista.length)x+='<div style="font-size:12.5px;color:#A8A69E">Sin tareas.</div>'; lista.forEach((t,i)=>{x+='<div style="padding:6px 0;border-top:'+(i?'1px solid #F1EFE8':'none')+';font-size:12.5px"><span style="background:'+estBg(t.est)+';color:'+estColor(t.est)+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(t.est)+'</span> <span style="color:#888780">'+t.sub+'</span><div style="font-size:11px;color:#A8A69E;margin-top:2px">'+t.g.join(", ")+'</div></div>';}); return x+'</div>'; };
@@ -2014,7 +2014,7 @@
         }
       }
       // gráfico de barras costo por estación (común a ambas vistas)
-      h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:12px">Costo real por estación</div>';
+      h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Costo real por estación</div><div style="font-size:11px;color:#BDBBB2;margin-bottom:12px">Cómo se calcula: para cada estación, suma de (horas normales + horas extra×2) × valor-hora del mes, sobre las jornadas trabajadas del período visible.</div>';
       if(!estArr.length) h+='<div style="font-size:12.5px;color:#A8A69E">Sin datos.</div>';
       estArr.forEach(([k,v])=>{ const pct=v.real/maxEst*100; h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px"><span style="width:150px;color:#5F5E5A">'+nombreEstacion(k)+'</span><div style="flex:1;background:#F1EFE8;border-radius:4px;height:18px;position:relative"><div style="width:'+pct+'%;background:'+estColor(k)+';height:100%;border-radius:4px"></div></div><span style="width:90px;text-align:right">$'+Math.round(v.real).toLocaleString("es-AR")+'</span></div>'; });
       h+='</div>';
@@ -2138,6 +2138,14 @@
       const realIni=realDias[0], realFin=realDias[realDias.length-1];
       const planDur=planDias.length, realDur=realDias.length;
       const desvDias=realDur-planDur;
+      // Desvío de FECHA DE FIN (informativo): días hábiles entre el fin planificado y el fin real.
+      // >0 = terminó después de lo previsto; <0 = antes. Independiente de la cantidad de días trabajados.
+      let desvFin=null;
+      if(planFin && realFin){
+        const signo = realFin>planFin?1:(realFin<planFin?-1:0);
+        const a = realFin>planFin?planFin:realFin, b = realFin>planFin?realFin:planFin;
+        desvFin = signo * Math.max(0, diasHabiles(a,b).length-1);
+      }
 
       // --- COSTOS (desdoblados: La Huella vs Montaje) ---
       const presupH = presupHuella(pr), presupM = presupMontaje(pr), presup = presupH + presupM;
@@ -2179,7 +2187,11 @@
       h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 10px;font-weight:500">Planificado</td><td style="text-align:center">'+fdate(planIni)+'</td><td style="text-align:center">'+fdate(planFin)+'</td><td style="text-align:center">'+planDur+'</td></tr>';
       h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 10px;font-weight:500">Real</td><td style="text-align:center">'+fdate(realIni)+'</td><td style="text-align:center">'+fdate(realFin)+'</td><td style="text-align:center">'+realDur+'</td></tr>';
       h+='<tr style="border-top:1px solid #F1EFE8;background:'+(desvDias>0?'#FCEBEB':'#F1F8EC')+'"><td style="padding:8px 10px;font-weight:600">Desvío</td><td></td><td></td><td style="text-align:center;font-weight:600;color:'+(desvDias>0?'#A32D2D':'#3B6D11')+'">'+(desvDias>=0?"+":"")+desvDias+' días</td></tr>';
+      if(desvFin!=null){
+        h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 10px;font-weight:500;color:#888780">Corrimiento de fecha de fin <span style="font-size:10.5px;font-weight:400;color:#BDBBB2">(informativo)</span></td><td></td><td style="text-align:center;color:'+(desvFin>0?'#A32D2D':desvFin<0?'#3B6D11':'#888780')+'">'+fdate(realFin)+' vs '+fdate(planFin)+'</td><td style="text-align:center;font-weight:600;color:'+(desvFin>0?'#A32D2D':desvFin<0?'#3B6D11':'#888780')+'">'+(desvFin>0?"+":"")+desvFin+' días</td></tr>';
+      }
       h+='</tbody></table>';
+      h+='<div style="font-size:11px;color:#A8A69E;margin:-10px 0 18px">El <b>Desvío</b> compara la cantidad de días hábiles trabajados vs planificados. El <b>corrimiento de fecha de fin</b> es solo informativo: mide si el proyecto terminó antes o después de la fecha planificada de cierre (fin real vs fin planificado, en días hábiles), sin importar cuántos días se trabajó en el medio.</div>';
 
       // costos
       h+='<div style="font-size:14px;font-weight:600;margin-bottom:8px">💰 Costos</div>';
