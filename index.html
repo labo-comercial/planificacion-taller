@@ -1857,13 +1857,49 @@
     // ¿esta estación va contra el presupuesto de Montaje?
     function esMontaje(estKey){ return estKey==="montaje"; }
     function proyDeDetalle(f){ return f.proyecto_id; }
+    // Bloque "Origen del desvío" para la Vista PM: cuánto del sobre/subcosto viene de cada causa.
+    function bloqueOrigenDesvio(det){
+      const norm=(x)=> x==null?"":String(x);
+      const acc={extra:0, edicion:0, jornal:0, planreal:0};
+      det.forEach(f=>{
+        const ch=costoHora(f.persona_real,f.fecha);
+        const chPlan=(f.valor_hora_plan!=null)?Number(f.valor_hora_plan):ch;
+        const hPlan=(f.horas_plan!=null?Number(f.horas_plan):Number(f.horas_normales)||0);
+        const hReal=f.ausente?0:(Number(f.horas_normales)||0);
+        const hExtra=f.ausente?0:(Number(f.horas_extra)||0);
+        const delta=(hReal*ch+hExtra*ch*2)-(hPlan*chPlan);
+        if(Math.abs(delta)<=0.5) return;
+        let origen;
+        if(f.es_extra) origen="extra";
+        else {
+          const editada = norm(f.estacion_real)!==norm(f.estacion_plan) || norm(f.persona_real)!==norm(f.persona_plan) || !!f.ausente || Math.abs(((Number(f.horas_normales)||0)+(Number(f.horas_extra)||0))-hPlan)>0.01;
+          if(editada) origen="edicion";
+          else if(Math.abs(ch-chPlan)>0.001) origen="jornal";
+          else origen="planreal";
+        }
+        acc[origen]+=delta;
+      });
+      const total=Object.values(acc).reduce((s,v)=>s+Math.abs(v),0);
+      if(total<=0.5) return '';
+      const fmtAR=(n)=>(n>=0?'+':'')+'$'+Math.round(n).toLocaleString("es-AR");
+      let x='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px;margin-bottom:16px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Origen del desvío de costo</div><div style="font-size:11.5px;color:#A8A69E;margin-bottom:12px">De qué proviene el desvío acumulado: alcance (día extra), gestión (edición), inflación (valor jornal) o ejecución (plan vs real).</div>';
+      ["extra","edicion","jornal","planreal"].forEach(o=>{
+        const v=acc[o]; if(Math.abs(v)<=0.5) return;
+        const m=ORIGEN_META[o]; const pct=Math.abs(v)/total*100;
+        x+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px;font-size:12px">'
+          + '<span style="width:150px">'+tagOrigen(o)+'</span>'
+          + '<div style="flex:1;background:#F1EFE8;border-radius:4px;height:18px"><div style="width:'+pct+'%;background:'+m.fg+';height:100%;border-radius:4px;opacity:.85"></div></div>'
+          + '<span style="width:110px;text-align:right;color:'+(v>0?'#A32D2D':'#3B6D11')+'">'+fmtAR(v)+'</span></div>';
+      });
+      return x+'</div>';
+    }
     function renderDash() {
       const proyVig = proyectos.filter(p => p.estado !== "Cerrado");
       let det = detalle.slice();
       if (dashProy) det = det.filter(f => f.proyecto_id === dashProy);
       // KPIs
       let jornal=0, extra=0, ausencias=0, hsExtra=0; const usados=new Set();
-      det.forEach(f => { if (f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*2; hsExtra+=(Number(f.horas_extra)||0); if(f.persona_real)usados.add(f.persona_real); });
+      det.forEach(f => { if (f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*2; hsExtra+=(Number(f.horas_extra)||0); if(f.persona_real){ const pp=personas.find(x=>x.id===f.persona_real); if(pp && pp.tipo!=="Contratista") usados.add(f.persona_real); } });
       const real = jornal+extra;
       const presup = (dashProy ? proyectos.filter(p=>p.id===dashProy) : proyectos).reduce((s,p)=>s+presupMO(p),0);
       // --- Índices de desempeño (Earned Value) ---
@@ -1888,6 +1924,31 @@
       const spi = diasPlanHastaHoy.size>0 ? (diasRealSet.size/diasPlanHastaHoy.size) : null;
       const idxColor=(v)=> v==null?'#888780': v>=0.98?'#3B6D11': v>=0.90?'#BA7517':'#A32D2D';
       const idxTxt=(v)=> v==null?'s/dato': v.toFixed(2);
+      // --- Indicadores adicionales ---
+      // % horas extra sobre el costo total (PM)
+      const pctExtra = real>0 ? (extra/real*100) : 0;
+      // EAC (Estimate At Completion): proyección de costo final = presupuesto ÷ CPI (PM)
+      const eac = (presup>0 && cpi && cpi>0) ? (presup/cpi) : null;
+      const eacDesv = (eac!=null) ? (eac-presup) : null;
+      // PPC (Percent Plan Complete): de las jornadas planificadas hasta hoy, cuántas salieron según plan (coord)
+      let planHastaHoy=0, cumplidas=0;
+      det.forEach(f=>{
+        if(f.fecha>hoyISO()) return; // solo hasta hoy
+        if(f.es_extra) return;       // el extra no estaba planificado
+        planHastaHoy++;
+        const hPlan=(f.horas_plan!=null?Number(f.horas_plan):Number(f.horas_normales)||0);
+        const hReal=f.ausente?0:((Number(f.horas_normales)||0)+(Number(f.horas_extra)||0));
+        const okEst = (f.estacion_real===f.estacion_plan);
+        const okPers= (f.persona_real===f.persona_plan);
+        if(!f.ausente && okEst && okPers && Math.abs(hReal-hPlan)<=0.01) cumplidas++;
+      });
+      const ppc = planHastaHoy>0 ? (cumplidas/planHastaHoy) : null;
+      // Cobertura próximos 5 días hábiles: días-estación planificados vs cubiertos en el detalle (coord)
+      const prox5=[]; { let d=hoyISO(); let guard=0; while(prox5.length<5 && guard<30){ const dd=new Date(d+"T12:00:00"); const w=dd.getDay(); if(w!==0&&w!==6&&!esFeriado(d)) prox5.push(d); d=sumarDiasHabiles(d,1); guard++; } }
+      let cobPlan=new Set(), cobCubierto=new Set();
+      bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(dia=>{ if(prox5.includes(dia)) cobPlan.add(b.estacion+"|"+b.proyecto_id+"|"+dia); }));
+      det.forEach(f=>{ if(!f.ausente && prox5.includes(f.fecha)) cobCubierto.add(f.estacion_real+"|"+f.proyecto_id+"|"+f.fecha); });
+      const sinCubrir = [...cobPlan].filter(k=>!cobCubierto.has(k)).length;
       // costo por estación
       const porEst = {};
       det.forEach(f => { if(f.ausente)return; const k=f.estacion_real; if(!porEst[k])porEst[k]={real:0,hs:0}; const ch=costoHora(f.persona_real, f.fecha); porEst[k].real+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*2; porEst[k].hs+=(Number(f.horas_normales)||0)+(Number(f.horas_extra)||0); });
@@ -1910,31 +1971,47 @@
       if(det.length===0){ h+='<p style="font-size:13px;color:#888780">Sin datos en el detalle todavía. Generá el detalle diario para ver indicadores.</p></div>'; contenido.innerHTML=h; return; }
       // --- Franja de salud del proyecto: CPI y SPI (ambas vistas) ---
       const idxCard=(sigla,nombre,val,ref)=>'<div style="flex:1;min-width:220px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 16px">'
-        + '<div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:13px;font-weight:700;color:#5F5E5A">'+sigla+'</span><span style="font-size:11.5px;color:#A8A69E">'+nombre+'</span></div>'
+        + '<div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:13px;font-weight:700;color:#5F5E5A" title="'+sigla.title+'">'+sigla.abrev+'</span><span style="font-size:11.5px;color:#A8A69E">'+nombre+'</span></div>'
+        + '<div style="font-size:11px;color:#BDBBB2;margin-top:1px;font-style:italic">'+sigla.full+'</div>'
         + '<div style="font-size:26px;font-weight:700;color:'+idxColor(val)+';margin-top:2px">'+idxTxt(val)+'</div>'
         + '<div style="font-size:11px;color:#A8A69E;margin-top:3px;line-height:1.4">'+ref+'</div></div>';
       h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
-        + idxCard("CPI","Eficiencia de costo",cpi,"Costo planificado ÷ costo real. <b>1,00 = en presupuesto</b>; mayor a 1 = gastás menos de lo previsto; menor a 1 = sobrecosto.")
-        + idxCard("SPI","Cumplimiento de plazo",spi,"Avance real ÷ avance planificado a hoy. <b>1,00 = al día</b>; mayor a 1 = adelantado; menor a 1 = atrasado.")
+        + idxCard({abrev:"CPI",full:"Cost Performance Index (Índice de Desempeño de Costo)",title:"Cost Performance Index"},"Eficiencia de costo",cpi,"Costo planificado ÷ costo real. <b>1,00 = en presupuesto</b>; mayor a 1 = gastás menos de lo previsto; menor a 1 = sobrecosto.")
+        + idxCard({abrev:"SPI",full:"Schedule Performance Index (Índice de Desempeño de Cronograma)",title:"Schedule Performance Index"},"Cumplimiento de plazo",spi,"Avance real ÷ avance planificado a hoy. <b>1,00 = al día</b>; mayor a 1 = adelantado; menor a 1 = atrasado.")
         + '</div>';
       if(vistaDash==='pm'){
         const usoPct = presup ? (real/presup*100) : 0;
+        const fmtAR=(n)=>'$'+Math.round(n).toLocaleString("es-AR");
         h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
-          + card("Costo real acumulado","$"+Math.round(real).toLocaleString("es-AR"),null)
-          + card("Uso del presupuesto MO", presup?usoPct.toFixed(0)+"%":"s/presup", "$"+Math.round(real).toLocaleString("es-AR")+" de $"+Math.round(presup).toLocaleString("es-AR"), usoPct>100?'#A32D2D':usoPct>85?'#BA7517':'#3B6D11')
-          + card("Horas extra", hsExtra+" h", null, hsExtra>0?'#BA7517':null)
+          + card("Costo real acumulado",fmtAR(real),null)
+          + card("Uso del presupuesto MO", presup?usoPct.toFixed(0)+"%":"s/presup", fmtAR(real)+" de "+fmtAR(presup), usoPct>100?'#A32D2D':usoPct>85?'#BA7517':'#3B6D11')
+          + card("Proyección final (EAC)", eac!=null?fmtAR(eac):"s/dato", eac!=null?(eacDesv>=0?"+":"")+fmtAR(eacDesv)+" vs presupuesto":"necesita presupuesto y CPI", eac==null?null:(eacDesv>0?'#A32D2D':'#3B6D11'))
+          + card("Horas extra", pctExtra.toFixed(0)+"%", hsExtra+" h · "+fmtAR(extra)+" del costo", pctExtra>15?'#A32D2D':pctExtra>5?'#BA7517':'#3B6D11')
           + card("Ausencias", ausencias, "jornadas no trabajadas", ausencias>0?'#A32D2D':'#3B6D11')
           + '</div>';
+        // Origen del desvío (torta de barras) — por qué te estás desviando
+        h+=bloqueOrigenDesvio(det);
       } else {
         h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
-          + card("Costo real acumulado","$"+Math.round(real).toLocaleString("es-AR"),"jornales + extra")
+          + card("Cumplimiento del plan", ppc!=null?(ppc*100).toFixed(0)+"%":"s/dato", ppc!=null?cumplidas+" de "+planHastaHoy+" jornadas según plan":"sin jornadas hasta hoy", ppc==null?null:(ppc>=0.9?'#3B6D11':ppc>=0.75?'#BA7517':'#A32D2D'))
+          + card("Cobertura próx. 5 días", sinCubrir===0?"OK":sinCubrir+" sin cubrir", sinCubrir===0?"todo el plan cubierto":"días-estación sin gente", sinCubrir===0?'#3B6D11':'#A32D2D')
           + card("Horas extra", hsExtra+" h", "$"+Math.round(extra).toLocaleString("es-AR")+" en extra", hsExtra>0?'#BA7517':null)
           + card("Ausencias", ausencias, "jornadas no trabajadas", ausencias>0?'#A32D2D':'#3B6D11')
-          + card("Personal utilizado", usados.size+"/"+personas.filter(p=>p.tipo!=='Contratista').length, "asignados / plantel")
+          + card("Personal directo utilizado", usados.size+"/"+personas.filter(p=>p.tipo!=='Contratista').length, "asignados / plantel directo")
           + '</div>';
         // agenda
         const ag=(titulo,fch,lista)=>{ let x='<div style="flex:1;min-width:260px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">'+titulo+(fch?' ('+dm(fch)+')':'')+'</div>'; if(!lista.length)x+='<div style="font-size:12.5px;color:#A8A69E">Sin tareas.</div>'; lista.forEach((t,i)=>{x+='<div style="padding:6px 0;border-top:'+(i?'1px solid #F1EFE8':'none')+';font-size:12.5px"><span style="background:'+estBg(t.est)+';color:'+estColor(t.est)+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(t.est)+'</span> <span style="color:#888780">'+t.sub+'</span><div style="font-size:11px;color:#A8A69E;margin-top:2px">'+t.g.join(", ")+'</div></div>';}); return x+'</div>'; };
         h+='<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">'+ag("📋 Tareas de hoy",diaHoy,tareasDe(diaHoy))+ag("⏭️ Preparar para mañana",diaMan,tareasDe(diaMan))+'</div>';
+        // Top estaciones que aportan al atraso (días reales vs planificados a hoy, por estación)
+        const atr={};
+        bloqDash.forEach(b=>{ if(b.estacion===SUP_MARK)return; diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ if(d<=hoyISO()){ (atr[b.estacion]=atr[b.estacion]||{plan:new Set(),real:new Set()}).plan.add(b.proyecto_id+"|"+d); } }); });
+        det.forEach(f=>{ if(f.ausente||f.estacion_real===SUP_MARK)return; (atr[f.estacion_real]=atr[f.estacion_real]||{plan:new Set(),real:new Set()}).real.add(f.proyecto_id+"|"+f.fecha); });
+        const atrArr=Object.entries(atr).map(([k,v])=>[k, v.plan.size - v.real.size]).filter(([,d])=>d>0).sort((a,b)=>b[1]-a[1]).slice(0,5);
+        if(atrArr.length){
+          h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px;margin-bottom:16px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Estaciones que van atrasadas</div><div style="font-size:11.5px;color:#A8A69E;margin-bottom:12px">Días planificados hasta hoy que todavía no se registraron como trabajados. Son las que conviene reforzar.</div>';
+          atrArr.forEach(([k,d])=>{ h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12.5px"><span style="width:170px"><span style="background:'+estBg(k)+';color:'+estColor(k)+';padding:2px 7px;border-radius:6px">'+nombreEstacion(k)+'</span></span><span style="color:#A32D2D;font-weight:600">'+d+' día(s) pendiente(s)</span></div>'; });
+          h+='</div>';
+        }
       }
       // gráfico de barras costo por estación (común a ambas vistas)
       h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:12px">Costo real por estación</div>';
