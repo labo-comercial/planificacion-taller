@@ -397,7 +397,7 @@
         const cc = esContr?'<span style="font-size:11px;color:#A8A69E;font-style:italic">s/valor (Compras)</span>':'<input type="number" value="'+(p.costo_hora||0)+'" onchange="editarP(\''+p.id+'\',\'costo_hora\',Number(this.value))" style="text-align:right" title="Valor base / fallback cuando un mes no tiene valor propio">';
         const abierto = !!personalAbierto[p.id];
         const nMeses = Object.keys(valorHoraHist[p.id]||{}).length;
-        h += '<tr><td style="width:80px">'+(p.legajo||'—')+'</td><td><input value="'+(p.nombre||'')+'" onchange="editarP(\''+p.id+'\',\'nombre\',this.value)"></td><td><input value="'+(p.especialidad||'')+'" onchange="editarP(\''+p.id+'\',\'especialidad\',this.value)"></td><td style="width:120px"><select onchange="editarP(\''+p.id+'\',\'tipo\',this.value)"><option '+(p.tipo==='Directo'?'selected':'')+'>Directo</option><option '+(p.tipo==='Contratista'?'selected':'')+'>Contratista</option></select></td><td style="width:120px">'+cc+'</td><td style="width:130px">'+(esContr?'<span style="font-size:11px;color:#A8A69E">—</span>':'<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#185FA5;padding:3px 9px;font-size:11px" onclick="togglePersonal(\''+p.id+'\')">'+(abierto?'▾ Ocultar':'▸ Ver')+(nMeses?' ('+nMeses+')':'')+'</button>')+'</td><td style="width:30px"><button class="btn-del" onclick="eliminarP(\''+p.id+'\')">×</button></td></tr>';
+        h += '<tr><td style="width:90px"><input value="'+(p.legajo!=null?String(p.legajo).replace(/"/g,'&quot;'):'')+'" placeholder="—" onchange="editarP(\''+p.id+'\',\'legajo\',this.value)" style="width:100%"></td><td><input value="'+(p.nombre||'')+'" onchange="editarP(\''+p.id+'\',\'nombre\',this.value)"></td><td><input value="'+(p.especialidad||'')+'" onchange="editarP(\''+p.id+'\',\'especialidad\',this.value)"></td><td style="width:120px"><select onchange="editarP(\''+p.id+'\',\'tipo\',this.value)"><option '+(p.tipo==='Directo'?'selected':'')+'>Directo</option><option '+(p.tipo==='Contratista'?'selected':'')+'>Contratista</option></select></td><td style="width:120px">'+cc+'</td><td style="width:130px">'+(esContr?'<span style="font-size:11px;color:#A8A69E">—</span>':'<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#185FA5;padding:3px 9px;font-size:11px" onclick="togglePersonal(\''+p.id+'\')">'+(abierto?'▾ Ocultar':'▸ Ver')+(nMeses?' ('+nMeses+')':'')+'</button>')+'</td><td style="width:30px"><button class="btn-del" onclick="eliminarP(\''+p.id+'\')">×</button></td></tr>';
         if(abierto && !esContr){
           h += '<tr><td colspan="7" style="background:#FAFAF8;padding:0"><div style="padding:12px 16px">'+panelHistorico(p)+'</div></td></tr>';
         }
@@ -520,7 +520,9 @@
       if (!proyectos.length) h += '<p style="color:#A8A69E;font-size:13px">Sin proyectos.</p>';
       proyectos.forEach((pr,i)=>{
         const dirty = draftPr[pr.id] && Object.keys(draftPr[pr.id]).length;
-        h += '<div class="card"><div class="card-head"><span style="font-size:13px;font-weight:600;color:#185FA5">Proyecto '+(i+1)+' <span id="pr-dirty-'+pr.id+'" style="display:'+(dirty?'inline-block':'none')+';background:#FAEEDA;color:#BA7517;font-size:10px;padding:1px 7px;border-radius:8px;font-weight:600;margin-left:6px">sin guardar</span></span><div style="display:flex;gap:8px;align-items:center"><select onchange="editarPrEstado(\''+pr.id+'\',this.value)" style="width:auto;color:'+(pr.estado==='Cerrado'?'#888780':'#3B6D11')+'"><option '+(pr.estado!=='Cerrado'?'selected':'')+'>Vigente</option><option '+(pr.estado==='Cerrado'?'selected':'')+'>Cerrado</option></select><button class="btn-del" onclick="eliminarPr(\''+pr.id+'\')">×</button></div></div><div class="grid">'
+        const cerrado = pr.estado==='Cerrado';
+        const acento = cerrado ? '#A8A69E' : '#185FA5';
+        h += '<div class="card" style="border:1.5px solid #D9D6CC;border-top:4px solid '+acento+';border-radius:14px;padding:18px;margin-bottom:22px;box-shadow:0 2px 10px rgba(44,44,42,0.07);background:#FFFEFB'+(dirty?';border-color:#E7C173':'')+'"><div class="card-head" style="border-bottom:1px solid #F1EFE8;padding-bottom:10px;margin-bottom:14px"><span style="font-size:15px;font-weight:700;color:'+acento+'">'+(prVal(pr,'nombre')||'Proyecto '+(i+1))+' <span style="font-size:12px;font-weight:500;color:#A8A69E">· Proyecto '+(i+1)+'</span> <span id="pr-dirty-'+pr.id+'" style="display:'+(dirty?'inline-block':'none')+';background:#FAEEDA;color:#BA7517;font-size:10px;padding:1px 7px;border-radius:8px;font-weight:600;margin-left:6px">sin guardar</span></span><div style="display:flex;gap:8px;align-items:center"><select onchange="editarPrEstado(\''+pr.id+'\',this.value)" style="width:auto;color:'+(cerrado?'#888780':'#3B6D11')+'"><option '+(pr.estado!=='Cerrado'?'selected':'')+'>Vigente</option><option '+(cerrado?'selected':'')+'>Cerrado</option></select><button class="btn-del" onclick="eliminarPr(\''+pr.id+'\')">×</button></div></div><div class="grid">'
         + li(pr.id,'nombre','Nombre',prVal(pr,'nombre')) + li(pr.id,'codigo','Código',prVal(pr,'codigo'))
         + '<label class="lbl" style="grid-column:1/-1">Descripción<input value="'+(prVal(pr,'descripcion')||'')+'" onchange="setDraftPr(\''+pr.id+'\',\'descripcion\',this.value)"></label>'
         + ln(pr.id,'cant_modulos','Cantidad de módulos',prVal(pr,'cant_modulos')) + li(pr.id,'tam_modulos','Tamaño de módulos',prVal(pr,'tam_modulos'))
@@ -1016,7 +1018,15 @@
       if(d) d[c]=v;
       setEstado("\u2713 Guardado.","ok");
     }
-    async function eliminarD(id){const{error}=await sb.from("no_disponibilidad").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");cargar();}
+    async function eliminarD(id){
+      const d = dispo.find(x=>x.id===id);
+      let desc = "este período de no disponibilidad";
+      if(d){ const quien = d.persona_id ? nombrePersona(d.persona_id) : "(sin persona)"; const rango = (d.desde?dmy(d.desde):"?")+" a "+(d.hasta?dmy(d.hasta):"?"); desc = quien+" — "+rango; }
+      if(!confirm('¿Eliminar '+desc+'?\n\nEsta acción no se puede deshacer.')){ setEstado("Borrado cancelado.","cargando"); return; }
+      const{error}=await sb.from("no_disponibilidad").delete().eq("id",id);
+      if(error)return setEstado("Error: "+error.message,"err");
+      setEstado("\u2713 Período eliminado.","ok"); cargar();
+    }
 
     /* ---- FERIADOS ---- */
     function renderFeriados() {
@@ -1032,7 +1042,15 @@
     }
     async function agregarFer(){ const t=fechaStr(new Date()); const{error}=await sb.from("feriados").insert({fecha:t,nombre:"Nuevo feriado",se_trabaja:false}); if(error)return setEstado("Error: "+error.message,"err"); cargar(); }
     async function editarFer(id,c,v){ const u={};u[c]=v; const{error}=await sb.from("feriados").update(u).eq("id",id); if(error)return setEstado("Error: "+error.message,"err"); const f=feriados.find(x=>x.id===id); if(f)f[c]=v; setEstado("\u2713 Guardado.","ok"); renderFeriados(); }
-    async function eliminarFer(id){ const{error}=await sb.from("feriados").delete().eq("id",id); if(error)return setEstado("Error: "+error.message,"err"); cargar(); }
+    async function eliminarFer(id){
+      const f = feriados.find(x=>x.id===id);
+      let desc = "este feriado";
+      if(f){ desc = (f.fecha?dmy(f.fecha):"?")+(f.nombre?' — '+f.nombre:''); }
+      if(!confirm('¿Eliminar el feriado '+desc+'?\n\nEsto lo vuelve a contar como día hábil en toda la app. La acción no se puede deshacer.')){ setEstado("Borrado cancelado.","cargando"); return; }
+      const{error}=await sb.from("feriados").delete().eq("id",id);
+      if(error)return setEstado("Error: "+error.message,"err");
+      setEstado("\u2713 Feriado eliminado.","ok"); cargar();
+    }
 
     /* ---- PLANIFICACIÓN ---- */
     function esFeriado(f){ return feriados.some(h => h.fecha === f && !h.se_trabaja); }
@@ -1848,6 +1866,28 @@
       det.forEach(f => { if (f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*2; hsExtra+=(Number(f.horas_extra)||0); if(f.persona_real)usados.add(f.persona_real); });
       const real = jornal+extra;
       const presup = (dashProy ? proyectos.filter(p=>p.id===dashProy) : proyectos).reduce((s,p)=>s+presupMO(p),0);
+      // --- Índices de desempeño (Earned Value) ---
+      // CPI = costo planificado del trabajo hecho / costo real. >1 = eficiente (gastás menos de lo previsto).
+      // SPI = días reales trabajados / días planificados hasta hoy. >1 = adelantado; <1 = atrasado.
+      let costoPlanEV=0, costoRealEV=0;
+      det.forEach(f=>{
+        if(f.ausente) return;
+        const chReal = costoHora(f.persona_real, f.fecha);
+        const chPlan = (f.valor_hora_plan!=null) ? Number(f.valor_hora_plan) : chReal;
+        const hReal = Number(f.horas_normales)||0, hExtra=Number(f.horas_extra)||0;
+        const hPlan = (f.horas_plan!=null ? Number(f.horas_plan) : hReal);
+        costoRealEV += hReal*chReal + hExtra*chReal*2;
+        costoPlanEV += hPlan*chPlan;
+      });
+      const cpi = costoRealEV>0 ? (costoPlanEV/costoRealEV) : null;
+      // SPI por días: comparar días hábiles planificados hasta hoy vs días reales trabajados.
+      const bloqDash = plani.filter(b=> !dashProy || b.proyecto_id===dashProy);
+      let diasPlanHastaHoy=new Set(), diasRealSet=new Set();
+      bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ if(d<=hoyISO()) diasPlanHastaHoy.add(b.estacion+"|"+b.proyecto_id+"|"+d); }));
+      det.forEach(f=>{ if(!f.ausente) diasRealSet.add(f.estacion_real+"|"+f.proyecto_id+"|"+f.fecha); });
+      const spi = diasPlanHastaHoy.size>0 ? (diasRealSet.size/diasPlanHastaHoy.size) : null;
+      const idxColor=(v)=> v==null?'#888780': v>=0.98?'#3B6D11': v>=0.90?'#BA7517':'#A32D2D';
+      const idxTxt=(v)=> v==null?'s/dato': v.toFixed(2);
       // costo por estación
       const porEst = {};
       det.forEach(f => { if(f.ausente)return; const k=f.estacion_real; if(!porEst[k])porEst[k]={real:0,hs:0}; const ch=costoHora(f.persona_real, f.fecha); porEst[k].real+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*2; porEst[k].hs+=(Number(f.horas_normales)||0)+(Number(f.horas_extra)||0); });
@@ -1868,6 +1908,15 @@
       h+=botonesExport("dash-print","dashboard")+'</div>';
       h+='<div id="dash-print">';
       if(det.length===0){ h+='<p style="font-size:13px;color:#888780">Sin datos en el detalle todavía. Generá el detalle diario para ver indicadores.</p></div>'; contenido.innerHTML=h; return; }
+      // --- Franja de salud del proyecto: CPI y SPI (ambas vistas) ---
+      const idxCard=(sigla,nombre,val,ref)=>'<div style="flex:1;min-width:220px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 16px">'
+        + '<div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:13px;font-weight:700;color:#5F5E5A">'+sigla+'</span><span style="font-size:11.5px;color:#A8A69E">'+nombre+'</span></div>'
+        + '<div style="font-size:26px;font-weight:700;color:'+idxColor(val)+';margin-top:2px">'+idxTxt(val)+'</div>'
+        + '<div style="font-size:11px;color:#A8A69E;margin-top:3px;line-height:1.4">'+ref+'</div></div>';
+      h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
+        + idxCard("CPI","Eficiencia de costo",cpi,"Costo planificado ÷ costo real. <b>1,00 = en presupuesto</b>; mayor a 1 = gastás menos de lo previsto; menor a 1 = sobrecosto.")
+        + idxCard("SPI","Cumplimiento de plazo",spi,"Avance real ÷ avance planificado a hoy. <b>1,00 = al día</b>; mayor a 1 = adelantado; menor a 1 = atrasado.")
+        + '</div>';
       if(vistaDash==='pm'){
         const usoPct = presup ? (real/presup*100) : 0;
         h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
