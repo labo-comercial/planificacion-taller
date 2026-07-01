@@ -1059,6 +1059,8 @@
 
     /* ---- PLANIFICACIÓN ---- */
     function esFeriado(f){ return feriados.some(h => h.fecha === f && !h.se_trabaja); }
+    // Multiplicador de hora extra: 1.5x de lunes a sábado, 2x domingos y feriados.
+    function multExtra(fecha){ if(!fecha) return 1.5; const w = new Date(fecha+"T12:00:00").getDay(); if(w===0 || esFeriado(fecha)) return 2; return 1.5; }
     function diasHabiles(a,b){const o=[];if(!a||!b)return o;let d=new Date(a+"T12:00:00");const e=new Date(b+"T12:00:00");while(d<=e){const w=d.getDay();const f=fechaStr(d);if(w!==0&&w!==6&&!esFeriado(f))o.push(f);d=new Date(d.getTime()+86400000);}return o;}
     // ---- DESPLAZAMIENTO POR REPLANIFICACIÓN ----
     // Diferencia en días corridos entre dos fechas ISO (b - a). Positivo = b es posterior.
@@ -1418,8 +1420,8 @@
         const hPlan = (f.horas_plan!=null ? Number(f.horas_plan) : Number(f.horas_normales)||0);
         const hReal = f.ausente ? 0 : (Number(f.horas_normales)||0);
         const hExtra = f.ausente ? 0 : (Number(f.horas_extra)||0);
-        // costo real incluye extra a x2 (con valor vigente); costo plan usa horas y valor planificados
-        const costoReal = hReal*ch + hExtra*ch*2;
+        // costo real incluye extra a 1.5x/2x según el día (con valor vigente); costo plan usa horas y valor planificados
+        const costoReal = hReal*ch + hExtra*ch*multExtra(f.fecha);
         const costoPlan = hPlan*chPlan;
         const delta = costoReal - costoPlan;  // >0 sobrecosto, <0 ahorro
         let tipo = "neutro";
@@ -1485,7 +1487,7 @@
         const d = fi ? fi.costoDelta : 0;
         if(d>0) pp.sobrecosto += d; else if(d<0) pp.ahorro += (-d);
         if(fi && Math.abs(d)>0.5) pp.costoOrigen[fi.origen] += d;
-        if(!f.ausente){ const ch=costoHora(f.persona_real, f.fecha); pp.costoReal += (Number(f.horas_normales)||0)*ch + (Number(f.horas_extra)||0)*ch*2; }
+        if(!f.ausente){ const ch=costoHora(f.persona_real, f.fecha); pp.costoReal += (Number(f.horas_normales)||0)*ch + (Number(f.horas_extra)||0)*ch*multExtra(f.fecha); }
         if(f.es_extra) pp.tieneExtra = true;
       });
       // presupuesto MO por proyecto (de la tabla proyectos): total = La Huella + Montaje
@@ -1796,7 +1798,7 @@
         + '<label style="font-size:12px;color:#5F5E5A">Tarea<select id="ex_sub" style="width:100%;margin-top:3px"></select></label>'
         + '<div style="display:flex;gap:10px">'
         +   '<label style="font-size:12px;color:#5F5E5A;flex:1">Horas normales<input id="ex_hn" type="number" value="8" min="0" style="width:100%;margin-top:3px"></label>'
-        +   '<label style="font-size:12px;color:#5F5E5A;flex:1">Horas extra (x2)<input id="ex_he" type="number" value="0" min="0" style="width:100%;margin-top:3px"></label>'
+        +   '<label style="font-size:12px;color:#5F5E5A;flex:1">Horas extra (1.5x lun-sáb, 2x dom/feriado)<input id="ex_he" type="number" value="0" min="0" style="width:100%;margin-top:3px"></label>'
         + '</div>'
         + '</div>'
         + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">'
@@ -1859,6 +1861,18 @@
     function mesTieneValor(pid, mes){ const h=valorHoraHist[pid]; return !!(h && mes && h[mes]!=null); }
     // costoHora(pid, fecha): valor-hora vigente en el mes de esa fecha. Sin fecha → base actual.
     function costoHora(pid, fecha){ if(!fecha) { const p=personas.find(x=>x.id===pid); return p?(Number(p.costo_hora)||0):0; } return valorHoraMes(pid, mesDe(fecha)); }
+    // especialidadMes(pid, fecha): especialidad vigente en el mes de esa fecha (mismo criterio en cascada que valorHoraMes).
+    // 1) especialidad exacta del mes; 2) último mes anterior cargado; 3) especialidad base actual de la persona.
+    function especialidadMes(pid, fecha){
+      const base = (()=>{ const p=personas.find(x=>x.id===pid); return p?(p.especialidad||"—"):"—"; })();
+      const mes = mesDe(fecha);
+      const h = especialidadHist[pid];
+      if(!h || !mes) return base;
+      if(h[mes]!=null && h[mes]!=="") return h[mes];
+      const anteriores = Object.keys(h).filter(m=>m<mes).sort();
+      if(anteriores.length) return h[anteriores[anteriores.length-1]] || base;
+      return base;
+    }
     function nombreEstacion(k){ if(k===SUP_MARK) return SUP_LABEL; return STATIONS[k] ? STATIONS[k].label : k; }
     function estBg(k){ if(k===SUP_MARK) return SUP_BG; return STATIONS[k] ? STATIONS[k].bg : "#eee"; }
     function estColor(k){ if(k===SUP_MARK) return SUP_COLOR; return STATIONS[k] ? STATIONS[k].color : "#555"; }
@@ -1879,7 +1893,7 @@
         const hPlan=(f.horas_plan!=null?Number(f.horas_plan):Number(f.horas_normales)||0);
         const hReal=f.ausente?0:(Number(f.horas_normales)||0);
         const hExtra=f.ausente?0:(Number(f.horas_extra)||0);
-        const delta=(hReal*ch+hExtra*ch*2)-(hPlan*chPlan);
+        const delta=(hReal*ch+hExtra*ch*multExtra(f.fecha))-(hPlan*chPlan);
         if(Math.abs(delta)<=0.5) return;
         let origen;
         if(f.es_extra) origen="extra";
@@ -1911,7 +1925,7 @@
       if (dashProy) det = det.filter(f => f.proyecto_id === dashProy);
       // KPIs
       let jornal=0, extra=0, ausencias=0, hsExtra=0;
-      det.forEach(f => { if (f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*2; hsExtra+=(Number(f.horas_extra)||0); });
+      det.forEach(f => { if (f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); hsExtra+=(Number(f.horas_extra)||0); });
       const real = jornal+extra;
       const presup = (dashProy ? proyectos.filter(p=>p.id===dashProy) : proyectos).reduce((s,p)=>s+presupMO(p),0);
       // --- Índices de desempeño (Earned Value) ---
@@ -1972,7 +1986,7 @@
       const sinCubrir = [...cobPlan].filter(k=>!cobCubierto.has(k)).length;
       // costo por estación
       const porEst = {};
-      det.forEach(f => { if(f.ausente)return; const k=f.estacion_real; if(!porEst[k])porEst[k]={real:0,hs:0}; const ch=costoHora(f.persona_real, f.fecha); porEst[k].real+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*2; porEst[k].hs+=(Number(f.horas_normales)||0)+(Number(f.horas_extra)||0); });
+      det.forEach(f => { if(f.ausente)return; const k=f.estacion_real; if(!porEst[k])porEst[k]={real:0,hs:0}; const ch=costoHora(f.persona_real, f.fecha); porEst[k].real+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); porEst[k].hs+=(Number(f.horas_normales)||0)+(Number(f.horas_extra)||0); });
       const estArr = Object.entries(porEst).sort((a,b)=>b[1].real-a[1].real);
       const maxEst = Math.max(1, ...estArr.map(e=>e[1].real));
       // agenda hoy/mañana
@@ -2019,7 +2033,7 @@
           + card("Costo real acumulado",fmtAR(real),null,null,"Suma de (horas normales × valor-hora del mes) + (horas extra × valor-hora × 2) de todas las jornadas trabajadas del detalle.")
           + card("Uso del presupuesto MO", presup?usoPct.toFixed(0)+"%":"s/presup", fmtAR(real)+" de "+fmtAR(presup), usoPct>100?'#A32D2D':usoPct>85?'#BA7517':'#3B6D11', "Costo real acumulado ÷ presupuesto de mano de obra cargado (La Huella + Montaje). Verde <85%, ámbar 85–100%, rojo >100%.")
           + card("Proyección de costo final", eac!=null?fmtAR(eac):"s/dato", eac!=null?(eacDesv>=0?"+":"")+fmtAR(eacDesv)+" vs presupuesto":"necesita presupuesto y CPI", eac==null?null:(eacDesv>0?'#A32D2D':'#3B6D11'), "Si el proyecto sigue al ritmo de eficiencia actual, cuánto va a costar terminarlo. Se calcula presupuesto ÷ CPI. El número de abajo es cuánto te pasarías (o ahorrarías) contra el presupuesto.")
-          + card("Horas extra", pctExtra.toFixed(0)+"%", hsExtra+" h · "+fmtAR(extra)+" del costo", pctExtra>15?'#A32D2D':pctExtra>5?'#BA7517':'#3B6D11', "Costo de horas extra (valorizadas ×2) ÷ costo real total. Verde <5%, ámbar 5–15%, rojo >15%.")
+          + card("Horas extra", pctExtra.toFixed(0)+"%", hsExtra+" h · "+fmtAR(extra)+" del costo", pctExtra>15?'#A32D2D':pctExtra>5?'#BA7517':'#3B6D11', "Costo de horas extra (valorizadas 1.5x lun-sáb, 2x dom/feriado) ÷ costo real total. Verde <5%, ámbar 5–15%, rojo >15%.")
           + card("Ausencias", ausencias, "jornadas no trabajadas", ausencias>0?'#A32D2D':'#3B6D11', "Cantidad de jornadas del detalle marcadas como ausente en el período visible.")
           + '</div>';
         // Origen del desvío (torta de barras) — por qué te estás desviando
@@ -2047,7 +2061,7 @@
         }
       }
       // gráfico de barras costo por estación (común a ambas vistas)
-      h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Costo real por estación</div><div style="font-size:11px;color:#BDBBB2;margin-bottom:12px">Cómo se calcula: para cada estación, suma de (horas normales + horas extra×2) × valor-hora del mes, sobre las jornadas trabajadas del período visible.</div>';
+      h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Costo real por estación</div><div style="font-size:11px;color:#BDBBB2;margin-bottom:12px">Cómo se calcula: para cada estación, suma de (horas normales + horas extra×1.5 lun-sáb ó ×2 dom/feriado) × valor-hora del mes, sobre las jornadas trabajadas del período visible.</div>';
       if(!estArr.length) h+='<div style="font-size:12.5px;color:#A8A69E">Sin datos.</div>';
       estArr.forEach(([k,v])=>{ const pct=v.real/maxEst*100; h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px"><span style="width:150px;color:#5F5E5A">'+nombreEstacion(k)+'</span><div style="flex:1;background:#F1EFE8;border-radius:4px;height:18px;position:relative"><div style="width:'+pct+'%;background:'+estColor(k)+';height:100%;border-radius:4px"></div></div><span style="width:90px;text-align:right">$'+Math.round(v.real).toLocaleString("es-AR")+'</span></div>'; });
       h+='</div>';
@@ -2184,17 +2198,31 @@
       const presupH = presupHuella(pr), presupM = presupMontaje(pr), presup = presupH + presupM;
       let jornal=0, extra=0, hsExtra=0, ausencias=0;
       let realH=0, realM=0; // costo real contra cada presupuesto
-      det.forEach(f=>{ if(f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); const cn=(Number(f.horas_normales)||0)*ch; const ce=(Number(f.horas_extra)||0)*ch*2; jornal+=cn; extra+=ce; hsExtra+=(Number(f.horas_extra)||0); if(esMontaje(f.estacion_real)) realM+=cn+ce; else realH+=cn+ce; });
+      det.forEach(f=>{ if(f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); const cn=(Number(f.horas_normales)||0)*ch; const ce=(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); jornal+=cn; extra+=ce; hsExtra+=(Number(f.horas_extra)||0); if(esMontaje(f.estacion_real)) realM+=cn+ce; else realH+=cn+ce; });
       const real=jornal+extra;
       const desvCosto=real-presup;
       const desvPct=presup?(desvCosto/presup*100):0;
       const desvH=realH-presupH, desvM=realM-presupM;
       const pctH=presupH?(desvH/presupH*100):0, pctM=presupM?(desvM/presupM*100):0;
 
+      // --- JORNALES (horas reales, incl. día extra) / 8, con apertura por especialidad ---
+      // La especialidad usada es la vigente en el mes de cada fila (mismo criterio en cascada que el valor-hora).
+      let horasRealesTotal=0;
+      const porEsp={};
+      det.forEach(f=>{
+        if(f.ausente) return;
+        const hs=(Number(f.horas_normales)||0)+(Number(f.horas_extra)||0);
+        horasRealesTotal+=hs;
+        const esp=especialidadMes(f.persona_real, f.fecha);
+        porEsp[esp]=(porEsp[esp]||0)+hs;
+      });
+      const jornalesTotal=horasRealesTotal/8;
+      const jornalesPorEsp=Object.entries(porEsp).map(([esp,hs])=>[esp,hs/8]).sort((a,b)=>b[1]-a[1]);
+
       // --- POR ESTACIÓN (Supervisión EXCLUIDA: es un rol paralelo, no una estación) ---
       const est={};
       blo.forEach(b=>{ if(b.estacion===SUP_MARK) return; const dP=diasHabiles(b.fecha_desde,b.fecha_hasta); if(!est[b.estacion])est[b.estacion]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; dP.forEach(d=>est[b.estacion].planD.add(d)); (b.modulos||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[b.estacion].modsPlan.add(m)); });
-      det.forEach(f=>{ if(f.estacion_real===SUP_MARK) return; if(!est[f.estacion_real])est[f.estacion_real]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; if(!f.ausente){est[f.estacion_real].realD.add(f.fecha); const ch=costoHora(f.persona_real, f.fecha); est[f.estacion_real].costo+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*2; est[f.estacion_real].hsExtra+=(Number(f.horas_extra)||0); (f.modulos_real||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[f.estacion_real].modsReal.add(m));} });
+      det.forEach(f=>{ if(f.estacion_real===SUP_MARK) return; if(!est[f.estacion_real])est[f.estacion_real]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; if(!f.ausente){est[f.estacion_real].realD.add(f.fecha); const ch=costoHora(f.persona_real, f.fecha); est[f.estacion_real].costo+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); est[f.estacion_real].hsExtra+=(Number(f.horas_extra)||0); (f.modulos_real||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[f.estacion_real].modsReal.add(m));} });
 
       const fmt=(n)=>'$'+Math.round(n).toLocaleString("es-AR");
       const fdate=(d)=>d?dmy(d):"—";
@@ -2240,6 +2268,24 @@
         const bg = borde==='#A32D2D'?'#FCEBEB':borde==='#3B6D11'?'#F1F8EC':'#EEF4FB';
         h+='<div style="background:'+bg+';border-left:4px solid '+borde+';border-radius:10px;padding:14px 16px;margin-bottom:18px"><div style="font-size:13px;font-weight:700;color:'+borde+';margin-bottom:6px">Veredicto de mano de obra</div><div style="font-size:13px;color:#4A4A46;line-height:1.7">'+frases.join(' ')+'</div><div style="font-size:10.5px;color:#A8A69E;margin-top:8px">Síntesis automática a partir de los datos del informe. Cubre únicamente mano de obra, no el costo total del proyecto.</div></div>';
       })();
+
+      // --- JORNALES: total y apertura por especialidad ---
+      (function(){
+        h+='<div style="border:1px solid #E6E4DC;border-radius:14px;padding:16px;margin-bottom:18px">';
+        h+='<div style="font-size:13px;font-weight:600;margin-bottom:4px">👷 Jornales utilizados</div>';
+        h+='<div style="font-size:11px;color:#A8A69E;margin-bottom:12px">1 jornal = 8 horas reales trabajadas (horas normales + extra, incluye día extra). No cuenta ausencias.</div>';
+        h+='<div style="font-size:24px;font-weight:700;margin-bottom:12px">'+jornalesTotal.toFixed(1)+' <span style="font-size:13px;font-weight:400;color:#888780">jornales · '+horasRealesTotal.toFixed(0)+' h</span></div>';
+        if(jornalesPorEsp.length){
+          h+='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:6px 10px">Especialidad</th><th style="text-align:right;padding:6px 10px">Jornales</th><th style="text-align:right;padding:6px 10px">Horas</th><th style="text-align:right;padding:6px 10px">% del total</th></tr></thead><tbody>';
+          jornalesPorEsp.forEach(([esp,jor])=>{
+            const pct = jornalesTotal? (jor/jornalesTotal*100) : 0;
+            h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:6px 10px">'+esp+'</td><td style="text-align:right;padding:6px 10px">'+jor.toFixed(1)+'</td><td style="text-align:right;padding:6px 10px;color:#888780">'+(jor*8).toFixed(0)+' h</td><td style="text-align:right;padding:6px 10px;color:#888780">'+pct.toFixed(0)+'%</td></tr>';
+          });
+          h+='</tbody></table>';
+        }
+        h+='</div>';
+      })();
+
       h+='<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:8px 10px"></th><th style="text-align:center;padding:8px 10px">Inicio</th><th style="text-align:center;padding:8px 10px">Fin</th><th style="text-align:center;padding:8px 10px">Días hábiles</th></tr></thead><tbody>';
       h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 10px;font-weight:500">Planificado</td><td style="text-align:center">'+fdate(planIni)+'</td><td style="text-align:center">'+fdate(planFin)+'</td><td style="text-align:center">'+planDur+'</td></tr>';
       h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 10px;font-weight:500">Real</td><td style="text-align:center">'+fdate(realIni)+'</td><td style="text-align:center">'+fdate(realFin)+'</td><td style="text-align:center">'+realDur+'</td></tr>';
@@ -2254,7 +2300,7 @@
       h+='<div style="font-size:14px;font-weight:600;margin-bottom:8px">💰 Costos</div>';
       h+='<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:8px"><tbody>';
       h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px">Jornales (horas normales)</td><td style="text-align:right;padding:7px 10px">'+fmt(jornal)+'</td></tr>';
-      h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px">Horas extra ('+hsExtra+'h, x2)</td><td style="text-align:right;padding:7px 10px;color:#BA7517">'+fmt(extra)+'</td></tr>';
+      h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px">Horas extra ('+hsExtra+'h, 1.5x/2x)</td><td style="text-align:right;padding:7px 10px;color:#BA7517">'+fmt(extra)+'</td></tr>';
       h+='<tr style="border-top:1px solid #F1EFE8;font-weight:600"><td style="padding:7px 10px">Costo real total</td><td style="text-align:right;padding:7px 10px">'+fmt(real)+'</td></tr>';
       h+='</tbody></table>';
 
@@ -2273,7 +2319,7 @@
       estArr.forEach(([k,v])=>{ const dp=v.planD.size, dr=v.realD.size, dv=dr-dp; const mP=[...v.modsPlan].join(", ")||"—"; const mR=[...v.modsReal].join(", ")||"—"; h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px"><span style="background:'+estBg(k)+';color:'+estColor(k)+';padding:2px 7px;border-radius:6px">'+nombreEstacion(k)+'</span></td><td style="text-align:center">'+dp+'</td><td style="text-align:center">'+dr+'</td><td style="text-align:center;color:'+(dv>0?'#A32D2D':dv<0?'#3B6D11':'#888780')+'">'+(dv>=0?"+":"")+dv+'</td><td style="text-align:right">'+fmt(v.costo)+'</td><td style="text-align:center;color:'+(v.hsExtra>0?'#BA7517':'#A8A69E')+'">'+(v.hsExtra||0)+'h</td><td style="padding:7px 10px;font-size:11.5px;color:#5F5E5A">'+mP+'</td><td style="padding:7px 10px;font-size:11.5px;color:#5F5E5A">'+mR+'</td></tr>'; });
       // Supervisión: se reporta aparte (rol paralelo). Su costo está en el total pero no en las estaciones.
       let costoSup=0, diasSupSet=new Set();
-      det.forEach(f=>{ if(f.estacion_real===SUP_MARK && !f.ausente){ const ch=costoHora(f.persona_real, f.fecha); costoSup+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*2; diasSupSet.add(f.fecha); } });
+      det.forEach(f=>{ if(f.estacion_real===SUP_MARK && !f.ausente){ const ch=costoHora(f.persona_real, f.fecha); costoSup+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); diasSupSet.add(f.fecha); } });
       if(costoSup>0){ h+='<tr style="border-top:1px solid #F1EFE8;background:'+SUP_BG+'33"><td style="padding:7px 10px"><span style="background:'+SUP_BG+';color:'+SUP_COLOR+';padding:2px 7px;border-radius:6px">'+SUP_LABEL+'</span> <span style="font-size:10.5px;color:#A8A69E">(rol paralelo)</span></td><td style="text-align:center">—</td><td style="text-align:center">'+diasSupSet.size+'</td><td style="text-align:center;color:#888780">—</td><td style="text-align:right">'+fmt(costoSup)+'</td><td style="text-align:center;color:#A8A69E">—</td><td style="padding:7px 10px;font-size:11.5px;color:#A8A69E">—</td><td style="padding:7px 10px;font-size:11.5px;color:#A8A69E">—</td></tr>'; }
       h+='</tbody></table></div>';
       h+='<div style="font-size:11px;color:#A8A69E;margin-top:6px">La Supervisión es un rol paralelo, no una estación: su costo se incluye en el total del proyecto pero no genera desvío de plazo de estación. Las fechas y módulos del desglose salen del detalle diario, no del plan.</div>';
