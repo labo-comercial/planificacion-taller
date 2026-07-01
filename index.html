@@ -472,7 +472,41 @@
     }
     async function agregarP(){const{error}=await sb.from("personal").insert({nombre:"Nueva persona",tipo:"Directo",costo_hora:0});if(error)return setEstado("Error: "+error.message,"err");cargar();}
     async function editarP(id,c,v){const u={};u[c]=v;const{error}=await sb.from("personal").update(u).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");setEstado("\u2713 Guardado.","ok");}
-    async function eliminarP(id){const{error}=await sb.from("personal").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");cargar();}
+    async function eliminarP(id){
+      const p = personas.find(x=>x.id===id);
+      const nombre = p ? (p.nombre||"esta persona") : "esta persona";
+      // 1ª confirmación: intención
+      if(!confirm('¿Querés eliminar a "'+nombre+'"?\n\nEsta acción no se puede deshacer.')) { setEstado("Borrado cancelado.","cargando"); return; }
+      // Contar qué se va a arrastrar (borrado en cascada) para mostrarlo antes de confirmar de nuevo.
+      let nPlan=0, nDet=0, nSup=0;
+      try {
+        const c1 = await sb.from("planificacion_personal").select("*",{count:"exact",head:true}).eq("persona_id",id); nPlan=c1.count||0;
+        const c2 = await sb.from("detalle_diario").select("*",{count:"exact",head:true}).eq("persona_real",id); nDet=c2.count||0;
+        const c3 = await sb.from("supervision").select("*",{count:"exact",head:true}).eq("supervisor_id",id); nSup=c3.count||0;
+      } catch(e){ /* si falla el conteo, seguimos con la 2ª confirmación igual */ }
+      const total = nPlan+nDet+nSup;
+      // 2ª confirmación: consecuencias concretas
+      let msg = 'CONFIRMACIÓN FINAL para eliminar a "'+nombre+'".\n\n';
+      if(total>0){
+        msg += 'Atención: al borrar a esta persona también se borrarán, sin poder recuperarlos:\n';
+        if(nPlan>0) msg += '  • '+nPlan+' asignación(es) en Planificación\n';
+        if(nDet>0)  msg += '  • '+nDet+' registro(s) en Detalle diario\n';
+        if(nSup>0)  msg += '  • '+nSup+' asignación(es) de Supervisión\n';
+        msg += '\n';
+      } else {
+        msg += 'No tiene asignaciones cargadas.\n\n';
+      }
+      msg += 'Para confirmar, escribí el nombre exacto de la persona:';
+      const escrito = prompt(msg, "");
+      if(escrito===null){ setEstado("Borrado cancelado.","cargando"); return; }
+      if(escrito.trim().toLowerCase() !== (nombre||"").trim().toLowerCase()){
+        setEstado("El nombre no coincide. Borrado cancelado.","err"); return;
+      }
+      const{error}=await sb.from("personal").delete().eq("id",id);
+      if(error)return setEstado("Error: "+error.message,"err");
+      setEstado('\u2713 "'+nombre+'" eliminada.',"ok");
+      cargar();
+    }
 
     /* ---- PROYECTOS ---- */
     // Borrador de proyectos: los cambios en la solapa NO se guardan hasta tocar "Guardar cambios".
