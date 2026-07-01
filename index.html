@@ -2205,12 +2205,15 @@
       const desvH=realH-presupH, desvM=realM-presupM;
       const pctH=presupH?(desvH/presupH*100):0, pctM=presupM?(desvM/presupM*100):0;
 
-      // --- JORNALES (horas reales, incl. día extra) / 8, con apertura por especialidad ---
+      // --- JORNALES (solo personal Directo; horas reales incl. día extra) / 8, con apertura por especialidad ---
+      // Contratistas quedan fuera: su costo se paga por otra vía y no consumen jornal de mano de obra directa.
       // La especialidad usada es la vigente en el mes de cada fila (mismo criterio en cascada que el valor-hora).
       let horasRealesTotal=0;
       const porEsp={};
       det.forEach(f=>{
         if(f.ausente) return;
+        const p=personas.find(x=>x.id===f.persona_real);
+        if(!p || p.tipo!=="Directo") return;
         const hs=(Number(f.horas_normales)||0)+(Number(f.horas_extra)||0);
         horasRealesTotal+=hs;
         const esp=especialidadMes(f.persona_real, f.fecha);
@@ -2272,8 +2275,8 @@
       // --- JORNALES: total y apertura por especialidad ---
       (function(){
         h+='<div style="border:1px solid #E6E4DC;border-radius:14px;padding:16px;margin-bottom:18px">';
-        h+='<div style="font-size:13px;font-weight:600;margin-bottom:4px">👷 Jornales utilizados</div>';
-        h+='<div style="font-size:11px;color:#A8A69E;margin-bottom:12px">1 jornal = 8 horas reales trabajadas (horas normales + extra, incluye día extra). No cuenta ausencias.</div>';
+        h+='<div style="font-size:13px;font-weight:600;margin-bottom:4px">👷 Jornales utilizados (personal directo)</div>';
+        h+='<div style="font-size:11px;color:#A8A69E;margin-bottom:12px">1 jornal = 8 horas reales trabajadas (horas normales + extra, incluye día extra). Solo personal Directo; no incluye contratistas ni ausencias.</div>';
         h+='<div style="font-size:24px;font-weight:700;margin-bottom:12px">'+jornalesTotal.toFixed(1)+' <span style="font-size:13px;font-weight:400;color:#888780">jornales · '+horasRealesTotal.toFixed(0)+' h</span></div>';
         if(jornalesPorEsp.length){
           h+='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:6px 10px">Especialidad</th><th style="text-align:right;padding:6px 10px">Jornales</th><th style="text-align:right;padding:6px 10px">Horas</th><th style="text-align:right;padding:6px 10px">% del total</th></tr></thead><tbody>';
