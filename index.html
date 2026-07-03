@@ -264,6 +264,14 @@
     function errLoad(e) { setEstado("Error: " + e.message, "err"); console.error(e); }
     function nombrePersona(id) { const p = personas.find(x => x.id === id); return p ? p.nombre : "—"; }
     function nombreProy(id) { const p = proyectos.find(x => x.id === id); return p ? p.nombre : "(sin proyecto)"; }
+    // ── Estados de proyecto que lo sacan de la operación ──────────────────────
+    // Cotización: presupuesto teórico, NO consume disponibilidad ni entra a reportes.
+    // Archivado: proyecto real terminado, sale de vistas operativas pero es consultable/restaurable.
+    // Un solo punto de verdad para "qué proyecto cuenta como operativo".
+    function esOperativo(pr){ return pr && !pr.es_cotizacion && !pr.archivado; }
+    function proyectosOperativos(){ return proyectos.filter(esOperativo); }
+    function esCotizacion(pr){ return !!(pr && pr.es_cotizacion); }
+    function esArchivado(pr){ return !!(pr && pr.archivado); }
 
     function cambiarTab(t) { tab = t; SEDES[SEDE].tabs.forEach(x => { const el = document.getElementById("tab-"+x.id); if(el) el.className = "tab" + (x.id===t?" active":""); }); cargar(); }
 
@@ -515,18 +523,48 @@
     /* ---- PROYECTOS ---- */
     // Borrador de proyectos: los cambios en la solapa NO se guardan hasta tocar "Guardar cambios".
     let draftPr = {};
+    let vistaProy = "op";
+    function setVistaProy(v){ vistaProy = v; renderProyectos(); }
     function prVal(pr, campo){ const d=draftPr[pr.id]; if(d && Object.prototype.hasOwnProperty.call(d,campo)) return d[campo]; return pr[campo]; }
     function setDraftPr(id, campo, valor){ if(!draftPr[id]) draftPr[id]={}; draftPr[id][campo]=valor; marcarSucio(id); }
     function marcarSucio(id){ const badge=document.getElementById("pr-dirty-"+id); if(badge) badge.style.display="inline-block"; const btn=document.getElementById("pr-savebtn"); if(btn){ btn.style.background="#185FA5"; btn.style.cursor="pointer"; } const msg=document.getElementById("pr-savebar-msg"); if(msg){ msg.textContent="Tenés cambios sin guardar."; msg.style.color="#BA7517"; } }
     function hayCambiosPr(){ return Object.keys(draftPr).some(id => draftPr[id] && Object.keys(draftPr[id]).length); }
     function renderProyectos() {
       let h = '';
-      if (!proyectos.length) h += '<p style="color:#A8A69E;font-size:13px">Sin proyectos.</p>';
-      proyectos.forEach((pr,i)=>{
+      // Filtro de vista: operativos / cotizaciones / archivados
+      const filtros=[['op','En operación'],['cot','Cotizaciones'],['arch','Archivados']];
+      h += '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'+filtros.map(([k,l])=>{
+        const n = k==='op'?proyectos.filter(esOperativo).length : k==='cot'?proyectos.filter(esCotizacion).length : proyectos.filter(p=>esArchivado(p)&&!esCotizacion(p)).length;
+        return '<button class="chip'+(vistaProy===k?' on':'')+'" onclick="setVistaProy(\''+k+'\')">'+l+' ('+n+')</button>';
+      }).join('')+'</div>';
+      let lista;
+      if(vistaProy==='cot') lista = proyectos.filter(esCotizacion);
+      else if(vistaProy==='arch') lista = proyectos.filter(p=>esArchivado(p)&&!esCotizacion(p));
+      else lista = proyectos.filter(esOperativo);
+      if(vistaProy==='cot') h += '<p style="font-size:12px;color:#888780;margin:-6px 0 14px">Presupuestos teóricos: se planifican para estimar costo de MO, pero <b>no consumen disponibilidad ni entran a reportes operativos</b>.</p>';
+      if(vistaProy==='arch') h += '<p style="font-size:12px;color:#888780;margin:-6px 0 14px">Proyectos terminados. Salen de las vistas operativas pero quedan consultables y restaurables. Cada uno con su snapshot congelado.</p>';
+      if (!lista.length) h += '<p style="color:#A8A69E;font-size:13px">Sin proyectos en esta vista.</p>';
+      lista.forEach((pr,i)=>{
         const dirty = draftPr[pr.id] && Object.keys(draftPr[pr.id]).length;
         const cerrado = pr.estado==='Cerrado';
-        const acento = cerrado ? '#A8A69E' : '#185FA5';
-        h += '<div class="card" style="border:1.5px solid #D9D6CC;border-top:4px solid '+acento+';border-radius:14px;padding:18px;margin-bottom:22px;box-shadow:0 2px 10px rgba(44,44,42,0.07);background:#FFFEFB'+(dirty?';border-color:#E7C173':'')+'"><div class="card-head" style="border-bottom:1px solid #F1EFE8;padding-bottom:10px;margin-bottom:14px"><span style="font-size:15px;font-weight:700;color:'+acento+'">'+String(prVal(pr,'nombre')||'Proyecto '+(i+1)).replace(/</g,'&lt;').replace(/"/g,'&quot;')+' <span style="font-size:12px;font-weight:500;color:#A8A69E">· Proyecto '+(i+1)+'</span> <span id="pr-dirty-'+pr.id+'" style="display:'+(dirty?'inline-block':'none')+';background:#FAEEDA;color:#BA7517;font-size:10px;padding:1px 7px;border-radius:8px;font-weight:600;margin-left:6px">sin guardar</span></span><div style="display:flex;gap:8px;align-items:center"><select onchange="editarPrEstado(\''+pr.id+'\',this.value)" style="width:auto;color:'+(cerrado?'#888780':'#3B6D11')+'"><option '+(pr.estado!=='Cerrado'?'selected':'')+'>Vigente</option><option '+(cerrado?'selected':'')+'>Cerrado</option></select><button class="btn-del" onclick="eliminarPr(\''+pr.id+'\')">×</button></div></div><div class="grid">'
+        const cot = esCotizacion(pr), arch = esArchivado(pr);
+        const acento = cot ? '#7A5FB0' : arch ? '#A8A69E' : cerrado ? '#A8A69E' : '#185FA5';
+        const badge = (txt,bg,col)=>'<span style="background:'+bg+';color:'+col+';font-size:10px;padding:2px 8px;border-radius:8px;font-weight:600;margin-left:6px">'+txt+'</span>';
+        let estadoBadges='';
+        if(cot) estadoBadges+=badge('COTIZACIÓN','#EFEAFA','#7A5FB0');
+        if(arch) estadoBadges+=badge('ARCHIVADO','#EFEDE6','#78766F');
+        // Controles de estado (solo admin)
+        let ctrlEstado='';
+        if(esAdmin()){
+          ctrlEstado += '<label style="font-size:11px;color:#7A5FB0;display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" '+(cot?'checked':'')+' onchange="toggleCotizacion(\''+pr.id+'\','+(cot?'true':'false')+')" style="width:auto;margin:0">Cotización</label>';
+          if(arch){
+            ctrlEstado += '<button class="btn" style="background:#fff;border:1px solid #C9C6BC;color:#5F5E5A;padding:4px 10px;font-size:11px" onclick="restaurarProy(\''+pr.id+'\')">↩ Restaurar</button>';
+            ctrlEstado += '<button class="btn" style="background:#fff;border:1px solid #C9C6BC;color:#5F5E5A;padding:4px 10px;font-size:11px" onclick="reCongelar(\''+pr.id+'\')">↻ Re-congelar snapshot</button>';
+          } else {
+            ctrlEstado += '<button class="btn" style="background:#fff;border:1px solid #C9C6BC;color:#5F5E5A;padding:4px 10px;font-size:11px" onclick="archivarProy(\''+pr.id+'\')">📦 Archivar</button>';
+          }
+        }
+        h += '<div class="card" style="border:1.5px solid #D9D6CC;border-top:4px solid '+acento+';border-radius:14px;padding:18px;margin-bottom:22px;box-shadow:0 2px 10px rgba(44,44,42,0.07);background:#FFFEFB'+(dirty?';border-color:#E7C173':'')+'"><div class="card-head" style="border-bottom:1px solid #F1EFE8;padding-bottom:10px;margin-bottom:14px"><span style="font-size:15px;font-weight:700;color:'+acento+'">'+String(prVal(pr,'nombre')||'Proyecto '+(i+1)).replace(/</g,'&lt;').replace(/"/g,'&quot;')+' <span style="font-size:12px;font-weight:500;color:#A8A69E">· Proyecto '+(i+1)+'</span>'+estadoBadges+' <span id="pr-dirty-'+pr.id+'" style="display:'+(dirty?'inline-block':'none')+';background:#FAEEDA;color:#BA7517;font-size:10px;padding:1px 7px;border-radius:8px;font-weight:600;margin-left:6px">sin guardar</span></span><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+ctrlEstado+'<select onchange="editarPrEstado(\''+pr.id+'\',this.value)" style="width:auto;color:'+(cerrado?'#888780':'#3B6D11')+'"><option '+(pr.estado!=='Cerrado'?'selected':'')+'>Vigente</option><option '+(cerrado?'selected':'')+'>Cerrado</option></select>'+(esAdmin()?'<button class="btn-del" onclick="eliminarPr(\''+pr.id+'\')">×</button>':'')+'</div></div><div class="grid">'
         + li(pr.id,'nombre','Nombre',prVal(pr,'nombre')) + li(pr.id,'codigo','Código',prVal(pr,'codigo'))
         + '<label class="lbl" style="grid-column:1/-1">Descripción<input value="'+(prVal(pr,'descripcion')||'')+'" onchange="setDraftPr(\''+pr.id+'\',\'descripcion\',this.value)"></label>'
         + ln(pr.id,'cant_modulos','Cantidad de módulos',prVal(pr,'cant_modulos')) + li(pr.id,'tam_modulos','Tamaño de módulos',prVal(pr,'tam_modulos'))
@@ -542,7 +580,7 @@
         + li(pr.id,'planos','Planos (link o ref.)',prVal(pr,'planos'))
         + editorModulos(pr) + '</div></div>';
       });
-      h += '<button class="btn-add" onclick="agregarPr()">+ Agregar proyecto</button>';
+      h += '<button class="btn-add" onclick="agregarPr()">+ '+(vistaProy==='cot'?'Agregar cotización':'Agregar proyecto')+'</button>';
       // Barra de guardado SIEMPRE visible en la solapa Proyectos.
       const sucio = hayCambiosPr();
       h += '<div id="pr-savebar" style="display:flex;position:sticky;bottom:0;gap:10px;align-items:center;justify-content:flex-end;background:#FFFDF7;border:1px solid #F0E6CE;border-radius:12px;padding:12px 16px;margin-top:16px;box-shadow:0 -2px 12px rgba(0,0,0,0.06)">'
@@ -555,10 +593,114 @@
     function li(id,c,l,v){return '<label class="lbl">'+l+'<input value="'+(v==null?'':String(v).replace(/"/g,'&quot;'))+'" onchange="setDraftPr(\''+id+'\',\''+c+'\',this.value)"></label>';}
     function ln(id,c,l,v){return '<label class="lbl">'+l+'<input type="number" value="'+(v||0)+'" onchange="setDraftPr(\''+id+'\',\''+c+'\',Number(this.value))"></label>';}
     function ld(id,c,l,v){return '<label class="lbl">'+l+'<input type="date" value="'+(v||'')+'" onchange="setDraftPr(\''+id+'\',\''+c+'\',this.value)"></label>';}
-    async function agregarPr(){ if(hayCambiosPr() && !confirm("Tenés cambios sin guardar que se perderán al recargar. ¿Continuar y agregar un proyecto nuevo?")) return; draftPr={}; const{error}=await sb.from("proyectos").insert({nombre:"Nuevo proyecto",estado:"Vigente"});if(error)return setEstado("Error: "+error.message,"err");cargar();}
+    async function agregarPr(){ if(hayCambiosPr() && !confirm("Tenés cambios sin guardar que se perderán al recargar. ¿Continuar y agregar un proyecto nuevo?")) return; draftPr={}; const nuevo={nombre:"Nuevo proyecto",estado:"Vigente"}; if(vistaProy==='cot') nuevo.es_cotizacion=true; const{error}=await sb.from("proyectos").insert(nuevo);if(error)return setEstado("Error: "+error.message,"err");cargar();}
     // El estado (Vigente/Cerrado) se guarda al instante (no es parte del borrador editable).
     async function editarPrEstado(id,v){const{error}=await sb.from("proyectos").update({estado:v}).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");const pr=proyectos.find(p=>p.id===id);if(pr)pr.estado=v;setEstado("\u2713 Estado guardado.","ok");}
-    async function eliminarPr(id){ if(!confirm("¿Eliminar este proyecto? Esta acción no se puede deshacer.")) return; const{error}=await sb.from("proyectos").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");delete draftPr[id];cargar();}
+    async function eliminarPr(id){
+      if(!esAdmin()){ setEstado("Solo un admin puede eliminar proyectos.","err"); return; }
+      const pr = proyectos.find(p=>p.id===id);
+      if(!confirm("¿Eliminar este proyecto de forma permanente?\n\nSe guardará automáticamente un snapshot congelado antes de borrar, así su historia queda consultable en «Archivados» aunque el proyecto ya no exista.\n\nEsta acción no se puede deshacer.")) return;
+      // Snapshot ANTES de borrar: aunque se borre la fila viva, el histórico sobrevive.
+      const snapOk = await congelarSnapshot(id, "borrado");
+      if(snapOk===false && !confirm("No se pudo guardar el snapshot. ¿Borrar igual, sin histórico?")) return;
+      const{error}=await sb.from("proyectos").delete().eq("id",id);
+      if(error)return setEstado("Error: "+error.message,"err");
+      delete draftPr[id];
+      setEstado("✓ Proyecto eliminado (snapshot guardado).","ok");
+      cargar();
+    }
+
+    // ── Toggle cotización ─────────────────────────────────────────────────────
+    async function toggleCotizacion(id, estaba){
+      if(!esAdmin()){ setEstado("Solo un admin puede marcar cotizaciones.","err"); return; }
+      const nuevo = !estaba;
+      if(nuevo && !confirm("Marcar como COTIZACIÓN.\n\nSe podrá planificar para estimar costo de MO, pero dejará de consumir disponibilidad y saldrá de todos los reportes operativos. ¿Continuar?")) { renderProyectos(); return; }
+      const{error}=await sb.from("proyectos").update({es_cotizacion:nuevo}).eq("id",id);
+      if(error)return setEstado("Error: "+error.message,"err");
+      const pr=proyectos.find(p=>p.id===id); if(pr) pr.es_cotizacion=nuevo;
+      setEstado(nuevo?"✓ Marcado como cotización.":"✓ Cotización desmarcada.","ok");
+      renderProyectos();
+    }
+
+    // ── Archivar (soft delete + snapshot automático) ──────────────────────────
+    async function archivarProy(id){
+      if(!esAdmin()){ setEstado("Solo un admin puede archivar.","err"); return; }
+      if(!confirm("Archivar este proyecto.\n\nSaldrá de las vistas operativas (disponibilidad, dashboard, gantt, histograma, parte) pero seguirá consultable y restaurable. Se congelará un snapshot con todo su estado actual. ¿Continuar?")) return;
+      const snapOk = await congelarSnapshot(id, "archivado");
+      if(snapOk===false && !confirm("No se pudo guardar el snapshot. ¿Archivar igual?")) return;
+      const{error}=await sb.from("proyectos").update({archivado:true, archivado_at:new Date().toISOString()}).eq("id",id);
+      if(error)return setEstado("Error: "+error.message,"err");
+      const pr=proyectos.find(p=>p.id===id); if(pr){ pr.archivado=true; }
+      setEstado("✓ Proyecto archivado (snapshot congelado).","ok");
+      vistaProy="arch"; renderProyectos();
+    }
+
+    async function restaurarProy(id){
+      if(!esAdmin()){ setEstado("Solo un admin puede restaurar.","err"); return; }
+      if(!confirm("Restaurar este proyecto a operación.\n\nVolverá a aparecer en las vistas operativas y a consumir disponibilidad. El snapshot archivado se conserva. ¿Continuar?")) return;
+      const{error}=await sb.from("proyectos").update({archivado:false, archivado_at:null}).eq("id",id);
+      if(error)return setEstado("Error: "+error.message,"err");
+      const pr=proyectos.find(p=>p.id===id); if(pr){ pr.archivado=false; }
+      setEstado("✓ Proyecto restaurado.","ok");
+      vistaProy="op"; renderProyectos();
+    }
+
+    async function reCongelar(id){
+      if(!esAdmin()){ setEstado("Solo un admin puede congelar snapshots.","err"); return; }
+      if(!confirm("Congelar un snapshot NUEVO con el estado actual del proyecto.\n\nNo reemplaza los snapshots anteriores: se agrega uno nuevo con la fecha de hoy. ¿Continuar?")) return;
+      const ok = await congelarSnapshot(id, "recongelado");
+      if(ok===false) return setEstado("Error al congelar snapshot.","err");
+      setEstado("✓ Snapshot nuevo congelado.","ok");
+    }
+
+    // ── Snapshot: proyecto + planificación + detalle + supervisión (jsonb inmutable) ──
+    async function congelarSnapshot(id, motivo){
+      try {
+        const pr = proyectos.find(p=>p.id===id) || {};
+        const [pl, det, sup] = await Promise.all([
+          sb.from("planificacion").select("*").eq("proyecto_id", id),
+          sb.from("detalle_diario").select("*").eq("proyecto_id", id),
+          sb.from("supervision").select("*")
+        ]);
+        const planiRows = pl.data || [];
+        // asignaciones de personal de esos bloques de planificación
+        let planiPersRows = [];
+        if(planiRows.length){
+          const pids = planiRows.map(b=>b.id);
+          const pp = await sb.from("planificacion_personal").select("*").in("planificacion_id", pids);
+          planiPersRows = pp.data || [];
+        }
+        // supervisión que incluye este proyecto en su lista separada por comas
+        const supRows = (sup.data||[]).filter(s => (s.proyectos||"").split(",").map(x=>x.trim()).includes(String(id)));
+        const contenido = {
+          version: 1,
+          motivo: motivo || "manual",
+          congelado_en: new Date().toISOString(),
+          proyecto: pr,
+          planificacion: planiRows,
+          planificacion_personal: planiPersRows,
+          supervision: supRows,
+          detalle_diario: det.data || []
+        };
+        const { error } = await sb.from("proyectos_snapshot").insert({
+          proyecto_id: id,
+          proyecto_nombre: pr.nombre || null,
+          creado_por: miEmail || null,
+          contenido: contenido
+        });
+        if(error){ console.error("snapshot", error); return false; }
+        return true;
+      } catch(e){ console.error("snapshot ex", e); return false; }
+    }
+
+    // ── Ver snapshots de un proyecto ──────────────────────────────────────────
+    async function verSnapshots(id){
+      const { data, error } = await sb.from("proyectos_snapshot").select("id,proyecto_nombre,snapshot_at,creado_por,motivo:contenido->motivo").eq("proyecto_id", id).order("snapshot_at",{ascending:false});
+      if(error){ setEstado("Error: "+error.message,"err"); return; }
+      if(!data || !data.length){ alert("Este proyecto no tiene snapshots congelados todavía."); return; }
+      const txt = data.map(s=> "• "+dmy((s.snapshot_at||"").slice(0,10))+" — "+(s.creado_por||"?")).join("\n");
+      alert("Snapshots congelados de este proyecto:\n\n"+txt+"\n\nTotal: "+data.length);
+    }
     function descartarCambiosPr(){ if(!hayCambiosPr()){ return; } if(!confirm("¿Descartar todos los cambios sin guardar?")) return; draftPr={}; renderProyectos(); setEstado("Cambios descartados.","ok"); }
     async function guardarCambiosPr(){
       const ids = Object.keys(draftPr).filter(id => draftPr[id] && Object.keys(draftPr[id]).length);
@@ -987,6 +1129,8 @@
     function planificadoEnRango(personaId, desde, hasta){
       const hit=[];
       plani.forEach(b=>{
+        // Las cotizaciones y proyectos archivados no consumen disponibilidad: se ignoran.
+        if(!esOperativo(proyectos.find(p=>p.id===b.proyecto_id))) return;
         if(!(planiPers[b.id]||[]).includes(personaId)) return;
         const dias=diasHabiles(b.fecha_desde,b.fecha_hasta);
         const choca=dias.filter(d=> d>=desde && d<=hasta);
@@ -1163,7 +1307,7 @@
         const subsSel = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
         h += '<div class="card" style="border:1px solid #E6E4DC;border-left:6px solid '+st.color+';border-radius:12px;margin-bottom:16px;padding:0;overflow:hidden;box-shadow:0 1px 4px rgba(44,44,42,0.05)">'
           + '<div class="pl-row" style="background:'+st.bg+';margin:0;padding:12px 14px;border-bottom:1px solid '+st.color+'22"><span class="estpill" style="background:'+st.color+';color:#fff;min-width:130px;display:inline-block;text-align:center;font-weight:600">'+st.label+'</span>'
-          + '<select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px">'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>'
+          + '<select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px">'+proyectosOperativos().map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>'
           + '<button class="btn-del" style="margin-left:auto" onclick="eliminarPl(\''+b.id+'\')">×</button></div>'
           + '<div style="padding:14px">'
           + '<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Tareas (tildá una o varias):</div><div class="chips">'+st.subs.map(s=>{const on=subsSel.includes(s);return '<button class="chip'+(on?' on':'')+'" onclick="toggleSub(\''+b.id+'\',\''+s.replace(/'/g,"\\\\'")+'\','+(on?'true':'false')+')">'+s+'</button>';}).join('')+'</div></div>'
@@ -1552,7 +1696,7 @@
       const opcPersona = (sel) => personasHuella().map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
       const opcEst = (sel) => STKEYS.map(k => '<option value="'+k+'" '+(k===sel?'selected':'')+'>'+STATIONS[k].label+'</option>').join('');
       const opcSub = (est, sel) => { const base = STATIONS[est]?STATIONS[est].subs.slice():[]; if(sel && !base.includes(sel)) base.unshift(sel); return base.map(s => '<option '+(s===sel?'selected':'')+'>'+s+'</option>').join(''); };
-      const opcProy = (sel) => proyectos.map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
+      const opcProy = (sel) => proyectosOperativos().map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
       const opcMotivo = (sel) => '<option value="">— motivo —</option>'+MOTIVOS_DESVIO.map(m => '<option '+(m===sel?'selected':'')+'>'+m+'</option>').join('');
 
       let h = '<p style="font-size:13px;color:#888780;margin-top:0">Registro real día por día. Editá lo que pasó: reasignar proyecto/persona/estación/tarea, marcar ausente, cargar horas extra. Cuando hay desvío respecto a lo planificado, justificá el motivo. Los días anteriores a hoy son historia.</p>';
@@ -1582,6 +1726,7 @@
 
       // ---- Tarjetas por proyecto ----
       const proyCon = Object.entries(imp.porProyecto)
+        .filter(([pid])=> esOperativo(proyectos.find(p=>p.id===pid)))
         .filter(([,p])=> Math.abs(p.costoNetoPlan)>0.5 || p.atrasoProy!==0 || p.atrasoEst!==0 || p.costoReal>0)
         .sort((a,b)=> Math.abs(b[1].costoNetoPlan)-Math.abs(a[1].costoNetoPlan));
       if(proyCon.length){
@@ -1779,7 +1924,7 @@
     function abrirDiaExtra(){
       cerrarDiaExtra();
       const hoy = fechaStr(new Date());
-      const optProy = proyectos.map(p=>'<option value="'+p.id+'">'+p.nombre+'</option>').join('');
+      const optProy = proyectosOperativos().map(p=>'<option value="'+p.id+'">'+p.nombre+'</option>').join('');
       const optPers = personasHuella().map(p=>'<option value="'+p.id+'">'+p.nombre+(p.tipo==='Contratista'?' (contratista)':'')+'</option>').join('');
       const optEst  = STKEYS.map(k=>'<option value="'+k+'">'+STATIONS[k].label+'</option>').join('');
       const ov = document.createElement("div");
@@ -1920,14 +2065,14 @@
       return x+'</div>';
     }
     function renderDash() {
-      const proyVig = proyectos.filter(p => p.estado !== "Cerrado");
+      const proyVig = proyectosOperativos().filter(p => p.estado !== "Cerrado");
       let det = detalle.slice();
       if (dashProy) det = det.filter(f => f.proyecto_id === dashProy);
       // KPIs
       let jornal=0, extra=0, ausencias=0, hsExtra=0;
       det.forEach(f => { if (f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); hsExtra+=(Number(f.horas_extra)||0); });
       const real = jornal+extra;
-      const presup = (dashProy ? proyectos.filter(p=>p.id===dashProy) : proyectos).reduce((s,p)=>s+presupMO(p),0);
+      const presup = (dashProy ? proyectos.filter(p=>p.id===dashProy) : proyectosOperativos()).reduce((s,p)=>s+presupMO(p),0);
       // --- Índices de desempeño (Earned Value) ---
       // CPI = costo planificado del trabajo hecho / costo real. >1 = eficiente (gastás menos de lo previsto).
       // SPI = días reales trabajados / días planificados hasta hoy. >1 = adelantado; <1 = atrasado.
@@ -2000,7 +2145,7 @@
       const card=(l,v,s,col,calc)=>'<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 16px"><div style="font-size:12px;color:#888780">'+l+'</div><div style="font-size:22px;font-weight:600;color:'+(col||'#2C2C2A')+';margin-top:2px">'+v+'</div>'+(s?'<div style="font-size:11.5px;color:#A8A69E;margin-top:2px">'+s+'</div>':'')+(calc?'<div style="font-size:10.5px;color:#BDBBB2;margin-top:5px;line-height:1.4;border-top:1px solid #F4F2EC;padding-top:5px">Cómo se calcula: '+calc+'</div>':'')+'</div>';
       let h='<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">';
       h+='<div style="display:flex;border:1px solid #E6E4DC;border-radius:8px;overflow:hidden"><button onclick="setVista(\'pm\')" style="border:none;padding:7px 16px;font-size:13px;cursor:pointer;background:'+(vistaDash==='pm'?'#185FA5':'transparent')+';color:'+(vistaDash==='pm'?'#fff':'#888780')+'">Vista PM</button><button onclick="setVista(\'coord\')" style="border:none;padding:7px 16px;font-size:13px;cursor:pointer;background:'+(vistaDash==='coord'?'#185FA5':'transparent')+';color:'+(vistaDash==='coord'?'#fff':'#888780')+'">Vista Coordinador</button></div>';
-      h+='<select onchange="setDashProy(this.value)" style="width:auto"><option value="">Todos los vigentes</option>'+proyVig.map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+'</option>').join('')+(proyectos.filter(p=>p.estado==='Cerrado').length?('<optgroup label="Cerrados">'+proyectos.filter(p=>p.estado==='Cerrado').map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+' (cerrado)</option>').join('')+'</optgroup>'):'')+'</select>';
+      h+='<select onchange="setDashProy(this.value)" style="width:auto"><option value="">Todos los vigentes</option>'+proyVig.map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+'</option>').join('')+(proyectosOperativos().filter(p=>p.estado==='Cerrado').length?('<optgroup label="Cerrados">'+proyectosOperativos().filter(p=>p.estado==='Cerrado').map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+' (cerrado)</option>').join('')+'</optgroup>'):'')+'</select>';
       h+=botonesExport("dash-print","dashboard")+'</div>';
       h+='<div id="dash-print">';
       if(det.length===0){ h+='<p style="font-size:13px;color:#888780">Sin datos en el detalle todavía. Generá el detalle diario para ver indicadores.</p></div>'; contenido.innerHTML=h; return; }
@@ -2080,11 +2225,13 @@
       const ensure = (k)=>{ if(!porEst[k]) porEst[k]={planByDay:{}, realByDay:{}}; return porEst[k]; };
       plani.forEach(b=>{
         if(b.estacion===SUP_MARK || !STATIONS[b.estacion]) return;
+        if(!esOperativo(proyectos.find(p=>p.id===b.proyecto_id))) return;
         const e=ensure(b.estacion);
         diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ (e.planByDay[d]=e.planByDay[d]||new Set()).add(b.proyecto_id); });
       });
       detalle.forEach(f=>{
         if(f.ausente) return; if(f.estacion_real===SUP_MARK || !STATIONS[f.estacion_real]) return;
+        if(!esOperativo(proyectos.find(p=>p.id===f.proyecto_id))) return;
         const e=ensure(f.estacion_real);
         (e.realByDay[f.fecha]=e.realByDay[f.fecha]||new Set()).add(f.proyecto_id);
       });
@@ -2118,9 +2265,11 @@
     /* ---- HISTOGRAMA ---- */
     function renderHisto() {
       if(!detalle.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">No hay detalle generado.</p>'; return; }
-      const fechas=[...new Set(detalle.map(f=>f.fecha))].sort();
-      const pers=[...new Set(detalle.map(f=>f.persona_real))];
-      const cell={}; detalle.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?"__aus":f.estacion_real; });
+      const detOp = detalle.filter(f=>esOperativo(proyectos.find(p=>p.id===f.proyecto_id)));
+      if(!detOp.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">No hay detalle de proyectos operativos.</p>'; return; }
+      const fechas=[...new Set(detOp.map(f=>f.fecha))].sort();
+      const pers=[...new Set(detOp.map(f=>f.persona_real))];
+      const cell={}; detOp.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?"__aus":f.estacion_real; });
       let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por estación.</p>'+botonesExport("histo-print","histograma")+'</div><div id="histo-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
       fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:50px">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
@@ -2146,7 +2295,7 @@
       const texto = "*Parte diario "+(fSel?dmy(fSel):"")+"*\n"+proyNom+"\n\n"+rows.map(f=>{const pp=personas.find(x=>x.id===f.persona_real);const ec=pp&&pp.tipo==="Contratista";return "• "+nombrePersona(f.persona_real)+(ec?" (contratista)":"")+" → "+nombreEstacion(f.estacion_real)+modTxt(f)+": "+f.subtarea_real+(f.horas_extra>0?" (+"+f.horas_extra+"h extra)":"");}).join("\n");
       let h='<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">';
       h+='<label style="font-size:11.5px;color:#888780">Fecha<br><select onchange="setParte(\'fecha\',this.value)" style="margin-top:3px">'+(fechas.length?fechas.map(d=>'<option value="'+d+'" '+(d===fSel?'selected':'')+'>'+dmy(d)+'</option>').join(''):'<option>—</option>')+'</select></label>';
-      h+='<label style="font-size:11.5px;color:#888780">Proyecto<br><select onchange="setParte(\'proy\',this.value)" style="margin-top:3px"><option value="">Todos</option>'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===parteProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
+      h+='<label style="font-size:11.5px;color:#888780">Proyecto<br><select onchange="setParte(\'proy\',this.value)" style="margin-top:3px"><option value="">Todos</option>'+proyectosOperativos().map(p=>'<option value="'+p.id+'" '+(p.id===parteProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Estación<br><select onchange="setParte(\'est\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+STKEYS.map(k=>'<option value="'+k+'" '+(k===parteEst?'selected':'')+'>'+STATIONS[k].label+'</option>').join('')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Persona<br><select onchange="setParte(\'pers\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+personasHuella().map(p=>'<option value="'+p.id+'" '+(p.id===partePersona?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
       h+='<button class="btn" style="background:#25D366;color:#fff" onclick="copiarParte()">Copiar para WhatsApp</button>';
@@ -2167,7 +2316,7 @@
     function renderInforme() {
       const proySel = informeProy || (proyectos[0] && proyectos[0].id) || "";
       let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px">';
-      h+='<label style="font-size:12px;color:#888780">Proyecto<br><select onchange="setInformeProy(this.value)" style="margin-top:3px;min-width:220px">'+(proyectos.length?proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===proySel?'selected':'')+'>'+p.nombre+(p.estado==='Cerrado'?' (cerrado)':'')+'</option>').join(''):'<option>Sin proyectos</option>')+'</select></label>';
+      h+='<label style="font-size:12px;color:#888780">Proyecto<br><select onchange="setInformeProy(this.value)" style="margin-top:3px;min-width:220px">'+(proyectos.length?proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===proySel?'selected':'')+'>'+p.nombre+(p.es_cotizacion?' (cotización)':p.archivado?' (archivado)':p.estado==='Cerrado'?' (cerrado)':'')+'</option>').join(''):'<option>Sin proyectos</option>')+'</select></label>';
       h+=botonesExport("informe-print","informe_cierre")+'</div>';
 
       if(!proySel){ h+='<p style="font-size:13px;color:#888780">No hay proyectos.</p>'; contenido.innerHTML=h; return; }
@@ -2408,9 +2557,11 @@
     }
     async function cerrarSesion() { await sb.auth.signOut(); document.getElementById("app").style.display = "none"; document.getElementById("login").style.display = "flex"; }
     let miPerfil = { rol: "coordinador", ve_sueldos: false };
+    let miEmail = "";
     async function mostrarApp(user) {
       document.getElementById("login").style.display = "none";
       document.getElementById("app").style.display = "block";
+      miEmail = user.email || "";
       document.getElementById("userEmail").textContent = user.email;
       // leer perfil (rol y permisos)
       const { data: perf } = await sb.from("perfiles").select("*").eq("id", user.id).maybeSingle();
