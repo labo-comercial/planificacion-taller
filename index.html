@@ -220,6 +220,8 @@
     let planiVerTodo = false;
     let impactoProy = "";      // filtro de proyecto del panel de impacto ("" = todos)
     function setImpactoProy(pid){ impactoProy = (impactoProy===pid ? "" : pid); renderDetalle(); }
+    let proyVista = "operacion";   // vista de la pestaña Proyectos: "operacion" | "cotizaciones" | "archivados"
+    function setProyVista(v){ proyVista = v; renderProyectos(); }
     let trailers = [];
     let mantTareas = [], mantPers = {}, mantTipicas = [];
     let mantParte = {};            // clave "tareaId|fecha" -> avance (texto)
@@ -266,6 +268,17 @@
     function errLoad(e) { setEstado("Error: " + e.message, "err"); console.error(e); }
     function nombrePersona(id) { const p = personas.find(x => x.id === id); return p ? p.nombre : "—"; }
     function nombreProy(id) { const p = proyectos.find(x => x.id === id); return p ? p.nombre : "(sin proyecto)"; }
+    // ── Estados de proyecto que lo sacan de la operación ──────────────────────
+    // Cotización: presupuesto teórico. Se planifica y se le calcula costo, pero NO consume
+    //   disponibilidad ni entra a dashboard/gantt/histograma/parte/desvíos operativos.
+    // Archivado: proyecto real terminado. Soft delete: sale de vistas operativas pero
+    //   queda consultable y restaurable (con snapshot congelado).
+    // Un solo punto de verdad para "qué proyecto cuenta como operativo".
+    function esCotizacion(pr){ return !!(pr && pr.es_cotizacion); }
+    function esArchivado(pr){ return !!(pr && pr.archivado); }
+    function esOperativo(pr){ return !!(pr && !pr.es_cotizacion && !pr.archivado); }
+    function proyectosOperativos(){ return proyectos.filter(esOperativo); }
+    function etiquetaEstadoProy(pr){ if(!pr) return ""; if(esCotizacion(pr)) return " (cotización)"; if(esArchivado(pr)) return " (archivado)"; if(pr.estado==="Cerrado") return " (cerrado)"; return ""; }
 
     function cambiarTab(t) { tab = t; SEDES[SEDE].tabs.forEach(x => { const el = document.getElementById("tab-"+x.id); if(el) el.className = "tab" + (x.id===t?" active":""); }); cargar(); }
 
@@ -530,12 +543,51 @@
     function hayCambiosPr(){ return Object.keys(draftPr).some(id => draftPr[id] && Object.keys(draftPr[id]).length); }
     function renderProyectos() {
       let h = '';
-      if (!proyectos.length) h += '<p style="color:#A8A69E;font-size:13px">Sin proyectos.</p>';
-      proyectos.forEach((pr,i)=>{
+      // ── Filtro de vista: En operación / Cotizaciones / Archivados ──
+      const enOper = proyectos.filter(p=>esOperativo(p));
+      const cotiz  = proyectos.filter(p=>esCotizacion(p) && !esArchivado(p));
+      const arch   = proyectos.filter(p=>esArchivado(p));
+      const tabBtn = (id,label,n)=>{ const on = proyVista===id; return '<button onclick="setProyVista(\''+id+'\')" style="border:1px solid '+(on?'#185FA5':'#E0DDD3')+';background:'+(on?'#185FA5':'#fff')+';color:'+(on?'#fff':'#5F5E5A')+';border-radius:9px;padding:6px 13px;font-size:12.5px;font-weight:'+(on?'600':'500')+';cursor:pointer">'+label+' <span style="opacity:.75;font-weight:500">('+n+')</span></button>'; };
+      h += '<div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">'
+         + tabBtn('operacion','En operación',enOper.length)
+         + tabBtn('cotizaciones','Cotizaciones',cotiz.length)
+         + tabBtn('archivados','Archivados',arch.length)
+         + '</div>';
+      const lista = proyVista==='cotizaciones' ? cotiz : proyVista==='archivados' ? arch : enOper;
+      if(proyVista==='cotizaciones') h += '<div style="font-size:11.5px;color:#8A86A0;background:#FBFAFE;border:1px solid #E4E0F0;border-radius:9px;padding:9px 12px;margin-bottom:16px">Las <b>cotizaciones</b> se planifican y se les calcula costo como práctica, pero <b>no consumen disponibilidad</b> ni aparecen en dashboard, gantt, histograma, parte diario ni desvíos operativos. Son presupuestos teóricos.</div>';
+      if(proyVista==='archivados') h += '<div style="font-size:11.5px;color:#6E6C66;background:#F7F6F2;border:1px solid #E6E4DC;border-radius:9px;padding:9px 12px;margin-bottom:16px">Los proyectos <b>archivados</b> están fuera de la operación pero siguen consultables. Al archivar se congela un <b>snapshot</b> (proyecto + planificación + detalle) que sobrevive incluso si algún día borrás los datos vivos. Se pueden <b>restaurar</b> con un clic.</div>';
+
+      if (!lista.length) h += '<p style="color:#A8A69E;font-size:13px;padding:6px 0">'+(proyVista==='cotizaciones'?'No hay cotizaciones. Marcá un proyecto como cotización desde su tarjeta.':proyVista==='archivados'?'No hay proyectos archivados.':'Sin proyectos en operación.')+'</p>';
+      lista.forEach((pr,i)=>{
         const dirty = draftPr[pr.id] && Object.keys(draftPr[pr.id]).length;
         const cerrado = pr.estado==='Cerrado';
-        const acento = cerrado ? '#A8A69E' : '#185FA5';
-        h += '<div class="card" style="border:1.5px solid #D9D6CC;border-top:4px solid '+acento+';border-radius:14px;padding:18px;margin-bottom:22px;box-shadow:0 2px 10px rgba(44,44,42,0.07);background:#FFFEFB'+(dirty?';border-color:#E7C173':'')+'"><div class="card-head" style="border-bottom:1px solid #F1EFE8;padding-bottom:10px;margin-bottom:14px"><span style="font-size:15px;font-weight:700;color:'+acento+'">'+String(prVal(pr,'nombre')||'Proyecto '+(i+1)).replace(/</g,'&lt;').replace(/"/g,'&quot;')+' <span style="font-size:12px;font-weight:500;color:#A8A69E">· Proyecto '+(i+1)+'</span> <span id="pr-dirty-'+pr.id+'" style="display:'+(dirty?'inline-block':'none')+';background:#FAEEDA;color:#BA7517;font-size:10px;padding:1px 7px;border-radius:8px;font-weight:600;margin-left:6px">sin guardar</span></span><div style="display:flex;gap:8px;align-items:center"><select onchange="editarPrEstado(\''+pr.id+'\',this.value)" style="width:auto;color:'+(cerrado?'#888780':'#3B6D11')+'"><option '+(pr.estado!=='Cerrado'?'selected':'')+'>Vigente</option><option '+(cerrado?'selected':'')+'>Cerrado</option></select><button class="btn-del" onclick="eliminarPr(\''+pr.id+'\')">×</button></div></div><div class="grid">'
+        const cotizacion = esCotizacion(pr), archivado = esArchivado(pr);
+        const acento = archivado ? '#8C8A82' : cotizacion ? '#4A3F7A' : cerrado ? '#A8A69E' : '#185FA5';
+        // chip de estado en el título
+        let chipEstado = '';
+        if(cotizacion) chipEstado = '<span style="background:#EDEAFA;color:#4A3F7A;font-size:10px;padding:1px 8px;border-radius:8px;font-weight:600;margin-left:6px">cotización</span>';
+        else if(archivado) chipEstado = '<span style="background:#EDEBE4;color:#6E6C66;font-size:10px;padding:1px 8px;border-radius:8px;font-weight:600;margin-left:6px">archivado</span>';
+        // controles del header según estado + permisos
+        let controles = '';
+        if(!archivado){
+          controles += '<select onchange="editarPrEstado(\''+pr.id+'\',this.value)" style="width:auto;color:'+(cerrado?'#888780':'#3B6D11')+'"><option '+(pr.estado!=='Cerrado'?'selected':'')+'>Vigente</option><option '+(cerrado?'selected':'')+'>Cerrado</option></select>';
+        }
+        if(esAdmin()){
+          if(archivado){
+            controles += '<button class="btn" style="background:#fff;border:1px solid #C9E3B8;color:#3B6D11;padding:4px 10px;font-size:11.5px" onclick="restaurarPr(\''+pr.id+'\')">↩ Restaurar</button>';
+            controles += '<button class="btn" style="background:#fff;border:1px solid #E4E0F0;color:#4A3F7A;padding:4px 10px;font-size:11.5px" onclick="recongelarSnapshot(\''+pr.id+'\')">↻ Re-congelar</button>';
+          } else {
+            controles += '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#6E6C66;padding:4px 10px;font-size:11.5px" onclick="archivarPr(\''+pr.id+'\')">📦 Archivar</button>';
+          }
+        }
+        // replicar planificación: disponible en todas las vistas, para cualquier admin/coordinador
+        controles += '<button class="btn" style="background:#fff;border:1px solid #CBD8EA;color:#185FA5;padding:4px 10px;font-size:11.5px" onclick="replicarPlanProy(\''+pr.id+'\')" title="Crear un proyecto nuevo copiando esta planificación">⧉ Replicar plan</button>';
+        controles += '<button class="btn-del" onclick="eliminarPr(\''+pr.id+'\')">×</button>';
+
+        h += '<div class="card" style="border:1.5px solid #D9D6CC;border-top:4px solid '+acento+';border-radius:14px;padding:18px;margin-bottom:22px;box-shadow:0 2px 10px rgba(44,44,42,0.07);background:#FFFEFB'+(dirty?';border-color:#E7C173':'')+(archivado?';opacity:.92':'')+'"><div class="card-head" style="border-bottom:1px solid #F1EFE8;padding-bottom:10px;margin-bottom:14px"><span style="font-size:15px;font-weight:700;color:'+acento+'">'+String(prVal(pr,'nombre')||'Proyecto '+(i+1)).replace(/</g,'&lt;').replace(/"/g,'&quot;')+chipEstado+' <span id="pr-dirty-'+pr.id+'" style="display:'+(dirty?'inline-block':'none')+';background:#FAEEDA;color:#BA7517;font-size:10px;padding:1px 7px;border-radius:8px;font-weight:600;margin-left:6px">sin guardar</span></span><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">'+controles+'</div></div>'
+        // toggle Cotización (solo si no está archivado y sos admin)
+        + ((esAdmin() && !archivado) ? '<label style="display:inline-flex;align-items:center;gap:7px;font-size:12px;color:#4A3F7A;background:#FBFAFE;border:1px solid #E4E0F0;border-radius:9px;padding:6px 11px;margin-bottom:12px;cursor:pointer"><input type="checkbox" '+(cotizacion?'checked':'')+' onchange="toggleCotizacion(\''+pr.id+'\',this.checked)" style="width:auto;margin:0"> Es una cotización (presupuesto teórico, no consume recursos)</label>' : '')
+        + '<div class="grid">'
         + li(pr.id,'nombre','Nombre',prVal(pr,'nombre')) + li(pr.id,'codigo','Código',prVal(pr,'codigo'))
         + '<label class="lbl" style="grid-column:1/-1">Descripción<input value="'+(prVal(pr,'descripcion')||'')+'" onchange="setDraftPr(\''+pr.id+'\',\'descripcion\',this.value)"></label>'
         + ln(pr.id,'cant_modulos','Cantidad de módulos',prVal(pr,'cant_modulos')) + li(pr.id,'tam_modulos','Tamaño de módulos',prVal(pr,'tam_modulos'))
@@ -551,7 +603,7 @@
         + li(pr.id,'planos','Planos (link o ref.)',prVal(pr,'planos'))
         + editorModulos(pr) + '</div></div>';
       });
-      h += '<button class="btn-add" onclick="agregarPr()">+ Agregar proyecto</button>';
+      if(proyVista!=='archivados') h += '<button class="btn-add" onclick="agregarPr()">+ Agregar proyecto</button>';
       // Barra de guardado SIEMPRE visible en la solapa Proyectos.
       const sucio = hayCambiosPr();
       h += '<div id="pr-savebar" style="display:flex;position:sticky;bottom:0;gap:10px;align-items:center;justify-content:flex-end;background:#FFFDF7;border:1px solid #F0E6CE;border-radius:12px;padding:12px 16px;margin-top:16px;box-shadow:0 -2px 12px rgba(0,0,0,0.06)">'
@@ -567,7 +619,180 @@
     async function agregarPr(){ if(hayCambiosPr() && !confirm("Tenés cambios sin guardar que se perderán al recargar. ¿Continuar y agregar un proyecto nuevo?")) return; draftPr={}; const{error}=await sb.from("proyectos").insert({nombre:"Nuevo proyecto",estado:"Vigente"});if(error)return setEstado("Error: "+error.message,"err");cargar();}
     // El estado (Vigente/Cerrado) se guarda al instante (no es parte del borrador editable).
     async function editarPrEstado(id,v){const{error}=await sb.from("proyectos").update({estado:v}).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");const pr=proyectos.find(p=>p.id===id);if(pr)pr.estado=v;setEstado("\u2713 Estado guardado.","ok");}
-    async function eliminarPr(id){ if(!confirm("¿Eliminar este proyecto? Esta acción no se puede deshacer.")) return; const{error}=await sb.from("proyectos").delete().eq("id",id);if(error)return setEstado("Error: "+error.message,"err");delete draftPr[id];cargar();}
+    // ── Snapshot inmutable: junta proyecto + planificación + personal + supervisión + detalle ──
+    // Se congela al archivar, al re-congelar y antes de eliminar de verdad. Sobrevive al borrado
+    // de la fila viva porque proyectos_snapshot usa ON DELETE SET NULL.
+    async function armarSnapshot(proyId){
+      const pr = proyectos.find(p=>p.id===proyId);
+      // Traigo los datos frescos de la base para que el snapshot sea completo aunque no estén en memoria.
+      const [pl, pp, sv, dd] = await Promise.all([
+        sb.from("planificacion").select("*").eq("proyecto_id", proyId),
+        sb.from("planificacion_personal").select("*"),
+        sb.from("supervision").select("*"),
+        sb.from("detalle_diario").select("*").eq("proyecto_id", proyId),
+      ]);
+      const bloques = pl.data||[];
+      const idsBloque = new Set(bloques.map(b=>b.id));
+      const personalPlan = (pp.data||[]).filter(r=>idsBloque.has(r.planificacion_id));
+      const sup = (sv.data||[]).filter(s=> String(s.proyectos||"").split(",").map(x=>x.trim()).includes(String(proyId)));
+      const base = baseDeProy(proyId);
+      return {
+        proyecto: pr ? {...pr} : { id: proyId },
+        planificacion: bloques,
+        planificacion_personal: personalPlan,
+        supervision: sup,
+        detalle_diario: dd.data||[],
+        linea_base: base ? {...base} : null,
+        congelado_at: new Date().toISOString(),
+      };
+    }
+    async function guardarSnapshot(proyId, motivo){
+      const pr = proyectos.find(p=>p.id===proyId);
+      const contenido = await armarSnapshot(proyId);
+      const { error } = await sb.from("proyectos_snapshot").insert({
+        proyecto_id: proyId,
+        proyecto_nombre: pr ? pr.nombre : null,
+        creado_por: (typeof miEmail!=="undefined" ? miEmail : null),
+        contenido,
+      });
+      return error;
+    }
+    async function toggleCotizacion(id, val){
+      if(!esAdmin()){ setEstado("Solo un administrador puede marcar cotizaciones.","err"); return; }
+      const { error } = await sb.from("proyectos").update({ es_cotizacion: !!val }).eq("id", id);
+      if(error) return setEstado("Error: "+error.message,"err");
+      const pr = proyectos.find(p=>p.id===id); if(pr) pr.es_cotizacion=!!val;
+      setEstado(val?"\u2713 Marcado como cotización.":"\u2713 Ya no es cotización.","ok");
+      renderProyectos();
+    }
+    async function archivarPr(id){
+      if(!esAdmin()){ setEstado("Solo un administrador puede archivar.","err"); return; }
+      const pr = proyectos.find(p=>p.id===id);
+      if(!confirm("¿Archivar «"+(pr?pr.nombre:id)+"»?\n\nSale de las vistas operativas (dashboard, gantt, histograma, parte, desvíos) pero queda consultable y restaurable. Se congela un snapshot con toda su información.")) return;
+      setEstado("Congelando snapshot…","cargando");
+      const eSnap = await guardarSnapshot(id, "archivar");
+      if(eSnap) return setEstado("Error al congelar snapshot: "+eSnap.message,"err");
+      const { error } = await sb.from("proyectos").update({ archivado:true, archivado_at:new Date().toISOString() }).eq("id", id);
+      if(error) return setEstado("Error al archivar: "+error.message,"err");
+      setEstado("\u2713 Proyecto archivado (snapshot congelado).","ok");
+      cargar();
+    }
+    async function restaurarPr(id){
+      if(!esAdmin()){ setEstado("Solo un administrador puede restaurar.","err"); return; }
+      const pr = proyectos.find(p=>p.id===id);
+      if(!confirm("¿Restaurar «"+(pr?pr.nombre:id)+"» a la operación? Vuelve a aparecer en las vistas operativas.")) return;
+      const { error } = await sb.from("proyectos").update({ archivado:false, archivado_at:null }).eq("id", id);
+      if(error) return setEstado("Error: "+error.message,"err");
+      setEstado("\u2713 Proyecto restaurado.","ok");
+      cargar();
+    }
+    async function recongelarSnapshot(id){
+      if(!esAdmin()){ setEstado("Solo un administrador puede re-congelar.","err"); return; }
+      if(!confirm("¿Congelar un nuevo snapshot con el estado actual? No pisa los anteriores: queda historial de re-congelados.")) return;
+      setEstado("Congelando snapshot…","cargando");
+      const e = await guardarSnapshot(id, "recongelar");
+      if(e) return setEstado("Error: "+e.message,"err");
+      setEstado("\u2713 Nuevo snapshot congelado.","ok");
+    }
+    async function eliminarPr(id){
+      if(!esAdmin()){ setEstado("Solo un administrador puede eliminar proyectos. Si querés sacarlo de la operación sin perderlo, usá Archivar.","err"); return; }
+      const pr = proyectos.find(p=>p.id===id);
+      if(!confirm("¿ELIMINAR de verdad «"+(pr?pr.nombre:id)+"»?\n\nSe borra la fila viva. Antes se congela un snapshot que sobrevive al borrado, pero la operación no se puede deshacer sobre los datos vivos.\n\nSi solo querés sacarlo de la vista, cancelá y usá Archivar.")) return;
+      setEstado("Congelando snapshot antes de borrar…","cargando");
+      const eSnap = await guardarSnapshot(id, "eliminar");
+      if(eSnap && !confirm("No se pudo congelar el snapshot ("+eSnap.message+").\n\n¿Eliminar igualmente SIN respaldo?")) return;
+      const{error}=await sb.from("proyectos").delete().eq("id",id);
+      if(error)return setEstado("Error: "+error.message,"err");
+      delete draftPr[id];
+      setEstado("\u2713 Proyecto eliminado (snapshot guardado).","ok");
+      cargar();
+    }
+    // ── Replicar planificación a un proyecto nuevo ──────────────────────────
+    // Copia estaciones + tareas + módulos + personas + horas. El usuario elige una nueva
+    // fecha de inicio y TODO el plan se recorre en días hábiles manteniendo la duración,
+    // anclando el arranque original del plan a la nueva fecha elegida.
+    // Cuenta cuántos días hábiles hay entre dos fechas ISO (con signo). 0 si es el mismo día.
+    function offsetHabiles(desde, hasta){
+      if(!desde || !hasta) return 0;
+      if(desde===hasta) return 0;
+      const adelante = hasta>desde;
+      const a = adelante?desde:hasta, b = adelante?hasta:desde;
+      const n = Math.max(0, diasHabiles(a,b).length-1);
+      return adelante ? n : -n;
+    }
+    async function replicarPlanProy(proyId){
+      const origen = proyectos.find(p=>p.id===proyId);
+      if(!origen){ setEstado("Proyecto no encontrado.","err"); return; }
+      // Cargo los bloques y personas del origen (frescos, no dependo de la pestaña activa).
+      const { data: bloques, error: eb } = await sb.from("planificacion").select("*").eq("proyecto_id", proyId);
+      if(eb) return setEstado("Error al leer la planificación: "+eb.message,"err");
+      if(!bloques || !bloques.length){ setEstado("Este proyecto no tiene planificación para replicar.","err"); return; }
+      const idsBloque = bloques.map(b=>b.id);
+      const { data: pers } = await sb.from("planificacion_personal").select("*");
+      const persDe = {}; (pers||[]).forEach(r=>{ if(idsBloque.includes(r.planificacion_id)){ (persDe[r.planificacion_id]=persDe[r.planificacion_id]||[]).push(r); } });
+      // Fecha de arranque original del plan = mínima fecha_desde con valor.
+      const arranques = bloques.map(b=>b.fecha_desde).filter(Boolean).sort();
+      const arranqueOrig = arranques[0] || null;
+      // Pido nombre y nueva fecha de inicio.
+      const nombreNuevo = prompt("Nombre del proyecto nuevo (copia de la planificación de «"+origen.nombre+"»):", origen.nombre+" (copia)");
+      if(nombreNuevo===null) return;
+      let nuevaIni = null;
+      if(arranqueOrig){
+        nuevaIni = prompt("Nueva fecha de inicio del plan (formato AAAA-MM-DD).\n\nTodo el plan se recorre manteniendo la duración en días hábiles.\nArranque original: "+dmy(arranqueOrig)+"\n\nDejá vacío para copiar con las MISMAS fechas del original.", "");
+        if(nuevaIni===null) return;
+        nuevaIni = nuevaIni.trim();
+        if(nuevaIni && !/^\d{4}-\d{2}-\d{2}$/.test(nuevaIni)){ setEstado("Fecha inválida. Usá el formato AAAA-MM-DD.","err"); return; }
+      }
+      // función para recorrer una fecha del origen a la nueva base
+      const recorrer = (f)=>{
+        if(!f) return null;
+        if(!nuevaIni || !arranqueOrig) return f; // sin recorrido: mismas fechas
+        const off = offsetHabiles(arranqueOrig, f); // días hábiles desde el arranque original
+        return sumarDiasHabiles(nuevaIni, off);
+      };
+      setEstado("Replicando planificación…","cargando");
+      // 1) crear proyecto nuevo, copiando los metadatos útiles (sin fechas informativas, sin estado cerrado)
+      const nuevoProy = {
+        nombre: nombreNuevo || (origen.nombre+" (copia)"),
+        codigo: origen.codigo || null,
+        descripcion: origen.descripcion || null,
+        cant_modulos: origen.cant_modulos || null,
+        tam_modulos: origen.tam_modulos || null,
+        m2_totales: origen.m2_totales || null,
+        modulos: origen.modulos || null,
+        presupuesto_mo_huella: origen.presupuesto_mo_huella || null,
+        presupuesto_mo_montaje: origen.presupuesto_mo_montaje || null,
+        planos: origen.planos || null,
+        estado: "Vigente",
+        es_cotizacion: false,
+        archivado: false,
+      };
+      const { data: creado, error: ec } = await sb.from("proyectos").insert(nuevoProy).select().single();
+      if(ec || !creado) return setEstado("Error al crear el proyecto: "+(ec?ec.message:"sin datos"),"err");
+      const nuevoId = creado.id;
+      // 2) copiar bloques con fechas recorridas
+      let filasErr = 0;
+      for(const b of bloques){
+        const nuevoBloque = {
+          estacion: b.estacion, subtarea: b.subtarea, proyecto_id: nuevoId,
+          modo: b.modo || "nombre", modulos: b.modulos || null,
+          fecha_desde: recorrer(b.fecha_desde), fecha_hasta: recorrer(b.fecha_hasta),
+        };
+        const { data: bNuevo, error: ebn } = await sb.from("planificacion").insert(nuevoBloque).select().single();
+        if(ebn || !bNuevo){ filasErr++; continue; }
+        // 3) copiar personas + horas del bloque
+        const listaP = persDe[b.id] || [];
+        if(listaP.length){
+          const filasP = listaP.map(r=>({ planificacion_id: bNuevo.id, persona_id: r.persona_id, horas: (r.horas!=null?r.horas:8) }));
+          const { error: epp } = await sb.from("planificacion_personal").insert(filasP);
+          if(epp) filasErr++;
+        }
+      }
+      if(filasErr){ setEstado("\u2713 Proyecto replicado con "+filasErr+" advertencia(s). Revisá la planificación.","ok"); }
+      else { setEstado("\u2713 Planificación replicada en «"+nuevoProy.nombre+"».","ok"); }
+      proyVista = "operacion";
+      cargar();
+    }
     function descartarCambiosPr(){ if(!hayCambiosPr()){ return; } if(!confirm("¿Descartar todos los cambios sin guardar?")) return; draftPr={}; renderProyectos(); setEstado("Cambios descartados.","ok"); }
     async function guardarCambiosPr(){
       const ids = Object.keys(draftPr).filter(id => draftPr[id] && Object.keys(draftPr[id]).length);
@@ -996,6 +1221,8 @@
     function planificadoEnRango(personaId, desde, hasta){
       const hit=[];
       plani.forEach(b=>{
+        // Cotizaciones y archivados no consumen disponibilidad: se ignoran para conflictos.
+        if(!esOperativo(proyectos.find(p=>p.id===b.proyecto_id))) return;
         if(!(planiPers[b.id]||[]).includes(personaId)) return;
         const dias=diasHabiles(b.fecha_desde,b.fecha_hasta);
         const choca=dias.filter(d=> d>=desde && d<=hasta);
@@ -1229,7 +1456,11 @@
       if (!proyectos.length) h += '<div class="estado err">No hay proyectos. Creá al menos uno en la pestaña Proyectos antes de planificar.</div>';
       const val = validarCobertura();
       if (!VALIDAR_COBERTURA && plani.length > 0) {
-        h += '<div class="estado cargando" style="margin-bottom:12px">🔧 <b>Modo prueba:</b> la validación de cobertura está pausada. Podés generar el detalle aunque falten personas por asignar.' + (val.faltantes.length?(' <span style="color:#A8A69E">(Sin asignar hoy: '+val.faltantes.slice(0,6).join(" · ")+(val.faltantes.length>6?"…":"")+')</span>'):'') + '</div>';
+        if (val.faltantes.length) {
+          h += '<div class="estado cargando" style="margin-bottom:12px">ℹ️ <b>Cobertura incompleta.</b> Podés generar el detalle igual; esto es solo un aviso. <span style="color:#A8A69E">Sin asignar hoy: '+val.faltantes.slice(0,6).join(" · ")+(val.faltantes.length>6?"…":"")+'</span></div>';
+        } else {
+          h += '<div class="estado ok" style="margin-bottom:12px">✓ Cobertura completa. Todo el personal directo disponible está asignado cada día.</div>';
+        }
       } else if (plani.length > 0 && !val.ok) {
         h += '<div class="estado err" style="margin-bottom:12px"><b>⚠ No se puede generar el detalle todavía.</b> Cada día, todo el personal directo disponible debe estar asignado a su jornada (los de vacaciones/licencia y los contratistas se excluyen).';
         if (val.faltantes.length) h += '<div style="margin-top:4px">Sin asignar: ' + val.faltantes.slice(0,10).join(" · ") + (val.faltantes.length>10?(" … y "+(val.faltantes.length-10)+" más"):"") + '</div>';
@@ -1526,6 +1757,9 @@
     function calcularImpacto(){
       const porFila = {};
       const porEstacion = {};
+      // Cotizaciones y archivados no entran al panel de desvíos operativos.
+      const proyOper = new Set(proyectosOperativos().map(p=>p.id));
+      const esProyOper = (pid)=> proyOper.has(pid);
       const ensureEst = (key)=>{ if(!porEstacion[key]) porEstacion[key] = { diasPlanSet:new Set(), diasRealSet:new Set(), finPlan:null, finReal:null, costoDiasDelta:0, costoReal:0, costoPlan:0, tieneExtra:false, costoOrigen:{extra:0, edicion:0, planreal:0, jornal:0} }; return porEstacion[key]; };
       // Clasifica el origen del desvío de una fila: 'extra' | 'edicion' | 'planreal' | 'jornal'
       const norm = (x)=> (x==null ? "" : String(x));
@@ -1550,6 +1784,7 @@
       // todavía son plan, no ejecución: no generan desvío de costo.
       detalle.forEach(f=>{
         if(!esFechaReal(f.fecha)) return;
+        if(!esProyOper(f.proyecto_id)) return;
         const ch = costoHora(f.persona_real, f.fecha);            // valor del mes real (vigente)
         const chPlan = (f.valor_hora_plan!=null) ? Number(f.valor_hora_plan) : costoHora(f.persona_plan!=null?f.persona_plan:f.persona_real, f.fecha); // valor congelado al planificar
         const hPlan = (f.horas_plan!=null ? Number(f.horas_plan) : Number(f.horas_normales)||0);
@@ -1574,6 +1809,7 @@
       // Plan: de la tabla plani (bloques), pero SOLO los días que ya deberían haber ocurrido
       // (hasta ayer). Comparar el plan futuro contra un real que aún no existe daría atraso falso.
       plani.forEach(b=>{
+        if(!esProyOper(b.proyecto_id)) return;
         const key = b.estacion + "|" + b.proyecto_id;
         const diasPlan = diasHabiles(b.fecha_desde, b.fecha_hasta).filter(esFechaReal);
         const pe = ensureEst(key);
@@ -1584,6 +1820,7 @@
       detalle.forEach(f=>{
         if (f.ausente) return;
         if (!esFechaReal(f.fecha)) return;
+        if (!esProyOper(f.proyecto_id)) return;
         const key = f.estacion_real + "|" + f.proyecto_id;
         const pe = ensureEst(key);
         pe.diasRealSet.add(f.fecha);
@@ -2065,14 +2302,17 @@
       return x+'</div>';
     }
     function renderDash() {
-      const proyVig = proyectos.filter(p => p.estado !== "Cerrado");
-      let det = detalle.slice();
+      // Dashboard opera solo sobre proyectos en operación (cotizaciones y archivados quedan fuera).
+      const proyOperD = proyectosOperativos();
+      const proyOperDset = new Set(proyOperD.map(p=>p.id));
+      const proyVig = proyOperD.filter(p => p.estado !== "Cerrado");
+      let det = detalle.filter(f => proyOperDset.has(f.proyecto_id));
       if (dashProy) det = det.filter(f => f.proyecto_id === dashProy);
       // KPIs — solo ejecución real (hasta ayer). El día en curso y el futuro son plan, no desvío.
       let jornal=0, extra=0, ausencias=0, hsExtra=0;
       det.forEach(f => { if(!esFechaReal(f.fecha)) return; if (f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); hsExtra+=(Number(f.horas_extra)||0); });
       const real = jornal+extra;
-      const presup = (dashProy ? proyectos.filter(p=>p.id===dashProy) : proyectos).reduce((s,p)=>s+presupMO(p),0);
+      const presup = (dashProy ? proyectos.filter(p=>p.id===dashProy) : proyOperD).reduce((s,p)=>s+presupMO(p),0);
       // --- Índices de desempeño (Earned Value) ---
       // CPI = costo planificado del trabajo hecho / costo real. >1 = eficiente (gastás menos de lo previsto).
       // SPI = días reales trabajados / días planificados hasta hoy. >1 = adelantado; <1 = atrasado.
@@ -2146,7 +2386,7 @@
       const card=(l,v,s,col,calc)=>'<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 16px"><div style="font-size:12px;color:#888780">'+l+'</div><div style="font-size:22px;font-weight:600;color:'+(col||'#2C2C2A')+';margin-top:2px">'+v+'</div>'+(s?'<div style="font-size:11.5px;color:#A8A69E;margin-top:2px">'+s+'</div>':'')+(calc?'<div style="font-size:10.5px;color:#BDBBB2;margin-top:5px;line-height:1.4;border-top:1px solid #F4F2EC;padding-top:5px">Cómo se calcula: '+calc+'</div>':'')+'</div>';
       let h='<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">';
       h+='<div style="display:flex;border:1px solid #E6E4DC;border-radius:8px;overflow:hidden"><button onclick="setVista(\'pm\')" style="border:none;padding:7px 16px;font-size:13px;cursor:pointer;background:'+(vistaDash==='pm'?'#185FA5':'transparent')+';color:'+(vistaDash==='pm'?'#fff':'#888780')+'">Vista PM</button><button onclick="setVista(\'coord\')" style="border:none;padding:7px 16px;font-size:13px;cursor:pointer;background:'+(vistaDash==='coord'?'#185FA5':'transparent')+';color:'+(vistaDash==='coord'?'#fff':'#888780')+'">Vista Coordinador</button></div>';
-      h+='<select onchange="setDashProy(this.value)" style="width:auto"><option value="">Todos los vigentes</option>'+proyVig.map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+'</option>').join('')+(proyectos.filter(p=>p.estado==='Cerrado').length?('<optgroup label="Cerrados">'+proyectos.filter(p=>p.estado==='Cerrado').map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+' (cerrado)</option>').join('')+'</optgroup>'):'')+'</select>';
+      h+='<select onchange="setDashProy(this.value)" style="width:auto"><option value="">Todos los vigentes</option>'+proyVig.map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+'</option>').join('')+(proyOperD.filter(p=>p.estado==='Cerrado').length?('<optgroup label="Cerrados">'+proyOperD.filter(p=>p.estado==='Cerrado').map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+' (cerrado)</option>').join('')+'</optgroup>'):'')+'</select>';
       h+=botonesExport("dash-print","dashboard")+'</div>';
       h+='<div id="dash-print">';
       if(det.length===0){ h+='<p style="font-size:13px;color:#888780">Sin datos en el detalle todavía. Generá el detalle diario para ver indicadores.</p></div>'; contenido.innerHTML=h; return; }
@@ -2224,13 +2464,16 @@
       // Plan: de plani (todos los bloques de esa estación). Real: del detalle (días trabajados).
       const porEst = {}; // estKey -> { planByDay:{fecha:Set(proyId)}, realByDay:{fecha:Set(proyId)} }
       const ensure = (k)=>{ if(!porEst[k]) porEst[k]={planByDay:{}, realByDay:{}}; return porEst[k]; };
+      const proyOperG = new Set(proyectosOperativos().map(p=>p.id));
       plani.forEach(b=>{
         if(b.estacion===SUP_MARK || !STATIONS[b.estacion]) return;
+        if(!proyOperG.has(b.proyecto_id)) return;
         const e=ensure(b.estacion);
         diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ (e.planByDay[d]=e.planByDay[d]||new Set()).add(b.proyecto_id); });
       });
       detalle.forEach(f=>{
         if(f.ausente) return; if(f.estacion_real===SUP_MARK || !STATIONS[f.estacion_real]) return;
+        if(!proyOperG.has(f.proyecto_id)) return;
         const e=ensure(f.estacion_real);
         (e.realByDay[f.fecha]=e.realByDay[f.fecha]||new Set()).add(f.proyecto_id);
       });
@@ -2264,9 +2507,12 @@
     /* ---- HISTOGRAMA ---- */
     function renderHisto() {
       if(!detalle.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">No hay detalle generado.</p>'; return; }
-      const fechas=[...new Set(detalle.map(f=>f.fecha))].sort();
-      const pers=[...new Set(detalle.map(f=>f.persona_real))];
-      const cell={}; detalle.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?"__aus":f.estacion_real; });
+      const proyOperH = new Set(proyectosOperativos().map(p=>p.id));
+      const detHisto = detalle.filter(f=>proyOperH.has(f.proyecto_id));
+      if(!detHisto.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">No hay detalle de proyectos en operación (las cotizaciones y archivados no se muestran acá).</p>'; return; }
+      const fechas=[...new Set(detHisto.map(f=>f.fecha))].sort();
+      const pers=[...new Set(detHisto.map(f=>f.persona_real))];
+      const cell={}; detHisto.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?"__aus":f.estacion_real; });
       let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por estación.</p>'+botonesExport("histo-print","histograma")+'</div><div id="histo-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
       fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:50px">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
@@ -2281,9 +2527,10 @@
     /* ---- PARTE DIARIO ---- */
     let parteFecha="", parteProy="", parteEst="", partePersona="";
     function renderParte() {
-      const fechas=[...new Set(detalle.map(f=>f.fecha))].sort();
+      const proyOperP = new Set(proyectosOperativos().map(p=>p.id));
+      const fechas=[...new Set(detalle.filter(f=>proyOperP.has(f.proyecto_id)).map(f=>f.fecha))].sort();
       const fSel = parteFecha || fechas[0] || "";
-      let rows = detalle.filter(f=>f.fecha===fSel && !f.ausente);
+      let rows = detalle.filter(f=>f.fecha===fSel && !f.ausente && proyOperP.has(f.proyecto_id));
       if(parteProy) rows=rows.filter(f=>f.proyecto_id===parteProy);
       if(parteEst) rows=rows.filter(f=>f.estacion_real===parteEst);
       if(partePersona) rows=rows.filter(f=>f.persona_real===partePersona);
@@ -2292,7 +2539,7 @@
       const texto = "*Parte diario "+(fSel?dmy(fSel):"")+"*\n"+proyNom+"\n\n"+rows.map(f=>{const pp=personas.find(x=>x.id===f.persona_real);const ec=pp&&pp.tipo==="Contratista";return "• "+nombrePersona(f.persona_real)+(ec?" (contratista)":"")+" → "+nombreEstacion(f.estacion_real)+modTxt(f)+": "+f.subtarea_real+(f.horas_extra>0?" (+"+f.horas_extra+"h extra)":"");}).join("\n");
       let h='<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">';
       h+='<label style="font-size:11.5px;color:#888780">Fecha<br><select onchange="setParte(\'fecha\',this.value)" style="margin-top:3px">'+(fechas.length?fechas.map(d=>'<option value="'+d+'" '+(d===fSel?'selected':'')+'>'+dmy(d)+'</option>').join(''):'<option>—</option>')+'</select></label>';
-      h+='<label style="font-size:11.5px;color:#888780">Proyecto<br><select onchange="setParte(\'proy\',this.value)" style="margin-top:3px"><option value="">Todos</option>'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===parteProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
+      h+='<label style="font-size:11.5px;color:#888780">Proyecto<br><select onchange="setParte(\'proy\',this.value)" style="margin-top:3px"><option value="">Todos</option>'+proyectosOperativos().map(p=>'<option value="'+p.id+'" '+(p.id===parteProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Estación<br><select onchange="setParte(\'est\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+STKEYS.map(k=>'<option value="'+k+'" '+(k===parteEst?'selected':'')+'>'+STATIONS[k].label+'</option>').join('')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Persona<br><select onchange="setParte(\'pers\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+personasHuella().map(p=>'<option value="'+p.id+'" '+(p.id===partePersona?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
       h+='<button class="btn" style="background:#25D366;color:#fff" onclick="copiarParte()">Copiar para WhatsApp</button>';
@@ -2313,7 +2560,7 @@
     function renderInforme() {
       const proySel = informeProy || (proyectos[0] && proyectos[0].id) || "";
       let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px">';
-      h+='<label style="font-size:12px;color:#888780">Proyecto<br><select onchange="setInformeProy(this.value)" style="margin-top:3px;min-width:220px">'+(proyectos.length?proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===proySel?'selected':'')+'>'+p.nombre+(p.estado==='Cerrado'?' (cerrado)':'')+'</option>').join(''):'<option>Sin proyectos</option>')+'</select></label>';
+      h+='<label style="font-size:12px;color:#888780">Proyecto<br><select onchange="setInformeProy(this.value)" style="margin-top:3px;min-width:220px">'+(proyectos.length?proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===proySel?'selected':'')+'>'+p.nombre+etiquetaEstadoProy(p)+'</option>').join(''):'<option>Sin proyectos</option>')+'</select></label>';
       h+=botonesExport("informe-print","informe_cierre")+'</div>';
 
       if(!proySel){ h+='<p style="font-size:13px;color:#888780">No hay proyectos.</p>'; contenido.innerHTML=h; return; }
@@ -2326,19 +2573,30 @@
       const esRealInf = (fch)=> cerradoInf || esFechaReal(fch);
 
       // --- TIEMPOS ---
-      // planificado: rango de fechas de las estaciones del proyecto
+      // ¿El proyecto ya arrancó? (tiene al menos un día real ejecutado). Si NO arrancó y no está
+      // cerrado, no hay ejecución que comparar: el desvío real vs plan es 0 (no fantasma).
+      const arranco = proyectoArranco(proySel);
+      const midiendoReal = cerradoInf || arranco;
+      // PLANIFICADO: se toma de la LÍNEA BASE (la primera planificación guardada). Si no hay base
+      // fijada, se cae a la planificación vigente actual, avisándolo.
+      const baseInf = baseDeProy(proySel);
+      const bloquesPlanBase = baseInf && baseInf.contenido && baseInf.contenido.bloques ? baseInf.contenido.bloques : blo;
+      const usandoBase = !!(baseInf && baseInf.contenido && baseInf.contenido.bloques);
       let planDias=[], realDias=[];
-      blo.forEach(b=>diasHabiles(b.fecha_desde,b.fecha_hasta).filter(esRealInf).forEach(d=>planDias.push(d)));
-      det.forEach(f=>{ if(!f.ausente && esRealInf(f.fecha)) realDias.push(f.fecha); });
+      // El plan del informe muestra el plan COMPLETO de la base (no recortado a "hasta ayer"):
+      // es contra lo que el proyecto se comprometió. El recorte aplica solo al "real".
+      bloquesPlanBase.forEach(b=>diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>planDias.push(d)));
+      if(midiendoReal){ det.forEach(f=>{ if(!f.ausente && esRealInf(f.fecha)) realDias.push(f.fecha); }); }
       planDias=[...new Set(planDias)].sort(); realDias=[...new Set(realDias)].sort();
       const planIni=planDias[0], planFin=planDias[planDias.length-1];
       const realIni=realDias[0], realFin=realDias[realDias.length-1];
       const planDur=planDias.length, realDur=realDias.length;
-      const desvDias=realDur-planDur;
+      // Desvío de ejecución: solo tiene sentido si el proyecto arrancó (o está cerrado).
+      const desvDias = midiendoReal ? (realDur-planDur) : 0;
       // Desvío de FECHA DE FIN (informativo): días hábiles entre el fin planificado y el fin real.
       // >0 = terminó después de lo previsto; <0 = antes. Independiente de la cantidad de días trabajados.
       let desvFin=null;
-      if(planFin && realFin){
+      if(midiendoReal && planFin && realFin){
         const signo = realFin>planFin?1:(realFin<planFin?-1:0);
         const a = realFin>planFin?planFin:realFin, b = realFin>planFin?realFin:planFin;
         desvFin = signo * Math.max(0, diasHabiles(a,b).length-1);
@@ -2380,30 +2638,58 @@
 
       const fmt=(n)=>'$'+Math.round(n).toLocaleString("es-AR");
       const fdate=(d)=>d?dmy(d):"—";
+      // --- Datos para gráficos: costo plan por estación + rangos de fecha plan/real por estación ---
+      // Costo plan: de la LÍNEA BASE si existe (bloques con personas+horas), si no, de la plani vigente.
+      // Se valoriza con el costo/hora del mes de la fecha de inicio de cada bloque (aprox. estable).
+      const estCostoPlan = {};       // estacion -> costo plan
+      const estFechasPlan = {};      // estacion -> {ini, fin}  (rango completo del plan, sin recorte)
+      const estFechasReal = {};      // estacion -> {ini, fin}  (rango real ejecutado, hasta ayer/cerrado)
+      function acumPlanRango(estacion, desde, hasta){
+        if(estacion===SUP_MARK) return;
+        const dh = diasHabiles(desde,hasta);
+        if(!dh.length) return;
+        const ini=dh[0], fin=dh[dh.length-1];
+        const r = estFechasPlan[estacion] || (estFechasPlan[estacion]={ini:null,fin:null});
+        if(!r.ini || ini<r.ini) r.ini=ini;
+        if(!r.fin || fin>r.fin) r.fin=fin;
+      }
+      if(usandoBase){
+        bloquesPlanBase.forEach(b=>{
+          if(b.estacion===SUP_MARK) return;
+          acumPlanRango(b.estacion, b.fecha_desde, b.fecha_hasta);
+          const nd = diasHabiles(b.fecha_desde,b.fecha_hasta).length;
+          const refFecha = b.fecha_desde || hoyISO();
+          (b.personas||[]).forEach(pp=>{ const ch=costoHora(pp.persona_id, refFecha); estCostoPlan[b.estacion]=(estCostoPlan[b.estacion]||0)+ (Number(pp.horas)||8)*ch*nd; });
+        });
+      } else {
+        blo.forEach(b=>{
+          if(b.estacion===SUP_MARK) return;
+          acumPlanRango(b.estacion, b.fecha_desde, b.fecha_hasta);
+          const nd = diasHabiles(b.fecha_desde,b.fecha_hasta).length;
+          const refFecha = b.fecha_desde || hoyISO();
+          (planiPers[b.id]||[]).forEach(pid=>{ const hrs=(planiHoras[b.id]&&planiHoras[b.id][pid]!=null)?planiHoras[b.id][pid]:8; const ch=costoHora(pid, refFecha); estCostoPlan[b.estacion]=(estCostoPlan[b.estacion]||0)+ hrs*ch*nd; });
+        });
+      }
+      det.forEach(f=>{ if(f.estacion_real===SUP_MARK || f.ausente) return; if(!esRealInf(f.fecha)) return; const r=estFechasReal[f.estacion_real]||(estFechasReal[f.estacion_real]={ini:null,fin:null}); if(!r.ini||f.fecha<r.ini) r.ini=f.fecha; if(!r.fin||f.fecha>r.fin) r.fin=f.fecha; });
 
       h+='<div id="informe-print">';
       h+='<div style="border:1px solid #E6E4DC;border-radius:14px;padding:20px;background:#fff">';
       h+='<div style="font-size:20px;font-weight:700">Informe de cierre</div><div style="font-size:15px;color:#185FA5;font-weight:600;margin-bottom:2px">'+pr.nombre+(pr.codigo?' · '+pr.codigo:'')+'</div><div style="font-size:12px;color:#A8A69E;margin-bottom:6px">Estado: '+(pr.estado||'Vigente')+(pr.cant_modulos?' · '+pr.cant_modulos+' módulos':'')+'</div>';
-      h+='<div style="font-size:11px;color:'+(cerradoInf?'#3B6D11':'#BA7517')+';background:'+(cerradoInf?'#F1F8EC':'#FCF4E6')+';border-radius:8px;padding:7px 10px;margin-bottom:16px;line-height:1.5">'
+      h+='<div style="font-size:11px;color:'+(cerradoInf?'#3B6D11':'#BA7517')+';background:'+(cerradoInf?'#F1F8EC':'#FCF4E6')+';border-radius:8px;padding:8px 11px;margin-bottom:16px;line-height:1.5">'
         + (cerradoInf
-            ? '<b>Proyecto cerrado:</b> el informe cuenta todo el detalle registrado, sin recorte de fecha.'
-            : '<b>Proyecto en curso:</b> el “real” cuenta solo lo ejecutado hasta ayer. Los días de hoy en adelante son plan pendiente y no se computan como real todavía. Al cerrar el proyecto se contará todo.')
+            ? '<b>Proyecto cerrado.</b> El informe cuenta todo el detalle registrado, sin recorte de fecha (ya no hay días futuros pendientes).'
+            : '<b>Proyecto en curso.</b> El “real” cuenta solo lo ejecutado hasta ayer inclusive. El día en curso y los días futuros todavía son plan pendiente y no se computan como real. Al cerrar el proyecto, el informe pasará a contar el total.')
         + '</div>';
 
       if(det.length===0){ h+='<div class="estado err" style="margin:0">Este proyecto no tiene detalle diario registrado todavía. El informe necesita datos reales cargados para comparar.</div></div></div>'; contenido.innerHTML=h; return; }
 
       // resumen general
-      if(cerradoInf){
-        h+='<div style="background:#F1F8EC;border:1px solid #3B6D1133;border-left:4px solid #3B6D11;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#3B6D11"><b>Proyecto cerrado.</b> El informe cuenta todo el detalle registrado (ya no hay días futuros pendientes).</div>';
-      } else {
-        h+='<div style="background:#FCF4E6;border:1px solid #BA751733;border-left:4px solid #BA7517;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#BA7517"><b>Proyecto en curso.</b> Todo lo real cuenta solo hasta ayer; el día en curso y los días futuros todavía son plan. Cuando cierres el proyecto, el informe pasará a contar el total.</div>';
-      }
       h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px">';
       const kpi=(l,v,s,col)=>'<div style="flex:1;min-width:140px;background:#F9F8F4;border-radius:12px;padding:12px 14px"><div style="font-size:11.5px;color:#888780">'+l+'</div><div style="font-size:19px;font-weight:600;color:'+(col||'#2C2C2A')+';margin-top:2px">'+v+'</div>'+(s?'<div style="font-size:11px;color:#A8A69E;margin-top:1px">'+s+'</div>':'')+'</div>';
       h+=kpi("Costo real",fmt(real),"jornales + extra");
       h+=kpi("Presupuesto MO",presup?fmt(presup):"s/dato",null);
       h+=kpi("Desvío de costo",(desvCosto>=0?"+":"")+fmt(desvCosto),presup?(desvPct>=0?"+":"")+desvPct.toFixed(0)+"%":null,desvCosto>0?'#A32D2D':'#3B6D11');
-      h+=kpi("Desvío de tiempo",(desvDias>=0?"+":"")+desvDias+" días",planDur+" plan / "+realDur+" real",desvDias>0?'#A32D2D':desvDias<0?'#3B6D11':'#888780');
+      h+=kpi("Desvío de tiempo",midiendoReal?((desvDias>=0?"+":"")+desvDias+" días"):"—",midiendoReal?(planDur+" plan / "+realDur+" real"):"sin arrancar",desvDias>0?'#A32D2D':desvDias<0?'#3B6D11':'#888780');
       h+='</div>';
       h+='<details style="margin:-8px 0 18px"><summary style="font-size:11.5px;color:#185FA5;cursor:pointer">Cómo se calculan estos indicadores</summary><div style="font-size:11px;color:#888780;line-height:1.6;background:#FAFAF8;border:1px solid #EEECE4;border-radius:8px;padding:10px 12px;margin-top:6px">'
         + '<b>Costo real:</b> suma de (horas normales × valor-hora del mes) + (horas extra × valor-hora × 1,5 lun-sáb ó × 2 dom/feriado) de todas las jornadas reales del proyecto.<br>'
@@ -2457,15 +2743,26 @@
         h+='</div>';
       })();
 
-      h+='<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:8px 10px"></th><th style="text-align:center;padding:8px 10px">Inicio</th><th style="text-align:center;padding:8px 10px">Fin</th><th style="text-align:center;padding:8px 10px">Días hábiles</th></tr></thead><tbody>';
-      h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 10px;font-weight:500">Planificado</td><td style="text-align:center">'+fdate(planIni)+'</td><td style="text-align:center">'+fdate(planFin)+'</td><td style="text-align:center">'+planDur+'</td></tr>';
-      h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 10px;font-weight:500">Real</td><td style="text-align:center">'+fdate(realIni)+'</td><td style="text-align:center">'+fdate(realFin)+'</td><td style="text-align:center">'+realDur+'</td></tr>';
-      h+='<tr style="border-top:1px solid #F1EFE8;background:'+(desvDias>0?'#FCEBEB':'#F1F8EC')+'"><td style="padding:8px 10px;font-weight:600">Desvío</td><td></td><td></td><td style="text-align:center;font-weight:600;color:'+(desvDias>0?'#A32D2D':'#3B6D11')+'">'+(desvDias>=0?"+":"")+desvDias+' días</td></tr>';
-      if(desvFin!=null){
-        h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 10px;font-weight:500;color:#888780">Corrimiento de fecha de fin <span style="font-size:10.5px;font-weight:400;color:#BDBBB2">(informativo)</span></td><td></td><td style="text-align:center;color:'+(desvFin>0?'#A32D2D':desvFin<0?'#3B6D11':'#888780')+'">'+fdate(realFin)+' vs '+fdate(planFin)+'</td><td style="text-align:center;font-weight:600;color:'+(desvFin>0?'#A32D2D':desvFin<0?'#3B6D11':'#888780')+'">'+(desvFin>0?"+":"")+desvFin+' días</td></tr>';
+      // ── TABLA: Ejecución real vs planificado (tiempo) ──
+      h+='<div style="font-size:14px;font-weight:600;margin-bottom:2px">⏱️ Ejecución: real vs planificado (tiempo)</div>';
+      h+='<div style="font-size:11px;color:#8A8880;margin-bottom:8px">Compara los días hábiles <b>realmente trabajados</b> contra los <b>planificados</b>. '
+        + (usandoBase
+            ? 'Lo <b>planificado</b> se toma de la <b>línea base</b>: la primera planificación guardada y fijada el '+(baseInf.fijada_at?dmy(baseInf.fijada_at.slice(0,10)):'—')+' desde Planificación General. Así el desvío se mide siempre contra el compromiso original, no contra un plan que se fue moviendo.'
+            : '<b>⚠ Este proyecto no tiene línea base fijada</b>, así que lo planificado se toma de la <b>planificación vigente actual</b> (que puede haber cambiado desde el arranque). Para medir bien, fijá la línea base en Planificación General antes de que el proyecto arranque.')
+        + '</div>';
+      if(!midiendoReal){
+        h+='<div style="background:#FBFAFE;border:1px solid #E4E0F0;border-radius:10px;padding:11px 14px;margin-bottom:18px;font-size:12px;color:#4A3F7A"><b>El proyecto todavía no arrancó.</b> No hay días reales ejecutados, así que no se puede medir desvío de ejecución (real vs plan) todavía. El plan quedará como línea base y el desvío empezará a calcularse cuando se carguen las primeras jornadas reales.<div style="margin-top:6px;color:#8A86A0">Plan (línea base): '+planDur+' días hábiles · '+fdate(planIni)+' → '+fdate(planFin)+'</div></div>';
+      } else {
+        h+='<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:8px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:8px 10px"></th><th style="text-align:center;padding:8px 10px">Inicio</th><th style="text-align:center;padding:8px 10px">Fin</th><th style="text-align:center;padding:8px 10px">Días hábiles</th></tr></thead><tbody>';
+        h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 10px;font-weight:500">Planificado <span style="font-size:10px;color:#A8A69E">('+(usandoBase?'línea base':'plan vigente')+')</span></td><td style="text-align:center">'+fdate(planIni)+'</td><td style="text-align:center">'+fdate(planFin)+'</td><td style="text-align:center">'+planDur+'</td></tr>';
+        h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 10px;font-weight:500">Real</td><td style="text-align:center">'+fdate(realIni)+'</td><td style="text-align:center">'+fdate(realFin)+'</td><td style="text-align:center">'+realDur+'</td></tr>';
+        h+='<tr style="border-top:1px solid #F1EFE8;background:'+(desvDias>0?'#FCEBEB':desvDias<0?'#F1F8EC':'#F7F6F2')+'"><td style="padding:8px 10px;font-weight:600">Desvío</td><td></td><td></td><td style="text-align:center;font-weight:600;color:'+(desvDias>0?'#A32D2D':desvDias<0?'#3B6D11':'#888780')+'">'+(desvDias>=0?"+":"")+desvDias+' días</td></tr>';
+        if(desvFin!=null){
+          h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 10px;font-weight:500;color:#888780">Corrimiento de fecha de fin <span style="font-size:10.5px;font-weight:400;color:#BDBBB2">(informativo)</span></td><td></td><td style="text-align:center;color:'+(desvFin>0?'#A32D2D':desvFin<0?'#3B6D11':'#888780')+'">'+fdate(realFin)+' vs '+fdate(planFin)+'</td><td style="text-align:center;font-weight:600;color:'+(desvFin>0?'#A32D2D':desvFin<0?'#3B6D11':'#888780')+'">'+(desvFin>0?"+":"")+desvFin+' días</td></tr>';
+        }
+        h+='</tbody></table>';
+        h+='<div style="font-size:11px;color:#A8A69E;margin:-2px 0 18px">El <b>Desvío</b> compara la cantidad de días hábiles trabajados vs planificados. El <b>corrimiento de fecha de fin</b> es solo informativo: mide si el proyecto terminó antes o después de la fecha planificada de cierre (fin real vs fin planificado, en días hábiles), sin importar cuántos días se trabajó en el medio.</div>';
       }
-      h+='</tbody></table>';
-      h+='<div style="font-size:11px;color:#A8A69E;margin:-10px 0 18px">El <b>Desvío</b> compara la cantidad de días hábiles trabajados vs planificados. El <b>corrimiento de fecha de fin</b> es solo informativo: mide si el proyecto terminó antes o después de la fecha planificada de cierre (fin real vs fin planificado, en días hábiles), sin importar cuántos días se trabajó en el medio.</div>';
 
       // --- LÍNEA BASE: cuánto cambió el plan vigente respecto del plan original ---
       h+=bloqueBaseVsPlan(proySel);
@@ -2486,9 +2783,71 @@
       h+='<tr style="border-top:1px solid #F1EFE8;background:'+(desvCosto>0?'#FCEBEB':'#F1F8EC')+';font-weight:600"><td style="padding:7px 10px">Total</td><td style="text-align:right;padding:7px 10px">'+(presup?fmt(presup):"s/dato")+'</td><td style="text-align:right;padding:7px 10px">'+fmt(real)+'</td><td style="text-align:right;padding:7px 10px;color:'+(desvCosto>0?'#A32D2D':'#3B6D11')+'">'+(desvCosto>=0?"+":"")+fmt(desvCosto)+(presup?' ('+(desvPct>=0?"+":"")+desvPct.toFixed(0)+'%)':'')+'</td></tr>';
       h+='</tbody></table>';
 
+      // ====== GRÁFICOS: costo plan vs real por estación + timeline de fechas ======
+      (function(){
+        // estaciones con algún dato (plan o real), ordenadas por costo real desc
+        const claves = [...new Set([...Object.keys(est), ...Object.keys(estCostoPlan)])]
+          .filter(k=> k!==SUP_MARK && ((est[k] && (est[k].realD.size||est[k].planD.size)) || estCostoPlan[k]));
+        if(!claves.length) return;
+        h+='<div style="font-size:14px;font-weight:600;margin:20px 0 2px">📈 Planificación vs ejecución, gráfico</div>';
+        h+='<div style="font-size:11px;color:#8A8880;margin-bottom:12px">Vista rápida por estación. <b>Costo</b>: barra gris = planificado ('+(usandoBase?'línea base':'plan vigente')+'), barra azul = real ejecutado. <b>Fechas</b>: barra clara = ventana planificada, barra llena = días realmente trabajados.</div>';
+
+        // ---- 1) BARRAS DE COSTO plan vs real ----
+        const clavesCosto = claves.slice().sort((a,b)=> (Math.max(est[b]?est[b].costo:0, estCostoPlan[b]||0)) - (Math.max(est[a]?est[a].costo:0, estCostoPlan[a]||0)));
+        const maxCosto = Math.max(1, ...clavesCosto.map(k=> Math.max(estCostoPlan[k]||0, est[k]?est[k].costo:0)));
+        const rowH=34, padL=150, padR=110, w=680, barMax=w-padL-padR;
+        const hgt = 30 + clavesCosto.length*rowH;
+        let svg='<svg viewBox="0 0 '+w+' '+hgt+'" style="width:100%;max-width:'+w+'px;font-family:inherit" xmlns="http://www.w3.org/2000/svg">';
+        svg+='<text x="'+padL+'" y="16" font-size="10.5" fill="#8A8880">Plan (gris) vs Real (azul) — costo de mano de obra</text>';
+        clavesCosto.forEach((k,i)=>{
+          const y=30+i*rowH;
+          const cp=estCostoPlan[k]||0, cr=est[k]?est[k].costo:0;
+          const wp=Math.round((cp/maxCosto)*barMax), wr=Math.round((cr/maxCosto)*barMax);
+          const nom=(nombreEstacion(k)||k);
+          svg+='<text x="'+(padL-8)+'" y="'+(y+13)+'" font-size="11" fill="#3A3A38" text-anchor="end">'+nom.slice(0,20)+'</text>';
+          // plan (gris, arriba) y real (azul, abajo), delgadas
+          svg+='<rect x="'+padL+'" y="'+(y+2)+'" width="'+Math.max(0,wp)+'" height="9" rx="2" fill="#C7C4BA"></rect>';
+          svg+='<rect x="'+padL+'" y="'+(y+13)+'" width="'+Math.max(0,wr)+'" height="9" rx="2" fill="#185FA5"></rect>';
+          const dv=cr-cp; const dvCol=dv>0.5?'#A32D2D':dv<-0.5?'#3B6D11':'#8A8880';
+          svg+='<text x="'+(w-padR+8)+'" y="'+(y+9)+'" font-size="9.5" fill="#8A8880">'+fmt(cr)+'</text>';
+          svg+='<text x="'+(w-padR+8)+'" y="'+(y+20)+'" font-size="9.5" fill="'+dvCol+'">'+(dv>=0?"+":"")+fmt(dv)+'</text>';
+        });
+        svg+='</svg>';
+        h+='<div style="overflow-x:auto;background:#FCFBF8;border:1px solid #EEECE4;border-radius:12px;padding:12px;margin-bottom:16px">'+svg+'</div>';
+
+        // ---- 2) TIMELINE de fechas plan vs real ----
+        // rango temporal global
+        let minD=null,maxD=null;
+        claves.forEach(k=>{ [estFechasPlan[k],estFechasReal[k]].forEach(r=>{ if(r){ if(r.ini&&(!minD||r.ini<minD))minD=r.ini; if(r.fin&&(!maxD||r.fin>maxD))maxD=r.fin; } }); });
+        if(minD && maxD){
+          const dias = diasHabiles(minD,maxD);
+          const totalD = Math.max(1, dias.length);
+          const idxDe = (iso)=>{ if(!iso) return 0; const i=dias.indexOf(iso); if(i>=0) return i; // aproximar por posición temporal
+            let c=0; for(const d of dias){ if(d<=iso) c++; else break; } return Math.max(0,c-1); };
+          const clavesTl = claves.slice().sort((a,b)=>{ const ra=estFechasPlan[a]||estFechasReal[a]||{}, rb=estFechasPlan[b]||estFechasReal[b]||{}; return (ra.ini||"9")<(rb.ini||"9")?-1:1; });
+          const rowH2=30, padL2=150, w2=680, tlMax=w2-padL2-20;
+          const hgt2=44+clavesTl.length*rowH2;
+          const xDe=(iso)=> padL2 + Math.round((idxDe(iso)/totalD)*tlMax);
+          const wDe=(a,b)=>{ if(!a||!b) return 0; const dd=diasHabiles(a,b).length; return Math.max(3, Math.round((dd/totalD)*tlMax)); };
+          let s2='<svg viewBox="0 0 '+w2+' '+hgt2+'" style="width:100%;max-width:'+w2+'px;font-family:inherit" xmlns="http://www.w3.org/2000/svg">';
+          // eje: marcas mes
+          s2+='<text x="'+padL2+'" y="14" font-size="10.5" fill="#8A8880">Plan (claro) vs Real (lleno) — '+dmy(minD)+' a '+dmy(maxD)+'</text>';
+          clavesTl.forEach((k,i)=>{
+            const y=30+i*rowH2;
+            const rp=estFechasPlan[k], rr=estFechasReal[k];
+            s2+='<text x="'+(padL2-8)+'" y="'+(y+15)+'" font-size="11" fill="#3A3A38" text-anchor="end">'+(nombreEstacion(k)||k).slice(0,20)+'</text>';
+            if(rp && rp.ini){ s2+='<rect x="'+xDe(rp.ini)+'" y="'+(y+3)+'" width="'+wDe(rp.ini,rp.fin)+'" height="8" rx="3" fill="'+estColor(k)+'" opacity="0.28"></rect>'; }
+            if(rr && rr.ini){ s2+='<rect x="'+xDe(rr.ini)+'" y="'+(y+13)+'" width="'+wDe(rr.ini,rr.fin)+'" height="8" rx="3" fill="'+estColor(k)+'"></rect>'; }
+          });
+          s2+='</svg>';
+          h+='<div style="overflow-x:auto;background:#FCFBF8;border:1px solid #EEECE4;border-radius:12px;padding:12px;margin-bottom:18px">'+s2+'</div>';
+        }
+      })();
+
       // desglose por estación
       const estArr=Object.entries(est).filter(([,v])=>v.realD.size>0||v.planD.size>0).sort((a,b)=>b[1].costo-a[1].costo);
-      h+='<div style="font-size:14px;font-weight:600;margin:18px 0 8px">📊 Desglose por estación</div>';
+      h+='<div style="font-size:14px;font-weight:600;margin:18px 0 2px">📊 Desglose por estación</div>';
+      h+='<div style="font-size:11px;color:#8A8880;margin-bottom:8px">Los <b>días plan</b> de cada estación salen de la planificación'+(usandoBase?' (recortados a lo que ya debía ocurrir hasta ayer)':'')+'; los <b>días real</b>, del detalle diario efectivamente cargado hasta ayer'+(cerradoInf?' (o todo, por estar cerrado)':'')+'. El <b>costo real</b> es (horas × valor-hora del mes) sumado por estación.</div>';
       h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:8px 10px">Estación</th><th style="text-align:center;padding:8px 10px">Días plan</th><th style="text-align:center;padding:8px 10px">Días real</th><th style="text-align:center;padding:8px 10px">Desvío</th><th style="text-align:right;padding:8px 10px">Costo real</th><th style="text-align:center;padding:8px 10px">Hs extra</th><th style="text-align:left;padding:8px 10px">Módulos plan</th><th style="text-align:left;padding:8px 10px">Módulos real</th></tr></thead><tbody>';
       estArr.forEach(([k,v])=>{ const dp=v.planD.size, dr=v.realD.size, dv=dr-dp; const mP=[...v.modsPlan].join(", ")||"—"; const mR=[...v.modsReal].join(", ")||"—"; h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px"><span style="background:'+estBg(k)+';color:'+estColor(k)+';padding:2px 7px;border-radius:6px">'+nombreEstacion(k)+'</span></td><td style="text-align:center">'+dp+'</td><td style="text-align:center">'+dr+'</td><td style="text-align:center;color:'+(dv>0?'#A32D2D':dv<0?'#3B6D11':'#888780')+'">'+(dv>=0?"+":"")+dv+'</td><td style="text-align:right">'+fmt(v.costo)+'</td><td style="text-align:center;color:'+(v.hsExtra>0?'#BA7517':'#A8A69E')+'">'+(v.hsExtra||0)+'h</td><td style="padding:7px 10px;font-size:11.5px;color:#5F5E5A">'+mP+'</td><td style="padding:7px 10px;font-size:11.5px;color:#5F5E5A">'+mR+'</td></tr>'; });
       // Supervisión: se reporta aparte (rol paralelo). Su costo está en el total pero no en las estaciones.
