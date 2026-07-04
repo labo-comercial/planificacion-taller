@@ -206,17 +206,7 @@
       cargar();
     }
     let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, planiHoras = {}, detalle = [], feriados = [], supervisiones = [];
-    // Proyecto que se hereda al agregar estaciones nuevas. Se actualiza al elegir proyecto en un bloque.
-    let proyectoActivoPlani = null;
-    // Devuelve el proyecto que deben heredar las estaciones nuevas:
-    // el último elegido en planificación, o el del primer bloque existente, o el primero operativo.
-    function proyectoParaNuevaEstacion(){
-      if (proyectoActivoPlani && proyectos.some(p=>p.id===proyectoActivoPlani)) return proyectoActivoPlani;
-      const conProy = plani.find(b=>b.proyecto_id && b.estacion!==SUP_MARK);
-      if (conProy) return conProy.proyecto_id;
-      const ops = (typeof proyectosOperativos==="function") ? proyectosOperativos() : proyectos;
-      return (ops[0]||proyectos[0]||{}).id;
-    }
+    let lineasBase = {}; // proyecto_id -> fila de linea_base (con .contenido, .fijada_at, .fijada_por)
     // Histórico de valor-hora y especialidad por mes (YYYY-MM).
     // valorHoraHist[persona_id] = { 'YYYY-MM': valor, ... } (ordenado al consultar)
     let valorHoraHist = {}, especialidadHist = {};
@@ -379,11 +369,16 @@
         const { data: pp, error: e2 } = await sb.from("planificacion_personal").select("*"); if (e2) return errLoad(e2);
         planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); });
         { const { data: sv } = await sb.from("supervision").select("*").order("creado_en", { ascending: true }); supervisiones = sv || []; }
+        { const { data } = await sb.from("detalle_diario").select("*"); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
+        await cargarLineasBase();
         setEstado("\u2713 " + plani.length + " estación(es) planificada(s).", "ok"); renderPlani();
       } else if (tab === "detalle") {
         await asegurarBase();
+        { const { data } = await sb.from("planificacion").select("*").order("creado_en", { ascending: true }); plani = data || []; }
+        { const { data: pp } = await sb.from("planificacion_personal").select("*"); planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); }); }
         const { data, error } = await sb.from("detalle_diario").select("*"); if (error) return errLoad(error);
         detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0);
+        await cargarLineasBase();
         setEstado("\u2713 " + detalle.length + " registro(s) en el detalle.", "ok"); renderDetalle();
       } else {
         // pestañas visuales: necesitan todo
@@ -391,7 +386,9 @@
         { const { data } = await sb.from("no_disponibilidad").select("*"); dispo = data || []; }
         { const { data } = await sb.from("planificacion").select("*").order("creado_en", { ascending: true }); plani = data || []; }
         { const { data: pp } = await sb.from("planificacion_personal").select("*"); planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); }); }
+        { const { data: sv } = await sb.from("supervision").select("*"); supervisiones = sv || []; }
         { const { data } = await sb.from("detalle_diario").select("*"); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
+        await cargarLineasBase();
         setEstado("\u2713 Datos cargados.", "ok");
         if (tab === "dash") renderDash();
         else if (tab === "gantt") renderGantt();
@@ -1081,6 +1078,97 @@
     function sumarDiasHabiles(iso, n){ if(!iso||!n) return iso; let d=new Date(iso+"T12:00:00"); let restantes=Math.abs(n); const paso=n>0?1:-1; while(restantes>0){ d=new Date(d.getTime()+paso*86400000); const w=d.getDay(); const f=fechaStr(d); if(w!==0&&w!==6&&!esFeriado(f)) restantes--; } return fechaStr(d); }
     // hoy en ISO (zona AR, mediodía para evitar corrimiento)
     function hoyISO(){ return fechaStr(new Date()); }
+    // --- Corte de "real" hasta AYER ---
+    // Una fila cuenta como ejecución real solo si su fecha ya cerró (fecha < hoy).
+    // El día en curso no cuenta porque Nico carga el detalle recién al final del día.
+    function ayerISO(){ const d=new Date(); d.setDate(d.getDate()-1); return fechaStr(d); }
+    // true si la fecha ya pasó (es ejecución real, no plan futuro ni día en curso)
+    function esFechaReal(fch){ return !!fch && fch < hoyISO(); }
+    // ¿el proyecto ya arrancó? (tiene al menos un día real trabajado, no ausente)
+    function proyectoArranco(proyId){
+      return detalle.some(f => f.proyecto_id===proyId && !f.ausente && f.estacion_real!==SUP_MARK && esFechaReal(f.fecha));
+    }
+    // --- Línea base ---
+    function tieneLineaBase(proyId){ return !!lineasBase[proyId]; }
+    function baseDeProy(proyId){ return lineasBase[proyId] || null; }
+    // Foto del plan vigente de un proyecto: bloques + personas + horas. Es lo que se congela como base.
+    function fotoPlan(proyId){
+      const bloques = plani.filter(b=>b.proyecto_id===proyId).map(b=>({
+        estacion:b.estacion, subtarea:b.subtarea, proyecto_id:b.proyecto_id, modulos:b.modulos||null,
+        fecha_desde:b.fecha_desde, fecha_hasta:b.fecha_hasta,
+        personas:(planiPers[b.id]||[]).map(pid=>({ persona_id:pid, horas:(planiHoras[b.id]&&planiHoras[b.id][pid]!=null)?planiHoras[b.id][pid]:8 }))
+      }));
+      const sup = supervisiones.filter(s=> (String(s.proyectos||"").split(",").map(x=>x.trim()).includes(proyId))).map(s=>({ supervisor_id:s.supervisor_id, proyectos:s.proyectos, horas:s.horas!=null?s.horas:8 }));
+      return { bloques, supervisiones:sup, fecha_foto: hoyISO() };
+    }
+    async function cargarLineasBase(){
+      const { data } = await sb.from("linea_base").select("*");
+      lineasBase = {}; (data||[]).forEach(r=>{ lineasBase[r.proyecto_id]=r; });
+    }
+    // Métricas de un conjunto de bloques (de la base o del plan vigente): días hábiles únicos y fin.
+    function metricasBloques(bloques){
+      const dias = new Set(); let fin = null;
+      (bloques||[]).forEach(b=>{
+        const dP = diasHabiles(b.fecha_desde, b.fecha_hasta);
+        dP.forEach(d=>dias.add(d));
+        if(dP.length){ const f=dP[dP.length-1]; if(!fin || f>fin) fin=f; }
+      });
+      return { dias: dias.size, fin };
+    }
+    // Bloque de informe: compara el plan VIGENTE contra la LÍNEA BASE original (desvío de planificación).
+    function bloqueBaseVsPlan(proyId){
+      const base = baseDeProy(proyId);
+      if(!base){
+        return '<div style="font-size:11.5px;color:#BA7517;background:#FCF4E6;border-radius:8px;padding:9px 12px;margin-bottom:18px">Este proyecto no tiene <b>línea base</b> fijada, así que no se puede medir cuánto cambió el plan respecto del original. Fijala en Planificación General.</div>';
+      }
+      const mB = metricasBloques(base.contenido && base.contenido.bloques);
+      const mV = metricasBloques(plani.filter(b=>b.proyecto_id===proyId));
+      const dDias = mV.dias - mB.dias; // >0 = el plan creció respecto del original
+      let corrFin = null;
+      if(mB.fin && mV.fin){
+        const signo = mV.fin>mB.fin?1:(mV.fin<mB.fin?-1:0);
+        const a = mV.fin>mB.fin?mB.fin:mV.fin, b = mV.fin>mB.fin?mV.fin:mB.fin;
+        corrFin = signo * Math.max(0, diasHabiles(a,b).length-1);
+      }
+      const col=(v)=> v>0?'#A32D2D':v<0?'#3B6D11':'#888780';
+      let h='<div style="border:1px solid #E4E0F0;border-radius:12px;padding:14px 16px;margin-bottom:18px;background:#FBFAFE">';
+      h+='<div style="font-size:13px;font-weight:600;color:#4A3F7A;margin-bottom:2px">Plan vigente vs línea base (cuánto cambió el plan)</div>';
+      h+='<div style="font-size:11px;color:#8A86A0;margin-bottom:10px">Compara la planificación actual contra la foto original fijada el '+(base.fijada_at?dmy(base.fijada_at.slice(0,10)):'—')+'. Es el desvío de <b>planificación</b>, distinto del desvío de ejecución (real vs plan) de más arriba.</div>';
+      h+='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:7px 10px"></th><th style="text-align:center;padding:7px 10px">Días hábiles</th><th style="text-align:center;padding:7px 10px">Fin planificado</th></tr></thead><tbody>';
+      h+='<tr style="border-top:1px solid #EBE7F5"><td style="padding:7px 10px;font-weight:500">Línea base (original)</td><td style="text-align:center">'+mB.dias+'</td><td style="text-align:center">'+(mB.fin?dmy(mB.fin):'—')+'</td></tr>';
+      h+='<tr style="border-top:1px solid #EBE7F5"><td style="padding:7px 10px;font-weight:500">Plan vigente</td><td style="text-align:center">'+mV.dias+'</td><td style="text-align:center">'+(mV.fin?dmy(mV.fin):'—')+'</td></tr>';
+      h+='<tr style="border-top:1px solid #EBE7F5"><td style="padding:7px 10px;font-weight:600">Cambio</td><td style="text-align:center;font-weight:600;color:'+col(dDias)+'">'+(dDias>=0?"+":"")+dDias+' días</td><td style="text-align:center;font-weight:600;color:'+(corrFin==null?'#888780':col(corrFin))+'">'+(corrFin==null?'—':((corrFin>0?"+":"")+corrFin+' días'))+'</td></tr>';
+      h+='</tbody></table></div>';
+      return h;
+    }
+    // Fijar la línea base por primera vez. Solo si el proyecto no arrancó (sin días reales).
+    async function fijarLineaBase(proyId){
+      const pr = proyectos.find(p=>p.id===proyId); if(!pr) return;
+      if(tieneLineaBase(proyId)){ setEstado("Este proyecto ya tiene línea base.", "err"); return; }
+      if(proyectoArranco(proyId)){ setEstado("No se puede fijar: el proyecto ya arrancó (tiene días reales).", "err"); return; }
+      const foto = fotoPlan(proyId);
+      if(!foto.bloques.length){ if(!confirm("La planificación de este proyecto está vacía. ¿Fijar igual una línea base vacía?")) return; }
+      if(!confirm("Vas a fijar la línea base de \""+pr.nombre+"\" con la planificación actual ("+foto.bloques.length+" estación(es)). Esta será la referencia original del proyecto. ¿Continuar?")) return;
+      const { error } = await sb.from("linea_base").insert({ proyecto_id: proyId, fijada_por: (typeof miEmail!=="undefined"?miEmail:null), contenido: foto });
+      if(error) return setEstado("Error al fijar base: "+error.message, "err");
+      setEstado("\u2713 Línea base fijada.", "ok"); cargar();
+    }
+    // Re-fijar (solo Pablo/admin): guarda la base anterior en historial y la reemplaza.
+    async function refijarLineaBase(proyId){
+      if(!esAdmin()){ setEstado("Solo un administrador puede volver a fijar la línea base.", "err"); return; }
+      const pr = proyectos.find(p=>p.id===proyId); if(!pr) return;
+      const actual = baseDeProy(proyId);
+      if(!actual){ return fijarLineaBase(proyId); }
+      if(!confirm("Vas a REEMPLAZAR la línea base de \""+pr.nombre+"\" con la planificación actual. La base anterior se guarda en el historial. Esta acción cambia la referencia original del proyecto. ¿Continuar?")) return;
+      // 1) archivar la base anterior
+      const { error: eh } = await sb.from("linea_base_historial").insert({ proyecto_id: proyId, fijada_at: actual.fijada_at, fijada_por: actual.fijada_por, reemplazada_por: (typeof miEmail!=="undefined"?miEmail:null), contenido: actual.contenido });
+      if(eh) return setEstado("Error al archivar base anterior: "+eh.message, "err");
+      // 2) pisar la base vigente
+      const foto = fotoPlan(proyId);
+      const { error } = await sb.from("linea_base").update({ fijada_at: new Date().toISOString(), fijada_por: (typeof miEmail!=="undefined"?miEmail:null), contenido: foto }).eq("proyecto_id", proyId);
+      if(error) return setEstado("Error al re-fijar: "+error.message, "err");
+      setEstado("\u2713 Línea base re-fijada. La anterior quedó en el historial.", "ok"); cargar();
+    }
 
     function noDispoEn(personaId, fecha) { return dispo.some(n => n.persona_id === personaId && fecha >= n.desde && fecha <= n.hasta); }
     function tipoNoDispoEn(personaId, fecha) { const n = dispo.find(x => x.persona_id === personaId && fecha >= x.desde && fecha <= x.hasta); return n ? n.tipo : null; }
@@ -1195,6 +1283,7 @@
             }).join('')+'</div>'
           + '</div></div>';
       });
+      h += bloqueLineaBase();
       h += '<div class="row-actions"><select id="selAgregar" style="width:auto;color:#185FA5"><option value="">+ Agregar estación…</option>'+STKEYS.map(k=>'<option value="'+k+'">'+STATIONS[k].label+'</option>').join('')+'</select>';
       h += '<button class="btn btn-add" onclick="agregarEstacionDefault()">Cargar las 20 estaciones</button>';
       h += '<button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button>';
@@ -1203,23 +1292,53 @@
       contenido.innerHTML = h;
       document.getElementById("selAgregar").onchange = function(){ if(this.value){ agregarEstacion(this.value); } };
     }
+    // Panel de línea base: por cada proyecto con planificación, muestra estado y acción.
+    function bloqueLineaBase(){
+      const proyIds = [...new Set(plani.map(b=>b.proyecto_id).filter(Boolean))];
+      if(!proyIds.length) return '';
+      let h = '<div class="no-print" style="background:#F6F4FB;border:1px solid #E4E0F0;border-radius:12px;padding:12px 14px;margin-bottom:14px">';
+      h += '<div style="font-size:13px;font-weight:600;color:#4A3F7A;margin-bottom:2px">Línea base del proyecto</div>';
+      h += '<div style="font-size:11.5px;color:#8A86A0;margin-bottom:10px;line-height:1.5">La línea base es la foto de la planificación <b>original</b>, la que se usa para medir cuánto cambió el plan después. Fijala cuando termines de planificar el proyecto, antes de que arranque.</div>';
+      proyIds.forEach(pid=>{
+        const pr = proyectos.find(p=>p.id===pid); if(!pr) return;
+        const base = baseDeProy(pid);
+        const arranco = proyectoArranco(pid);
+        h += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:7px 0;border-top:1px solid #EBE7F5;font-size:12.5px">';
+        h += '<span style="min-width:150px;font-weight:600;color:#4A3F7A">'+pr.nombre+'</span>';
+        if(base){
+          const nB = (base.contenido && base.contenido.bloques ? base.contenido.bloques.length : 0);
+          h += '<span style="background:#E7F1E7;color:#3B6D11;padding:2px 8px;border-radius:6px;font-size:11px">✓ Base fijada</span>';
+          h += '<span style="color:#A8A69E;font-size:11px">'+nB+' estación(es) · '+(base.fijada_at?dmy(base.fijada_at.slice(0,10)):'')+(base.fijada_por?(' · '+base.fijada_por):'')+'</span>';
+          if(esAdmin()) h += '<button class="btn" style="background:#fff;border:1px solid #E4E0F0;color:#7A2E2E;padding:4px 10px;font-size:11px;margin-left:auto" onclick="refijarLineaBase(\''+pid+'\')">Re-fijar (admin)</button>';
+        } else if(arranco){
+          h += '<span style="background:#FBE9E7;color:#A32D2D;padding:2px 8px;border-radius:6px;font-size:11px">⚠ Arrancó sin línea base</span>';
+          h += '<span style="color:#A8A69E;font-size:11px">ya tiene días reales; no se puede fijar la base original</span>';
+          if(esAdmin()) h += '<button class="btn" style="background:#fff;border:1px solid #E4E0F0;color:#4A3F7A;padding:4px 10px;font-size:11px;margin-left:auto" onclick="refijarLineaBase(\''+pid+'\')">Fijar igual (admin)</button>';
+        } else {
+          h += '<span style="background:#FCF4E6;color:#BA7517;padding:2px 8px;border-radius:6px;font-size:11px">Sin base todavía</span>';
+          h += '<button class="btn btn-primary" style="padding:4px 12px;font-size:11.5px;margin-left:auto" onclick="fijarLineaBase(\''+pid+'\')">Fijar línea base</button>';
+        }
+        h += '</div>';
+      });
+      h += '</div>';
+      return h;
+    }
     async function agregarEstacion(estKey) {
       if (!proyectos.length) { setEstado("Creá un proyecto primero.", "err"); return; }
       const st = STATIONS[estKey];
-      const { error } = await sb.from("planificacion").insert({ estacion: estKey, subtarea: st.subs[0], proyecto_id: proyectoParaNuevaEstacion(), modo: "nombre", fecha_desde: null, fecha_hasta: null });
+      const { error } = await sb.from("planificacion").insert({ estacion: estKey, subtarea: st.subs[0], proyecto_id: proyectos[0].id, modo: "nombre", fecha_desde: null, fecha_hasta: null });
       if (error) return setEstado("Error: " + error.message, "err"); cargar();
     }
     async function agregarEstacionDefault() {
       if (!proyectos.length) { setEstado("Creá un proyecto primero.", "err"); return; }
-      const proyNuevo = proyectoParaNuevaEstacion();
-      const filas = STKEYS.map(k => ({ estacion: k, subtarea: STATIONS[k].subs[0], proyecto_id: proyNuevo, modo: "nombre" }));
+      const filas = STKEYS.map(k => ({ estacion: k, subtarea: STATIONS[k].subs[0], proyecto_id: proyectos[0].id, modo: "nombre" }));
       const { error } = await sb.from("planificacion").insert(filas);
       if (error) return setEstado("Error: " + error.message, "err"); cargar();
     }
     async function editarPl(id, c, v) {
       const b = plani.find(x=>x.id===id);
       const fechaPrevia = b ? b.fecha_desde : null;
-      const u = {}; u[c] = (v === "" ? null : v); if(c==="proyecto_id"){ u.modulos = null; if(u[c]) proyectoActivoPlani = u[c]; }
+      const u = {}; u[c] = (v === "" ? null : v); if(c==="proyecto_id"){ u.modulos = null; }
       const { error } = await sb.from("planificacion").update(u).eq("id", id);
       if (error) return setEstado("Error: " + error.message, "err");
       if(b){ b[c]=u[c]; if(c==="proyecto_id") b.modulos=null; }
@@ -1427,7 +1546,10 @@
         return "planreal";
       }
       // --- Costo por fila: (horas reales - horas plan) * costo/hora; extra cuenta x2 ---
+      // Solo cuentan las filas ya ejecutadas (fecha < hoy). El día en curso y el futuro
+      // todavía son plan, no ejecución: no generan desvío de costo.
       detalle.forEach(f=>{
+        if(!esFechaReal(f.fecha)) return;
         const ch = costoHora(f.persona_real, f.fecha);            // valor del mes real (vigente)
         const chPlan = (f.valor_hora_plan!=null) ? Number(f.valor_hora_plan) : costoHora(f.persona_plan!=null?f.persona_plan:f.persona_real, f.fecha); // valor congelado al planificar
         const hPlan = (f.horas_plan!=null ? Number(f.horas_plan) : Number(f.horas_normales)||0);
@@ -1449,17 +1571,19 @@
         if(f.es_extra) e.tieneExtra = true;
       });
       // --- Tiempo y días por estación/proyecto ---
-      // Plan: de la tabla plani (bloques). Real: fechas efectivas del detalle.
+      // Plan: de la tabla plani (bloques), pero SOLO los días que ya deberían haber ocurrido
+      // (hasta ayer). Comparar el plan futuro contra un real que aún no existe daría atraso falso.
       plani.forEach(b=>{
         const key = b.estacion + "|" + b.proyecto_id;
-        const diasPlan = diasHabiles(b.fecha_desde, b.fecha_hasta);
+        const diasPlan = diasHabiles(b.fecha_desde, b.fecha_hasta).filter(esFechaReal);
         const pe = ensureEst(key);
         diasPlan.forEach(d=> pe.diasPlanSet.add(d));
         if (diasPlan.length){ const fin = diasPlan[diasPlan.length-1]; if(!pe.finPlan || fin>pe.finPlan) pe.finPlan = fin; }
       });
-      // Real: fechas trabajadas en el detalle por estación_real+proyecto
+      // Real: fechas trabajadas en el detalle por estación_real+proyecto, solo hasta ayer
       detalle.forEach(f=>{
         if (f.ausente) return;
+        if (!esFechaReal(f.fecha)) return;
         const key = f.estacion_real + "|" + f.proyecto_id;
         const pe = ensureEst(key);
         pe.diasRealSet.add(f.fecha);
@@ -1492,8 +1616,9 @@
       //   - atrasoEst  = suma de atrasos/adelantos de las estaciones del proyecto
       const porProyecto = {};
       const ensureProy = (pid)=>{ if(!porProyecto[pid]) porProyecto[pid] = { sobrecosto:0, ahorro:0, costoNetoPlan:0, costoReal:0, presup:0, costoVsPresup:0, finPlan:null, finReal:null, atrasoProy:0, atrasoEst:0, tieneExtra:false, costoOrigen:{extra:0, edicion:0, planreal:0, jornal:0}, tiempoOrigen:{extra:0, edicion:0, planreal:0, jornal:0} }; return porProyecto[pid]; };
-      // costo por proyecto (desde las filas): delta vs plan + costo real absoluto
+      // costo por proyecto (desde las filas): delta vs plan + costo real absoluto — solo ejecutado
       detalle.forEach(f=>{
+        if(!esFechaReal(f.fecha)) return;
         const pid = f.proyecto_id; if(pid==null) return;
         const pp = ensureProy(pid);
         const fi = porFila[f.id];
@@ -1505,17 +1630,17 @@
       });
       // presupuesto MO por proyecto (de la tabla proyectos): total = La Huella + Montaje
       proyectos.forEach(p=>{ const pp = porProyecto[p.id]; if(pp){ pp.presup = presupMO(p); pp.presupHuella = presupHuella(p); pp.presupMontaje = presupMontaje(p); } });
-      // fin planificado por proyecto (desde plani)
+      // fin planificado por proyecto (desde plani), recortado a lo que ya debería haber ocurrido
       plani.forEach(b=>{
-        const dP = diasHabiles(b.fecha_desde, b.fecha_hasta);
+        const dP = diasHabiles(b.fecha_desde, b.fecha_hasta).filter(esFechaReal);
         if(!dP.length) return;
         const pp = ensureProy(b.proyecto_id);
         const fin = dP[dP.length-1];
         if(!pp.finPlan || fin>pp.finPlan) pp.finPlan = fin;
       });
-      // fin real por proyecto (desde detalle, días efectivamente trabajados)
+      // fin real por proyecto (desde detalle, días efectivamente trabajados hasta ayer)
       detalle.forEach(f=>{
-        if(f.ausente) return; const pid=f.proyecto_id; if(pid==null) return;
+        if(f.ausente) return; if(!esFechaReal(f.fecha)) return; const pid=f.proyecto_id; if(pid==null) return;
         const pp = ensureProy(pid);
         if(!pp.finReal || f.fecha>pp.finReal) pp.finReal = f.fecha;
       });
@@ -1591,7 +1716,13 @@
       // ====== PANEL DE IMPACTO (arriba de todo) ======
       h += '<div style="border:1px solid #E6E4DC;border-radius:14px;padding:16px 18px;margin-bottom:18px;background:#FCFBF8">';
       h += '<div style="font-size:15px;font-weight:700;margin-bottom:2px">📊 Desvíos plan vs real — costo y tiempo</div>';
-      h += '<p style="font-size:11.5px;color:#A8A69E;margin:0 0 14px">Tocá una tarjeta de proyecto para filtrar el desglose por estación de abajo. Costo: positivo = sobrecosto, negativo = ahorro. Tiempo: positivo = atraso, negativo = adelanto.</p>';
+      h += '<p style="font-size:11.5px;color:#A8A69E;margin:0 0 8px">Tocá una tarjeta de proyecto para filtrar el desglose por estación de abajo. Costo: positivo = sobrecosto, negativo = ahorro. Tiempo: positivo = atraso, negativo = adelanto.</p>';
+      h += '<details style="margin:0 0 14px"><summary style="font-size:11.5px;color:#185FA5;cursor:pointer">Cómo se calcula (ayuda memoria)</summary><div style="font-size:11px;color:#888780;line-height:1.6;background:#FAFAF8;border:1px solid #EEECE4;border-radius:8px;padding:10px 12px;margin-top:6px">'
+        + '<b>Qué cuenta como “real”:</b> solo los días ya ejecutados, hasta ayer inclusive. El día en curso y los días futuros todavía son plan, así que un proyecto que no arrancó muestra desvío cero.<br>'
+        + '<b>Costo:</b> por cada jornada, (horas reales × valor-hora del mes) + (horas extra × valor-hora × 1,5 lun-sáb o × 2 dom/feriado), menos (horas planificadas × valor-hora congelado al planificar). Se suma por estación y por proyecto.<br>'
+        + '<b>Tiempo:</b> días hábiles entre la fecha de fin planificada (recortada a lo que ya debía ocurrir) y la fecha del último día realmente trabajado. Positivo = atraso.<br>'
+        + '<b>vs plan vs vs presupuesto:</b> “vs plan” compara contra lo que estaba planificado; “vs presup.” compara el costo real acumulado contra el presupuesto de mano de obra cargado en el proyecto.'
+        + '</div></details>';
 
       // ---- Tarjetas por proyecto ----
       const proyCon = Object.entries(imp.porProyecto)
@@ -1901,6 +2032,7 @@
       const norm=(x)=> x==null?"":String(x);
       const acc={extra:0, edicion:0, jornal:0, planreal:0};
       det.forEach(f=>{
+        if(!esFechaReal(f.fecha)) return;
         const ch=costoHora(f.persona_real,f.fecha);
         const chPlan=(f.valor_hora_plan!=null)?Number(f.valor_hora_plan):ch;
         const hPlan=(f.horas_plan!=null?Number(f.horas_plan):Number(f.horas_normales)||0);
@@ -1936,9 +2068,9 @@
       const proyVig = proyectos.filter(p => p.estado !== "Cerrado");
       let det = detalle.slice();
       if (dashProy) det = det.filter(f => f.proyecto_id === dashProy);
-      // KPIs
+      // KPIs — solo ejecución real (hasta ayer). El día en curso y el futuro son plan, no desvío.
       let jornal=0, extra=0, ausencias=0, hsExtra=0;
-      det.forEach(f => { if (f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); hsExtra+=(Number(f.horas_extra)||0); });
+      det.forEach(f => { if(!esFechaReal(f.fecha)) return; if (f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); hsExtra+=(Number(f.horas_extra)||0); });
       const real = jornal+extra;
       const presup = (dashProy ? proyectos.filter(p=>p.id===dashProy) : proyectos).reduce((s,p)=>s+presupMO(p),0);
       // --- Índices de desempeño (Earned Value) ---
@@ -1947,6 +2079,7 @@
       let costoPlanEV=0, costoRealEV=0;
       det.forEach(f=>{
         if(f.ausente) return;
+        if(!esFechaReal(f.fecha)) return;
         const chReal = costoHora(f.persona_real, f.fecha);
         const chPlan = (f.valor_hora_plan!=null) ? Number(f.valor_hora_plan) : chReal;
         const hReal = Number(f.horas_normales)||0, hExtra=Number(f.horas_extra)||0;
@@ -1955,17 +2088,17 @@
         costoPlanEV += hPlan*chPlan;
       });
       const cpi = costoRealEV>0 ? (costoPlanEV/costoRealEV) : null;
-      // SPI por días: comparar días hábiles planificados hasta hoy vs días reales trabajados.
+      // SPI por días: días hábiles planificados que ya debían estar hechos (hasta ayer) vs días reales trabajados.
       const bloqDash = plani.filter(b=> !dashProy || b.proyecto_id===dashProy);
       let diasPlanHastaHoy=new Set(), diasRealSet=new Set();
-      bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ if(d<=hoyISO()) diasPlanHastaHoy.add(b.estacion+"|"+b.proyecto_id+"|"+d); }));
-      det.forEach(f=>{ if(!f.ausente && f.estacion_real!==SUP_MARK) diasRealSet.add(f.estacion_real+"|"+f.proyecto_id+"|"+f.fecha); });
+      bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ if(esFechaReal(d)) diasPlanHastaHoy.add(b.estacion+"|"+b.proyecto_id+"|"+d); }));
+      det.forEach(f=>{ if(!f.ausente && f.estacion_real!==SUP_MARK && esFechaReal(f.fecha)) diasRealSet.add(f.estacion_real+"|"+f.proyecto_id+"|"+f.fecha); });
       const spi = diasPlanHastaHoy.size>0 ? (diasRealSet.size/diasPlanHastaHoy.size) : null;
-      // --- Completitud del detalle: de los DÍAS HÁBILES planificados hasta hoy, cuántos tienen
+      // --- Completitud del detalle: de los DÍAS HÁBILES planificados hasta ayer, cuántos tienen
       // al menos una fila cargada (trabajada o ausente). Mide cuán confiables son CPI/SPI/PPC.
       let diasEsperados=new Set(), diasConRegistro=new Set();
-      bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ if(d<=hoyISO()) diasEsperados.add(b.proyecto_id+"|"+d); }));
-      det.forEach(f=>{ if(f.fecha<=hoyISO()) diasConRegistro.add(f.proyecto_id+"|"+f.fecha); });
+      bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ if(esFechaReal(d)) diasEsperados.add(b.proyecto_id+"|"+d); }));
+      det.forEach(f=>{ if(esFechaReal(f.fecha)) diasConRegistro.add(f.proyecto_id+"|"+f.fecha); });
       const espN = diasEsperados.size;
       const cargadosN = [...diasEsperados].filter(k=>diasConRegistro.has(k)).length;
       const completPct = espN>0 ? (cargadosN/espN*100) : null;
@@ -1981,7 +2114,7 @@
       // PPC (Percent Plan Complete): de las jornadas planificadas hasta hoy, cuántas salieron según plan (coord)
       let planHastaHoy=0, cumplidas=0;
       det.forEach(f=>{
-        if(f.fecha>hoyISO()) return; // solo hasta hoy
+        if(!esFechaReal(f.fecha)) return; // solo jornadas ya cerradas (hasta ayer)
         if(f.es_extra) return;       // el extra no estaba planificado
         planHastaHoy++;
         const hPlan=(f.horas_plan!=null?Number(f.horas_plan):Number(f.horas_normales)||0);
@@ -1999,7 +2132,7 @@
       const sinCubrir = [...cobPlan].filter(k=>!cobCubierto.has(k)).length;
       // costo por estación
       const porEst = {};
-      det.forEach(f => { if(f.ausente)return; const k=f.estacion_real; if(!porEst[k])porEst[k]={real:0,hs:0}; const ch=costoHora(f.persona_real, f.fecha); porEst[k].real+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); porEst[k].hs+=(Number(f.horas_normales)||0)+(Number(f.horas_extra)||0); });
+      det.forEach(f => { if(f.ausente)return; if(!esFechaReal(f.fecha))return; const k=f.estacion_real; if(!porEst[k])porEst[k]={real:0,hs:0}; const ch=costoHora(f.persona_real, f.fecha); porEst[k].real+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); porEst[k].hs+=(Number(f.horas_normales)||0)+(Number(f.horas_extra)||0); });
       const estArr = Object.entries(porEst).sort((a,b)=>b[1].real-a[1].real);
       const maxEst = Math.max(1, ...estArr.map(e=>e[1].real));
       // agenda hoy/mañana
@@ -2025,7 +2158,7 @@
         + '<div style="font-size:11px;color:#A8A69E;margin-top:3px;line-height:1.4">'+ref+'</div></div>';
       h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
         + idxCard({abrev:"CPI",full:"Cost Performance Index (Índice de Desempeño de Costo)",title:"Cost Performance Index"},"¿Estoy gastando de más?",cpi,"Por cada $1 que planificaste gastar, cuánto trabajo real obtuviste. <b>1,00 = justo lo previsto</b>. Arriba de 1 = rendís más por peso (vas bien); abajo de 1 = cada jornada sale más cara de lo planeado (sobrecosto). Ej.: 0,90 = estás gastando ~10% de más.")
-        + idxCard({abrev:"SPI",full:"Schedule Performance Index (Índice de Desempeño de Cronograma)",title:"Schedule Performance Index"},"¿Voy al día con el plazo?",spi,"Cuánto del trabajo que debías tener hecho a hoy efectivamente hiciste. <b>1,00 = al día</b>. Arriba de 1 = adelantado; abajo de 1 = atrasado. Ej.: 0,80 = llevás hecho el 80% de lo que debías a esta altura.")
+        + idxCard({abrev:"SPI",full:"Schedule Performance Index (Índice de Desempeño de Cronograma)",title:"Schedule Performance Index"},"¿Voy al día con el plazo?",spi,"Cuánto del trabajo que debías tener hecho hasta ayer efectivamente hiciste (el día en curso no se cuenta porque aún no cerró). <b>1,00 = al día</b>. Arriba de 1 = adelantado; abajo de 1 = atrasado. Ej.: 0,80 = llevás hecho el 80% de lo que debías a esta altura.")
         + '</div>';
       // Banner de completitud del detalle (contextualiza CPI/SPI/PPC)
       if(completPct!=null){
@@ -2053,7 +2186,7 @@
         h+=bloqueOrigenDesvio(det);
       } else {
         h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
-          + card("Cumplimiento del plan", ppc!=null?(ppc*100).toFixed(0)+"%":"s/dato", ppc!=null?cumplidas+" de "+planHastaHoy+" jornadas según plan":"sin jornadas hasta hoy", ppc==null?null:(ppc>=0.9?'#3B6D11':ppc>=0.75?'#BA7517':'#A32D2D'), "De las jornadas que estaban planificadas para hoy o antes, qué porcentaje salió exactamente como estaba previsto (misma persona, misma estación, mismas horas, sin ausencias). Es la mejor señal temprana de que el plan se está cumpliendo o no. Verde ≥90%, ámbar 75–89%, rojo <75%.")
+          + card("Cumplimiento del plan", ppc!=null?(ppc*100).toFixed(0)+"%":"s/dato", ppc!=null?cumplidas+" de "+planHastaHoy+" jornadas según plan":"sin jornadas hasta ayer", ppc==null?null:(ppc>=0.9?'#3B6D11':ppc>=0.75?'#BA7517':'#A32D2D'), "De las jornadas que estaban planificadas hasta ayer (el día en curso no se cuenta porque aún no cerró), qué porcentaje salió exactamente como estaba previsto (misma persona, misma estación, mismas horas, sin ausencias). Es la mejor señal temprana de que el plan se está cumpliendo o no. Verde ≥90%, ámbar 75–89%, rojo <75%.")
           + card("Cobertura próx. 5 días", sinCubrir===0?"OK":sinCubrir+" sin cubrir", sinCubrir===0?"todo el plan cubierto":"días-estación sin gente", sinCubrir===0?'#3B6D11':'#A32D2D', "Combinaciones estación-proyecto-día planificadas para los próximos 5 días hábiles que todavía no tienen ninguna persona asignada en el detalle.")
           + card("Horas extra", hsExtra+" h", "$"+Math.round(extra).toLocaleString("es-AR")+" en extra", hsExtra>0?'#BA7517':null, "Suma de horas extra de todas las jornadas del período visible. El monto es esas horas valorizadas al doble del valor-hora.")
           + card("Ausencias", ausencias, "jornadas no trabajadas", ausencias>0?'#A32D2D':'#3B6D11', "Cantidad de jornadas del detalle marcadas como ausente en el período visible.")
@@ -2064,11 +2197,11 @@
         h+='<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">'+ag("📋 Tareas de hoy",diaHoy,tareasDe(diaHoy))+ag("⏭️ Preparar para mañana",diaMan,tareasDe(diaMan))+'</div>';
         // Top estaciones que aportan al atraso (días reales vs planificados a hoy, por estación)
         const atr={};
-        bloqDash.forEach(b=>{ if(b.estacion===SUP_MARK)return; diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ if(d<=hoyISO()){ (atr[b.estacion]=atr[b.estacion]||{plan:new Set(),real:new Set()}).plan.add(b.proyecto_id+"|"+d); } }); });
-        det.forEach(f=>{ if(f.ausente||f.estacion_real===SUP_MARK)return; (atr[f.estacion_real]=atr[f.estacion_real]||{plan:new Set(),real:new Set()}).real.add(f.proyecto_id+"|"+f.fecha); });
+        bloqDash.forEach(b=>{ if(b.estacion===SUP_MARK)return; diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ if(esFechaReal(d)){ (atr[b.estacion]=atr[b.estacion]||{plan:new Set(),real:new Set()}).plan.add(b.proyecto_id+"|"+d); } }); });
+        det.forEach(f=>{ if(f.ausente||f.estacion_real===SUP_MARK)return; if(!esFechaReal(f.fecha))return; (atr[f.estacion_real]=atr[f.estacion_real]||{plan:new Set(),real:new Set()}).real.add(f.proyecto_id+"|"+f.fecha); });
         const atrArr=Object.entries(atr).map(([k,v])=>[k, v.plan.size - v.real.size]).filter(([,d])=>d>0).sort((a,b)=>b[1]-a[1]).slice(0,5);
         if(atrArr.length){
-          h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px;margin-bottom:16px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Estaciones que van atrasadas</div><div style="font-size:11.5px;color:#A8A69E;margin-bottom:12px">Días planificados hasta hoy que todavía no se registraron como trabajados. Son las que conviene reforzar.</div>';
+          h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px;margin-bottom:16px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Estaciones que van atrasadas</div><div style="font-size:11.5px;color:#A8A69E;margin-bottom:12px">Días planificados hasta ayer que todavía no se registraron como trabajados. Son las que conviene reforzar.</div>';
           atrArr.forEach(([k,d])=>{ h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12.5px"><span style="width:170px"><span style="background:'+estBg(k)+';color:'+estColor(k)+';padding:2px 7px;border-radius:6px">'+nombreEstacion(k)+'</span></span><span style="color:#A32D2D;font-weight:600">'+d+' día(s) pendiente(s)</span></div>'; });
           h+='</div>';
         }
@@ -2187,12 +2320,16 @@
       const pr = proyectos.find(p=>p.id===proySel);
       const blo = plani.filter(b=>b.proyecto_id===proySel);
       const det = detalle.filter(f=>f.proyecto_id===proySel);
+      // Corte del "real" en el informe: solo cuenta lo ya ejecutado (hasta ayer). Excepción:
+      // si el proyecto está CERRADO, ya no hay futuro, así que se cuenta todo el detalle.
+      const cerradoInf = (pr && pr.estado === "Cerrado");
+      const esRealInf = (fch)=> cerradoInf || esFechaReal(fch);
 
       // --- TIEMPOS ---
       // planificado: rango de fechas de las estaciones del proyecto
       let planDias=[], realDias=[];
-      blo.forEach(b=>diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>planDias.push(d)));
-      det.forEach(f=>{ if(!f.ausente) realDias.push(f.fecha); });
+      blo.forEach(b=>diasHabiles(b.fecha_desde,b.fecha_hasta).filter(esRealInf).forEach(d=>planDias.push(d)));
+      det.forEach(f=>{ if(!f.ausente && esRealInf(f.fecha)) realDias.push(f.fecha); });
       planDias=[...new Set(planDias)].sort(); realDias=[...new Set(realDias)].sort();
       const planIni=planDias[0], planFin=planDias[planDias.length-1];
       const realIni=realDias[0], realFin=realDias[realDias.length-1];
@@ -2211,7 +2348,7 @@
       const presupH = presupHuella(pr), presupM = presupMontaje(pr), presup = presupH + presupM;
       let jornal=0, extra=0, hsExtra=0, ausencias=0;
       let realH=0, realM=0; // costo real contra cada presupuesto
-      det.forEach(f=>{ if(f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); const cn=(Number(f.horas_normales)||0)*ch; const ce=(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); jornal+=cn; extra+=ce; hsExtra+=(Number(f.horas_extra)||0); if(esMontaje(f.estacion_real)) realM+=cn+ce; else realH+=cn+ce; });
+      det.forEach(f=>{ if(!esRealInf(f.fecha)) return; if(f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); const cn=(Number(f.horas_normales)||0)*ch; const ce=(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); jornal+=cn; extra+=ce; hsExtra+=(Number(f.horas_extra)||0); if(esMontaje(f.estacion_real)) realM+=cn+ce; else realH+=cn+ce; });
       const real=jornal+extra;
       const desvCosto=real-presup;
       const desvPct=presup?(desvCosto/presup*100):0;
@@ -2225,6 +2362,7 @@
       const porEsp={};
       det.forEach(f=>{
         if(f.ausente) return;
+        if(!esRealInf(f.fecha)) return;
         const p=personas.find(x=>x.id===f.persona_real);
         if(!p || p.tipo!=="Directo") return;
         const hs=(Number(f.horas_normales)||0)+(Number(f.horas_extra)||0);
@@ -2237,19 +2375,29 @@
 
       // --- POR ESTACIÓN (Supervisión EXCLUIDA: es un rol paralelo, no una estación) ---
       const est={};
-      blo.forEach(b=>{ if(b.estacion===SUP_MARK) return; const dP=diasHabiles(b.fecha_desde,b.fecha_hasta); if(!est[b.estacion])est[b.estacion]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; dP.forEach(d=>est[b.estacion].planD.add(d)); (b.modulos||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[b.estacion].modsPlan.add(m)); });
-      det.forEach(f=>{ if(f.estacion_real===SUP_MARK) return; if(!est[f.estacion_real])est[f.estacion_real]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; if(!f.ausente){est[f.estacion_real].realD.add(f.fecha); const ch=costoHora(f.persona_real, f.fecha); est[f.estacion_real].costo+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); est[f.estacion_real].hsExtra+=(Number(f.horas_extra)||0); (f.modulos_real||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[f.estacion_real].modsReal.add(m));} });
+      blo.forEach(b=>{ if(b.estacion===SUP_MARK) return; const dP=diasHabiles(b.fecha_desde,b.fecha_hasta).filter(esRealInf); if(!est[b.estacion])est[b.estacion]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; dP.forEach(d=>est[b.estacion].planD.add(d)); (b.modulos||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[b.estacion].modsPlan.add(m)); });
+      det.forEach(f=>{ if(f.estacion_real===SUP_MARK) return; if(!esRealInf(f.fecha)) return; if(!est[f.estacion_real])est[f.estacion_real]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; if(!f.ausente){est[f.estacion_real].realD.add(f.fecha); const ch=costoHora(f.persona_real, f.fecha); est[f.estacion_real].costo+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); est[f.estacion_real].hsExtra+=(Number(f.horas_extra)||0); (f.modulos_real||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[f.estacion_real].modsReal.add(m));} });
 
       const fmt=(n)=>'$'+Math.round(n).toLocaleString("es-AR");
       const fdate=(d)=>d?dmy(d):"—";
 
       h+='<div id="informe-print">';
       h+='<div style="border:1px solid #E6E4DC;border-radius:14px;padding:20px;background:#fff">';
-      h+='<div style="font-size:20px;font-weight:700">Informe de cierre</div><div style="font-size:15px;color:#185FA5;font-weight:600;margin-bottom:2px">'+pr.nombre+(pr.codigo?' · '+pr.codigo:'')+'</div><div style="font-size:12px;color:#A8A69E;margin-bottom:16px">Estado: '+(pr.estado||'Vigente')+(pr.cant_modulos?' · '+pr.cant_modulos+' módulos':'')+'</div>';
+      h+='<div style="font-size:20px;font-weight:700">Informe de cierre</div><div style="font-size:15px;color:#185FA5;font-weight:600;margin-bottom:2px">'+pr.nombre+(pr.codigo?' · '+pr.codigo:'')+'</div><div style="font-size:12px;color:#A8A69E;margin-bottom:6px">Estado: '+(pr.estado||'Vigente')+(pr.cant_modulos?' · '+pr.cant_modulos+' módulos':'')+'</div>';
+      h+='<div style="font-size:11px;color:'+(cerradoInf?'#3B6D11':'#BA7517')+';background:'+(cerradoInf?'#F1F8EC':'#FCF4E6')+';border-radius:8px;padding:7px 10px;margin-bottom:16px;line-height:1.5">'
+        + (cerradoInf
+            ? '<b>Proyecto cerrado:</b> el informe cuenta todo el detalle registrado, sin recorte de fecha.'
+            : '<b>Proyecto en curso:</b> el “real” cuenta solo lo ejecutado hasta ayer. Los días de hoy en adelante son plan pendiente y no se computan como real todavía. Al cerrar el proyecto se contará todo.')
+        + '</div>';
 
       if(det.length===0){ h+='<div class="estado err" style="margin:0">Este proyecto no tiene detalle diario registrado todavía. El informe necesita datos reales cargados para comparar.</div></div></div>'; contenido.innerHTML=h; return; }
 
       // resumen general
+      if(cerradoInf){
+        h+='<div style="background:#F1F8EC;border:1px solid #3B6D1133;border-left:4px solid #3B6D11;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#3B6D11"><b>Proyecto cerrado.</b> El informe cuenta todo el detalle registrado (ya no hay días futuros pendientes).</div>';
+      } else {
+        h+='<div style="background:#FCF4E6;border:1px solid #BA751733;border-left:4px solid #BA7517;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#BA7517"><b>Proyecto en curso.</b> Todo lo real cuenta solo hasta ayer; el día en curso y los días futuros todavía son plan. Cuando cierres el proyecto, el informe pasará a contar el total.</div>';
+      }
       h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px">';
       const kpi=(l,v,s,col)=>'<div style="flex:1;min-width:140px;background:#F9F8F4;border-radius:12px;padding:12px 14px"><div style="font-size:11.5px;color:#888780">'+l+'</div><div style="font-size:19px;font-weight:600;color:'+(col||'#2C2C2A')+';margin-top:2px">'+v+'</div>'+(s?'<div style="font-size:11px;color:#A8A69E;margin-top:1px">'+s+'</div>':'')+'</div>';
       h+=kpi("Costo real",fmt(real),"jornales + extra");
@@ -2257,6 +2405,13 @@
       h+=kpi("Desvío de costo",(desvCosto>=0?"+":"")+fmt(desvCosto),presup?(desvPct>=0?"+":"")+desvPct.toFixed(0)+"%":null,desvCosto>0?'#A32D2D':'#3B6D11');
       h+=kpi("Desvío de tiempo",(desvDias>=0?"+":"")+desvDias+" días",planDur+" plan / "+realDur+" real",desvDias>0?'#A32D2D':desvDias<0?'#3B6D11':'#888780');
       h+='</div>';
+      h+='<details style="margin:-8px 0 18px"><summary style="font-size:11.5px;color:#185FA5;cursor:pointer">Cómo se calculan estos indicadores</summary><div style="font-size:11px;color:#888780;line-height:1.6;background:#FAFAF8;border:1px solid #EEECE4;border-radius:8px;padding:10px 12px;margin-top:6px">'
+        + '<b>Costo real:</b> suma de (horas normales × valor-hora del mes) + (horas extra × valor-hora × 1,5 lun-sáb ó × 2 dom/feriado) de todas las jornadas reales del proyecto.<br>'
+        + '<b>Presupuesto MO:</b> presupuesto de mano de obra cargado en el proyecto (La Huella + Montaje).<br>'
+        + '<b>Desvío de costo:</b> costo real − presupuesto. Positivo = te pasaste; negativo = por debajo.<br>'
+        + '<b>Desvío de tiempo:</b> días hábiles reales trabajados − días hábiles planificados. Cuidado: cuenta cantidad de días distintos, no fechas. El “corrimiento de fecha de fin” de la tabla de abajo mide otra cosa: si terminó antes o después de la fecha prevista.<br>'
+        + '<b>Recorte:</b> mientras el proyecto está en curso, todo lo anterior cuenta solo hasta ayer; al cerrarlo, cuenta todo.'
+        + '</div></details>';
 
       // --- VEREDICTO: síntesis en prosa del resultado de mano de obra ---
       (function(){
@@ -2312,6 +2467,9 @@
       h+='</tbody></table>';
       h+='<div style="font-size:11px;color:#A8A69E;margin:-10px 0 18px">El <b>Desvío</b> compara la cantidad de días hábiles trabajados vs planificados. El <b>corrimiento de fecha de fin</b> es solo informativo: mide si el proyecto terminó antes o después de la fecha planificada de cierre (fin real vs fin planificado, en días hábiles), sin importar cuántos días se trabajó en el medio.</div>';
 
+      // --- LÍNEA BASE: cuánto cambió el plan vigente respecto del plan original ---
+      h+=bloqueBaseVsPlan(proySel);
+
       // costos
       h+='<div style="font-size:14px;font-weight:600;margin-bottom:8px">💰 Costos</div>';
       h+='<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:8px"><tbody>';
@@ -2335,7 +2493,7 @@
       estArr.forEach(([k,v])=>{ const dp=v.planD.size, dr=v.realD.size, dv=dr-dp; const mP=[...v.modsPlan].join(", ")||"—"; const mR=[...v.modsReal].join(", ")||"—"; h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px"><span style="background:'+estBg(k)+';color:'+estColor(k)+';padding:2px 7px;border-radius:6px">'+nombreEstacion(k)+'</span></td><td style="text-align:center">'+dp+'</td><td style="text-align:center">'+dr+'</td><td style="text-align:center;color:'+(dv>0?'#A32D2D':dv<0?'#3B6D11':'#888780')+'">'+(dv>=0?"+":"")+dv+'</td><td style="text-align:right">'+fmt(v.costo)+'</td><td style="text-align:center;color:'+(v.hsExtra>0?'#BA7517':'#A8A69E')+'">'+(v.hsExtra||0)+'h</td><td style="padding:7px 10px;font-size:11.5px;color:#5F5E5A">'+mP+'</td><td style="padding:7px 10px;font-size:11.5px;color:#5F5E5A">'+mR+'</td></tr>'; });
       // Supervisión: se reporta aparte (rol paralelo). Su costo está en el total pero no en las estaciones.
       let costoSup=0, diasSupSet=new Set();
-      det.forEach(f=>{ if(f.estacion_real===SUP_MARK && !f.ausente){ const ch=costoHora(f.persona_real, f.fecha); costoSup+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); diasSupSet.add(f.fecha); } });
+      det.forEach(f=>{ if(f.estacion_real===SUP_MARK && !f.ausente && esRealInf(f.fecha)){ const ch=costoHora(f.persona_real, f.fecha); costoSup+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); diasSupSet.add(f.fecha); } });
       if(costoSup>0){ h+='<tr style="border-top:1px solid #F1EFE8;background:'+SUP_BG+'33"><td style="padding:7px 10px"><span style="background:'+SUP_BG+';color:'+SUP_COLOR+';padding:2px 7px;border-radius:6px">'+SUP_LABEL+'</span> <span style="font-size:10.5px;color:#A8A69E">(rol paralelo)</span></td><td style="text-align:center">—</td><td style="text-align:center">'+diasSupSet.size+'</td><td style="text-align:center;color:#888780">—</td><td style="text-align:right">'+fmt(costoSup)+'</td><td style="text-align:center;color:#A8A69E">—</td><td style="padding:7px 10px;font-size:11.5px;color:#A8A69E">—</td><td style="padding:7px 10px;font-size:11.5px;color:#A8A69E">—</td></tr>'; }
       h+='</tbody></table></div>';
       h+='<div style="font-size:11px;color:#A8A69E;margin-top:6px">La Supervisión es un rol paralelo, no una estación: su costo se incluye en el total del proyecto pero no genera desvío de plazo de estación. Las fechas y módulos del desglose salen del detalle diario, no del plan.</div>';
@@ -2421,10 +2579,12 @@
     }
     async function cerrarSesion() { await sb.auth.signOut(); document.getElementById("app").style.display = "none"; document.getElementById("login").style.display = "flex"; }
     let miPerfil = { rol: "coordinador", ve_sueldos: false };
+    let miEmail = null;
     async function mostrarApp(user) {
       document.getElementById("login").style.display = "none";
       document.getElementById("app").style.display = "block";
       document.getElementById("userEmail").textContent = user.email;
+      miEmail = user.email;
       // leer perfil (rol y permisos)
       const { data: perf } = await sb.from("perfiles").select("*").eq("id", user.id).maybeSingle();
       miPerfil = perf || { rol: "coordinador", ve_sueldos: false };
