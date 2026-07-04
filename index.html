@@ -2456,6 +2456,9 @@
     }
     function setVista(v){ vistaDash=v; renderDash(); }
     function setDashProy(v){ dashProy=v; renderDash(); }
+    let ganttProy = "", histoProy = "";
+    function setGanttProy(v){ ganttProy=v; renderGantt(); }
+    function setHistoProy(v){ histoProy=v; renderHisto(); }
 
     /* ---- GANTT ---- */
     function renderGantt() {
@@ -2465,27 +2468,34 @@
       const porEst = {}; // estKey -> { planByDay:{fecha:Set(proyId)}, realByDay:{fecha:Set(proyId)} }
       const ensure = (k)=>{ if(!porEst[k]) porEst[k]={planByDay:{}, realByDay:{}}; return porEst[k]; };
       const proyOperG = new Set(proyectosOperativos().map(p=>p.id));
+      const pasaProyG = (pid)=> proyOperG.has(pid) && (!ganttProy || pid===ganttProy);
       plani.forEach(b=>{
         if(b.estacion===SUP_MARK || !STATIONS[b.estacion]) return;
-        if(!proyOperG.has(b.proyecto_id)) return;
+        if(!pasaProyG(b.proyecto_id)) return;
         const e=ensure(b.estacion);
         diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ (e.planByDay[d]=e.planByDay[d]||new Set()).add(b.proyecto_id); });
       });
       detalle.forEach(f=>{
         if(f.ausente) return; if(f.estacion_real===SUP_MARK || !STATIONS[f.estacion_real]) return;
-        if(!proyOperG.has(f.proyecto_id)) return;
+        if(!pasaProyG(f.proyecto_id)) return;
+        // El "real" solo cuenta días ya ejecutados (hasta ayer). El día en curso y el futuro
+        // todavía son plan, aunque el detalle ya tenga filas autogeneradas.
+        if(!esFechaReal(f.fecha)) return;
         const e=ensure(f.estacion_real);
         (e.realByDay[f.fecha]=e.realByDay[f.fecha]||new Set()).add(f.proyecto_id);
       });
       // rango de fechas total (plan + real)
       const todas=[]; Object.values(porEst).forEach(e=>{ Object.keys(e.planByDay).forEach(d=>todas.push(d)); Object.keys(e.realByDay).forEach(d=>todas.push(d)); });
       const fechas=[...new Set(todas)].sort();
-      if(!fechas.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">Las estaciones no tienen fechas cargadas.</p>'; return; }
+      const filtroGanttHTML = '<div class="no-print" style="margin-bottom:12px"><label style="font-size:12px;color:#888780">Proyecto <select onchange="setGanttProy(this.value)" style="width:auto"><option value="">Todos</option>'+proyectosOperativos().map(p=>'<option value="'+p.id+'" '+(p.id===ganttProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label></div>';
+      if(!fechas.length){ contenido.innerHTML=filtroGanttHTML+'<p style="font-size:13px;color:#888780">'+(ganttProy?'Este proyecto no tiene estaciones con fechas cargadas.':'Las estaciones no tienen fechas cargadas.')+'</p>'; return; }
       // orden de estaciones: el orden canónico de STKEYS, solo las que tienen datos
       const estaciones = STKEYS.filter(k=>porEst[k]);
       const proyAbbr=(pid)=>{ const p=proyectos.find(x=>x.id===pid); if(!p) return "?"; return (p.codigo||p.nombre||"?").toString().slice(0,10); };
       const proyTitle=(set)=>[...set].map(nombreProy).join(", ");
-      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0"><span style="display:inline-block;width:14px;height:11px;background:#AEB6C2;border:1px solid #8C95A3;border-radius:2px;vertical-align:middle"></span> planificado &nbsp; <span style="display:inline-block;width:14px;height:11px;background:#185FA5;border-radius:2px;vertical-align:middle"></span> real (días trabajados del detalle). Cada barra muestra el código del proyecto.</p>'+botonesExport("gantt-print","gantt")+'</div><div id="gantt-print"><div style="overflow-x:auto"><table style="min-width:'+(200+fechas.length*58)+'px;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8;z-index:6">Estación</th>';
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0"><span style="display:inline-block;width:14px;height:11px;background:#AEB6C2;border:1px solid #8C95A3;border-radius:2px;vertical-align:middle"></span> planificado &nbsp; <span style="display:inline-block;width:14px;height:11px;background:#185FA5;border-radius:2px;vertical-align:middle"></span> real (días trabajados hasta ayer). Cada barra muestra el código del proyecto.</p><div style="display:flex;gap:8px;align-items:center">'
+        + '<label style="font-size:12px;color:#888780">Proyecto <select onchange="setGanttProy(this.value)" style="width:auto"><option value="">Todos</option>'+proyectosOperativos().map(p=>'<option value="'+p.id+'" '+(p.id===ganttProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>'
+        + botonesExport("gantt-print","gantt")+'</div></div><div id="gantt-print"><div style="overflow-x:auto"><table style="min-width:'+(200+fechas.length*58)+'px;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8;z-index:6">Estación</th>';
       fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:56px">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
       estaciones.forEach(k=>{
@@ -2508,12 +2518,13 @@
     function renderHisto() {
       if(!detalle.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">No hay detalle generado.</p>'; return; }
       const proyOperH = new Set(proyectosOperativos().map(p=>p.id));
-      const detHisto = detalle.filter(f=>proyOperH.has(f.proyecto_id));
-      if(!detHisto.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">No hay detalle de proyectos en operación (las cotizaciones y archivados no se muestran acá).</p>'; return; }
+      const detHisto = detalle.filter(f=>proyOperH.has(f.proyecto_id) && (!histoProy || f.proyecto_id===histoProy));
+      const filtroHistoHTML = '<label style="font-size:12px;color:#888780">Proyecto <select onchange="setHistoProy(this.value)" style="width:auto"><option value="">Todos</option>'+proyectosOperativos().map(p=>'<option value="'+p.id+'" '+(p.id===histoProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
+      if(!detHisto.length){ contenido.innerHTML='<div class="no-print" style="margin-bottom:12px">'+filtroHistoHTML+'</div><p style="font-size:13px;color:#888780">'+(histoProy?'Este proyecto no tiene detalle cargado.':'No hay detalle de proyectos en operación (las cotizaciones y archivados no se muestran acá).')+'</p>'; return; }
       const fechas=[...new Set(detHisto.map(f=>f.fecha))].sort();
       const pers=[...new Set(detHisto.map(f=>f.persona_real))];
       const cell={}; detHisto.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?"__aus":f.estacion_real; });
-      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por estación.</p>'+botonesExport("histo-print","histograma")+'</div><div id="histo-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por estación.</p><div style="display:flex;gap:8px;align-items:center">'+filtroHistoHTML+botonesExport("histo-print","histograma")+'</div></div><div id="histo-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
       fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:50px">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
       pers.forEach(pid=>{ h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+nombrePersona(pid)+'</td>';
