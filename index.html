@@ -2692,6 +2692,25 @@
       // Si no hay línea base fijada, estCostoPlan se cae al plan vigente (mismo criterio que el resto del informe).
       let planCostoH=0, planCostoM=0;
       Object.keys(estCostoPlan).forEach(k=>{ if(esMontaje(k)) planCostoM+=estCostoPlan[k]; else planCostoH+=estCostoPlan[k]; });
+      // Supervisión en el PLAN: el supervisor trabaja en paralelo (no es estación) pero SÍ tiene costo,
+      // igual que el costo real lo cuenta. Va al bucket La Huella (el supervisor no tiene estación Montaje).
+      // Las horas se toman de la base si están congeladas; el rango de días se toma de la supervisión
+      // vigente del proyecto (la base no congela fechas de supervisión). Aproximación estable y simétrica con el real.
+      (function(){
+        const supVig = supervisiones.filter(s=> String(s.proyectos||"").split(",").map(x=>x.trim()).includes(proySel));
+        // horas planificadas por supervisor según la base (si existe), si no, la vigente
+        const horasBase = {};
+        if(usandoBase && baseInf && baseInf.contenido && Array.isArray(baseInf.contenido.supervisiones)){
+          baseInf.contenido.supervisiones.forEach(s=>{ horasBase[s.supervisor_id]=(s.horas!=null?s.horas:8); });
+        }
+        supVig.forEach(s=>{
+          const nd = diasHabiles(s.fecha_desde, s.fecha_hasta).length;
+          if(!nd) return;
+          const hrs = (horasBase[s.supervisor_id]!=null) ? horasBase[s.supervisor_id] : (s.horas!=null?s.horas:8);
+          const ch = costoHora(s.supervisor_id, s.fecha_desde || hoyISO());
+          planCostoH += hrs*ch*nd;
+        });
+      })();
       const planCosto = planCostoH + planCostoM;
       const hayPlanCosto = planCosto > 0;
       // Desvíos del PLAN (costo planificado línea base) contra presupuesto y contra real.
@@ -2726,7 +2745,7 @@
       h+='</div>';
       h+='<details style="margin:-8px 0 18px"><summary style="font-size:11.5px;color:#185FA5;cursor:pointer">Cómo se calculan estos indicadores</summary><div style="font-size:11px;color:#888780;line-height:1.6;background:#FAFAF8;border:1px solid #EEECE4;border-radius:8px;padding:10px 12px;margin-top:6px">'
         + '<b>Costo real:</b> suma de (horas normales × valor-hora del mes) + (horas extra × valor-hora × 1,5 lun-sáb ó × 2 dom/feriado) de todas las jornadas reales del proyecto.<br>'
-        + '<b>Costo planificado:</b> costo de la planificación de la <b>línea base</b> (horas planificadas × valor-hora), sin recorte de fecha. Es lo que el plan proyectaba gastar. Si no hay línea base fijada, se toma el plan vigente.<br>'
+        + '<b>Costo planificado:</b> costo de la planificación de la <b>línea base</b> (horas planificadas × valor-hora), sin recorte de fecha. Incluye la <b>supervisión de proyecto</b>, igual que el costo real. Es lo que el plan proyectaba gastar. Si no hay línea base fijada, se toma el plan vigente.<br>'
         + '<b>Presupuesto MO:</b> presupuesto de mano de obra cargado en el proyecto (La Huella + Montaje).<br>'
         + '<b>Desvío de costo:</b> costo real − presupuesto. Positivo = te pasaste; negativo = por debajo.<br>'
         + '<b>Plan vs presupuesto:</b> costo planificado − presupuesto. Positivo = ya el plan proyectaba más que el presupuesto.<br>'
