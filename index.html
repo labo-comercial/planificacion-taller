@@ -1921,8 +1921,11 @@
       const hoy = fechaStr(new Date());
       // horas por persona/día para detectar sobreasignación.
       // Las filas de supervisión corren en paralelo: no se suman con el trabajo en estación.
+      // Solo cuentan proyectos operativos y abiertos: cotizaciones, archivados y cerrados
+      // no generan advertencia de sobreasignación (no consumen recursos reales).
+      const proyOperAbierto = new Set(proyectosOperativos().filter(p=>p.estado!=="Cerrado").map(p=>p.id));
       const horasDia = {};
-      detalle.forEach(f => { if (f.ausente) return; if (f.estacion_real === SUP_MARK) return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
+      detalle.forEach(f => { if (f.ausente) return; if (f.estacion_real === SUP_MARK) return; if (!proyOperAbierto.has(f.proyecto_id)) return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
       const exceso = (f) => !f.ausente && f.estacion_real !== SUP_MARK && horasDia[f.persona_real + "|" + f.fecha] > 8;
       const opcPersona = (sel) => personasHuella().map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
       const opcEst = (sel) => STKEYS.map(k => '<option value="'+k+'" '+(k===sel?'selected':'')+'>'+STATIONS[k].label+'</option>').join('');
@@ -2683,6 +2686,24 @@
       }
       det.forEach(f=>{ if(f.estacion_real===SUP_MARK || f.ausente) return; if(!esRealInf(f.fecha)) return; const r=estFechasReal[f.estacion_real]||(estFechasReal[f.estacion_real]={ini:null,fin:null}); if(!r.ini||f.fecha<r.ini) r.ini=f.fecha; if(!r.fin||f.fecha>r.fin) r.fin=f.fecha; });
 
+      // --- COSTO PLANIFICADO (línea base): total y desdoblado Huella / Montaje ---
+      // Se arma sumando estCostoPlan (costo del plan por estación, valorizado por costo/hora).
+      // Montaje va contra el presupuesto de Montaje; el resto contra el de La Huella.
+      // Si no hay línea base fijada, estCostoPlan se cae al plan vigente (mismo criterio que el resto del informe).
+      let planCostoH=0, planCostoM=0;
+      Object.keys(estCostoPlan).forEach(k=>{ if(esMontaje(k)) planCostoM+=estCostoPlan[k]; else planCostoH+=estCostoPlan[k]; });
+      const planCosto = planCostoH + planCostoM;
+      const hayPlanCosto = planCosto > 0;
+      // Desvíos del PLAN (costo planificado línea base) contra presupuesto y contra real.
+      // Plan vs Presupuesto: >0 = el plan ya proyectaba más gasto que el presupuesto.
+      // Plan vs Real: >0 = se ejecutó más caro que lo planificado (sobreejecución).
+      const desvPlanPres = planCosto - presup, desvPlanPresPct = presup?(desvPlanPres/presup*100):0;
+      const desvRealPlan = real - planCosto, desvRealPlanPct = planCosto?(desvRealPlan/planCosto*100):0;
+      const desvPlanPresH = planCostoH - presupH, desvPlanPresM = planCostoM - presupM;
+      const desvRealPlanH = realH - planCostoH, desvRealPlanM = realM - planCostoM;
+      const pctPlanPresH = presupH?(desvPlanPresH/presupH*100):0, pctPlanPresM = presupM?(desvPlanPresM/presupM*100):0;
+      const pctRealPlanH = planCostoH?(desvRealPlanH/planCostoH*100):0, pctRealPlanM = planCostoM?(desvRealPlanM/planCostoM*100):0;
+
       h+='<div id="informe-print">';
       h+='<div style="border:1px solid #E6E4DC;border-radius:14px;padding:20px;background:#fff">';
       h+='<div style="font-size:20px;font-weight:700">Informe de cierre</div><div style="font-size:15px;color:#185FA5;font-weight:600;margin-bottom:2px">'+pr.nombre+(pr.codigo?' · '+pr.codigo:'')+'</div><div style="font-size:12px;color:#A8A69E;margin-bottom:6px">Estado: '+(pr.estado||'Vigente')+(pr.cant_modulos?' · '+pr.cant_modulos+' módulos':'')+'</div>';
@@ -2698,14 +2719,18 @@
       h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px">';
       const kpi=(l,v,s,col)=>'<div style="flex:1;min-width:140px;background:#F9F8F4;border-radius:12px;padding:12px 14px"><div style="font-size:11.5px;color:#888780">'+l+'</div><div style="font-size:19px;font-weight:600;color:'+(col||'#2C2C2A')+';margin-top:2px">'+v+'</div>'+(s?'<div style="font-size:11px;color:#A8A69E;margin-top:1px">'+s+'</div>':'')+'</div>';
       h+=kpi("Costo real",fmt(real),"jornales + extra");
+      h+=kpi("Costo planificado",hayPlanCosto?fmt(planCosto):"s/dato",usandoBase?"línea base":"plan vigente");
       h+=kpi("Presupuesto MO",presup?fmt(presup):"s/dato",null);
       h+=kpi("Desvío de costo",(desvCosto>=0?"+":"")+fmt(desvCosto),presup?(desvPct>=0?"+":"")+desvPct.toFixed(0)+"%":null,desvCosto>0?'#A32D2D':'#3B6D11');
       h+=kpi("Desvío de tiempo",midiendoReal?((desvDias>=0?"+":"")+desvDias+" días"):"—",midiendoReal?(planDur+" plan / "+realDur+" real"):"sin arrancar",desvDias>0?'#A32D2D':desvDias<0?'#3B6D11':'#888780');
       h+='</div>';
       h+='<details style="margin:-8px 0 18px"><summary style="font-size:11.5px;color:#185FA5;cursor:pointer">Cómo se calculan estos indicadores</summary><div style="font-size:11px;color:#888780;line-height:1.6;background:#FAFAF8;border:1px solid #EEECE4;border-radius:8px;padding:10px 12px;margin-top:6px">'
         + '<b>Costo real:</b> suma de (horas normales × valor-hora del mes) + (horas extra × valor-hora × 1,5 lun-sáb ó × 2 dom/feriado) de todas las jornadas reales del proyecto.<br>'
+        + '<b>Costo planificado:</b> costo de la planificación de la <b>línea base</b> (horas planificadas × valor-hora), sin recorte de fecha. Es lo que el plan proyectaba gastar. Si no hay línea base fijada, se toma el plan vigente.<br>'
         + '<b>Presupuesto MO:</b> presupuesto de mano de obra cargado en el proyecto (La Huella + Montaje).<br>'
         + '<b>Desvío de costo:</b> costo real − presupuesto. Positivo = te pasaste; negativo = por debajo.<br>'
+        + '<b>Plan vs presupuesto:</b> costo planificado − presupuesto. Positivo = ya el plan proyectaba más que el presupuesto.<br>'
+        + '<b>Real vs plan:</b> costo real − costo planificado. Positivo = se ejecutó más caro que lo planificado.<br>'
         + '<b>Desvío de tiempo:</b> días hábiles reales trabajados − días hábiles planificados. Cuidado: cuenta cantidad de días distintos, no fechas. El “corrimiento de fecha de fin” de la tabla de abajo mide otra cosa: si terminó antes o después de la fecha prevista.<br>'
         + '<b>Recorte:</b> mientras el proyecto está en curso, todo lo anterior cuenta solo hasta ayer; al cerrarlo, cuenta todo.'
         + '</div></details>';
@@ -2786,13 +2811,39 @@
       h+='<tr style="border-top:1px solid #F1EFE8;font-weight:600"><td style="padding:7px 10px">Costo real total</td><td style="text-align:right;padding:7px 10px">'+fmt(real)+'</td></tr>';
       h+='</tbody></table>';
 
-      // desglose de presupuesto por destino (La Huella vs Montaje)
-      h+='<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:8px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:7px 10px">Presupuesto</th><th style="text-align:right;padding:7px 10px">Presupuesto MO</th><th style="text-align:right;padding:7px 10px">Costo real</th><th style="text-align:right;padding:7px 10px">Desvío</th></tr></thead><tbody>';
-      const filaPres=(lbl,pb,rc,dv,pct)=>'<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px">'+lbl+'</td><td style="text-align:right;padding:7px 10px">'+(pb?fmt(pb):"s/dato")+'</td><td style="text-align:right;padding:7px 10px">'+fmt(rc)+'</td><td style="text-align:right;padding:7px 10px;color:'+(dv>0?'#A32D2D':'#3B6D11')+'">'+(dv>=0?"+":"")+fmt(dv)+(pb?' ('+(pct>=0?"+":"")+pct.toFixed(0)+'%)':'')+'</td></tr>';
-      h+=filaPres("La Huella (todas las estaciones menos Montaje)",presupH,realH,desvH,pctH);
-      h+=filaPres("Montaje (estación Montaje)",presupM,realM,desvM,pctM);
-      h+='<tr style="border-top:1px solid #F1EFE8;background:'+(desvCosto>0?'#FCEBEB':'#F1F8EC')+';font-weight:600"><td style="padding:7px 10px">Total</td><td style="text-align:right;padding:7px 10px">'+(presup?fmt(presup):"s/dato")+'</td><td style="text-align:right;padding:7px 10px">'+fmt(real)+'</td><td style="text-align:right;padding:7px 10px;color:'+(desvCosto>0?'#A32D2D':'#3B6D11')+'">'+(desvCosto>=0?"+":"")+fmt(desvCosto)+(presup?' ('+(desvPct>=0?"+":"")+desvPct.toFixed(0)+'%)':'')+'</td></tr>';
-      h+='</tbody></table>';
+      // desglose por destino (La Huella vs Montaje): plan, presupuesto, real y los tres desvíos
+      const dvCell=(dv,base)=>'<td style="text-align:right;padding:7px 10px;color:'+(dv>0.5?'#A32D2D':dv<-0.5?'#3B6D11':'#8A8880')+'">'+(base?((dv>=0?"+":"")+fmt(dv)):"s/dato")+'</td>';
+      const dvPctCell=(dv,pct,base)=>'<td style="text-align:right;padding:7px 10px;color:'+(dv>0.5?'#A32D2D':dv<-0.5?'#3B6D11':'#8A8880')+'">'+(base?((dv>=0?"+":"")+fmt(dv)+' ('+(pct>=0?"+":"")+pct.toFixed(0)+'%)'):"s/dato")+'</td>';
+      h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:6px;min-width:640px"><thead><tr style="background:#F1EFE8">'
+        + '<th style="text-align:left;padding:7px 10px">Destino</th>'
+        + '<th style="text-align:right;padding:7px 10px">Costo planificado</th>'
+        + '<th style="text-align:right;padding:7px 10px">Presupuesto MO</th>'
+        + '<th style="text-align:right;padding:7px 10px">Costo real</th>'
+        + '<th style="text-align:right;padding:7px 10px">Plan vs Ppto</th>'
+        + '<th style="text-align:right;padding:7px 10px">Real vs Plan</th>'
+        + '<th style="text-align:right;padding:7px 10px">Real vs Ppto</th></tr></thead><tbody>';
+      const filaPres=(lbl,pc,pb,rc,dPP,pPP,dRP,pRP,dRPr,pRPr)=>'<tr style="border-top:1px solid #F1EFE8">'
+        + '<td style="padding:7px 10px">'+lbl+'</td>'
+        + '<td style="text-align:right;padding:7px 10px">'+(pc?fmt(pc):"s/dato")+'</td>'
+        + '<td style="text-align:right;padding:7px 10px">'+(pb?fmt(pb):"s/dato")+'</td>'
+        + '<td style="text-align:right;padding:7px 10px">'+fmt(rc)+'</td>'
+        + dvPctCell(dPP,pPP,pb)
+        + dvPctCell(dRP,pRP,pc)
+        + dvPctCell(dRPr,pRPr,pb)
+        + '</tr>';
+      h+=filaPres("La Huella (todas las estaciones menos Montaje)",planCostoH,presupH,realH,desvPlanPresH,pctPlanPresH,desvRealPlanH,pctRealPlanH,desvH,pctH);
+      h+=filaPres("Montaje (estación Montaje)",planCostoM,presupM,realM,desvPlanPresM,pctPlanPresM,desvRealPlanM,pctRealPlanM,desvM,pctM);
+      h+='<tr style="border-top:2px solid #E0DDD2;background:'+(desvCosto>0?'#FCEBEB':'#F1F8EC')+';font-weight:600">'
+        + '<td style="padding:7px 10px">Total</td>'
+        + '<td style="text-align:right;padding:7px 10px">'+(hayPlanCosto?fmt(planCosto):"s/dato")+'</td>'
+        + '<td style="text-align:right;padding:7px 10px">'+(presup?fmt(presup):"s/dato")+'</td>'
+        + '<td style="text-align:right;padding:7px 10px">'+fmt(real)+'</td>'
+        + dvPctCell(desvPlanPres,desvPlanPresPct,presup)
+        + dvPctCell(desvRealPlan,desvRealPlanPct,hayPlanCosto)
+        + dvPctCell(desvCosto,desvPct,presup)
+        + '</tr>';
+      h+='</tbody></table></div>';
+      h+='<div style="font-size:10.5px;color:#A8A69E;margin:2px 0 8px;line-height:1.6"><b>Plan vs Ppto</b> = costo planificado − presupuesto (si el plan ya proyectaba pasarse). <b>Real vs Plan</b> = costo real − costo planificado (cuánto se desvió la ejecución del plan). <b>Real vs Ppto</b> = costo real − presupuesto (el desvío final). Verde = por debajo, rojo = por encima.'+(hayPlanCosto?'':' <b style="color:#BA7517">Sin costo planificado:</b> este proyecto no tiene línea base fijada ni plan vigente valorizable, así que las columnas con el plan quedan sin dato.')+'</div>';
 
       // ====== GRÁFICOS: costo plan vs real por estación + timeline de fechas ======
       (function(){
