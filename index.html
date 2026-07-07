@@ -2070,11 +2070,20 @@
         const pasado = f.fecha < hoy;
         const norm = (x) => (x==null ? "" : String(x));
         const reasig = (norm(f.estacion_real) !== norm(f.estacion_plan)) || (norm(f.persona_real) !== norm(f.persona_plan)) || !!f.ausente;
+        // El motivo se pide solo cuando hay reasignación de estación o persona, NO por ausencia sola.
+        // (La ausencia igual se mide como desvío de "edición"; simplemente no exige justificación manual.)
+        const pideMotivo = (norm(f.estacion_real) !== norm(f.estacion_plan)) || (norm(f.persona_real) !== norm(f.persona_plan));
         const bg = f.es_extra ? 'background:#FAEEDA;box-shadow:inset 3px 0 0 #BA7517' : f.ausente ? 'background:#FCEBEB' : reasig ? 'background:#FBFAF5' : '';
         const dis = pasado ? 'disabled' : '';
         const tagExtra = f.es_extra ? ' <span style="background:#BA7517;color:#fff;font-size:9px;padding:1px 5px;border-radius:5px;vertical-align:middle;font-weight:600">EXTRA</span>' : '';
+        // Botón "sigue mañana": solo en filas de HOY, de estación real, no ausentes, no día extra.
+        const esHoy = (f.fecha === hoy);
+        const puedeSeguir = esHoy && !f.ausente && !f.es_extra && f.estacion_real!==SUP_MARK;
+        const btnSigue = puedeSeguir
+          ? ' <button class="btn" title="Esta tarea no se terminó hoy: crear una jornada para mañana sin tocar la planificación" style="background:#fff;border:1px solid #BA7517;color:#BA7517;padding:2px 7px;font-size:10.5px;border-radius:6px;margin-left:4px" onclick="seguirManana(\''+f.id+'\')">↪ sigue mañana</button>'
+          : '';
         h += '<tr style="'+bg+'">'
-          + '<td style="white-space:nowrap;color:#888780">'+dm(f.fecha)+(pasado?' 🔒':'')+tagExtra+'</td>'
+          + '<td style="white-space:nowrap;color:#888780">'+dm(f.fecha)+(pasado?' 🔒':'')+tagExtra+btnSigue+'</td>'
           + '<td><select '+dis+' onchange="cambiarProyDet(\''+f.id+'\',this.value)" style="min-width:130px">'+opcProy(f.proyecto_id)+'</select></td>'
           + '<td><select '+dis+' onchange="editarDet(\''+f.id+'\',\'persona_real\',this.value)">'+opcPersona(f.persona_real)+'</select></td>'
           + '<td>'+(f.ausente?'<span style="color:#A32D2D;font-size:11.5px">— ausente —</span>':(f.estacion_real===SUP_MARK?'<span style="background:'+SUP_BG+';color:'+SUP_COLOR+';padding:2px 8px;border-radius:6px;font-size:11.5px">'+SUP_LABEL+'</span>':'<select '+dis+' onchange="cambiarEstDet(\''+f.id+'\',this.value)" style="'+(f.estacion_real!==f.estacion_plan?'border-color:#BA7517;background:#FAEEDA':'')+'">'+opcEst(f.estacion_real)+'</select>'))+'</td>'
@@ -2084,12 +2093,12 @@
           + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_normales||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_normales\',Number(this.value))" style="width:42px;text-align:center;'+(exceso(f)?'border-color:#A32D2D;background:#FCEBEB;color:#A32D2D':'')+'" '+(f.ausente?'disabled':'')+'></td>'
           + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_extra||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_extra\',Number(this.value))" style="width:42px;text-align:center;'+(f.horas_extra>0?'color:#BA7517':'')+'" '+(f.ausente?'disabled':'')+'></td>'
           + (function(){ const fi=imp.porFila[f.id]; if(!fi||fi.costoTipo==="neutro") return '<td style="text-align:right"><span style="color:#D3D1C7;font-size:11px">—</span></td>'; const col=fi.costoDelta>0?'#A32D2D':'#3B6D11'; const et=fi.costoDelta>0?'sobrecosto':'ahorro'; return '<td style="text-align:right"><span style="color:'+col+';font-size:11.5px;font-weight:600" title="'+et+'">'+fmtPlata(fi.costoDelta)+'</span></td>'; })()
-          + '<td>'+(reasig?'<select '+dis+' onchange="editarDet(\''+f.id+'\',\'motivo_desvio\',this.value)" style="min-width:160px;border-color:'+(f.motivo_desvio?'#BA7517':'#A32D2D')+';'+(f.motivo_desvio?'':'background:#FCEBEB')+'">'+opcMotivo(f.motivo_desvio)+'</select>':'<span style="color:#D3D1C7;font-size:11px">—</span>')+'</td>'
+          + '<td>'+(pideMotivo?'<select '+dis+' onchange="editarDet(\''+f.id+'\',\'motivo_desvio\',this.value)" style="min-width:160px;border-color:'+(f.motivo_desvio?'#BA7517':'#A32D2D')+';'+(f.motivo_desvio?'':'background:#FCEBEB')+'">'+opcMotivo(f.motivo_desvio)+'</select>':'<span style="color:#D3D1C7;font-size:11px">—</span>')+'</td>'
           + '</tr>';
       });
       h += '</tbody></table></div><div class="row-actions"><button class="btn btn-primary" onclick="cargar()">↻ Recargar</button></div>';
 
-      h += '<p style="font-size:12px;color:#A8A69E;margin-top:10px">🔒 = día anterior a hoy (historia, no editable). Las filas con fondo crema tienen desvío (estación o persona distinta a lo planificado) y piden un motivo. Para sumar o cambiar tareas futuras, hacelo en Planificación General y regenerá el detalle.</p>';
+      h += '<p style="font-size:12px;color:#A8A69E;margin-top:10px">🔒 = día anterior a hoy (historia, no editable). Las filas con fondo crema tienen desvío (estación o persona distinta a lo planificado) y piden un motivo. <b style="color:#BA7517">↪ sigue mañana</b> (solo en filas de hoy): si una tarea no se terminó, crea una jornada para mañana sin tocar la planificación. Para cambios grandes (reasignar, redistribuir), usá Planificación General y regenerá el detalle.</p>';
       contenido.innerHTML = h;
     }
     async function cambiarProyDet(id, proyId){
@@ -2127,25 +2136,9 @@
       if(val && f && !f.es_extra){ await ofrecerCorrerDetalle(f); }
       renderDetalle();
     }
-    // Empuja un día hábil hacia adelante los días futuros de la misma persona en el mismo proyecto+estación.
-    async function ofrecerCorrerDetalle(filaAusente){
-      const hoy = hoyISO();
-      // candidatos: filas de la MISMA persona, MISMO proyecto y MISMA estación, con fecha POSTERIOR
-      // a la ausencia y de hoy en adelante (pasado congelado), no ausentes y no día extra.
-      const cand = detalle.filter(x => x.id!==filaAusente.id
-        && x.persona_real===filaAusente.persona_real
-        && x.proyecto_id===filaAusente.proyecto_id
-        && x.estacion_real===filaAusente.estacion_real
-        && !x.ausente && !x.es_extra
-        && x.fecha > filaAusente.fecha && x.fecha >= hoy)
-        .sort((a,b)=> a.fecha<b.fecha?-1:1);
-      if(!cand.length) return;
-      const msg = nombrePersona(filaAusente.persona_real)+" quedó ausente el "+dmy(filaAusente.fecha)+" en "+nombreEstacion(filaAusente.estacion_real)+".\n\n"
-        + "¿Correr sus "+cand.length+" día(s) futuro(s) de esta tarea un día hábil hacia adelante?\n\n"
-        + "(Solo días de esta persona en esta tarea, de hoy en adelante. El pasado no se toca.)";
-      if(!confirm(msg)) return;
-      // Recalcular fechas hábiles: tomar el bloque de días reales y desplazar cada uno un hábil adelante.
-      // Procesar de la última a la primera para no colisionar fechas.
+    // Corre un día hábil hacia adelante las filas dadas (de la última a la primera para no colisionar).
+    // Devuelve la cantidad efectivamente corrida.
+    async function correrFilasUnDia(cand){
       let ok=0;
       for(let i=cand.length-1;i>=0;i--){
         const x=cand[i];
@@ -2155,26 +2148,113 @@
         x.fecha = nueva; ok++;
       }
       detalle.sort((a,b)=> a.fecha<b.fecha?-1:a.fecha>b.fecha?1:0);
+      return ok;
+    }
+    // Revisa las filas futuras (de hoy en adelante) de una persona y detecta días con
+    // solapamiento: 2+ tareas el mismo día O más de 8 horas. Supervisión NO cuenta (trabaja
+    // en paralelo, sus horas no se apilan). Devuelve un texto de aviso o "" si no hay conflicto.
+    function avisoSolapamiento(personaId){
+      const hoy = hoyISO();
+      const porDia = {}; // fecha -> { tareas:Set, horas:number }
+      detalle.forEach(f=>{
+        if(f.persona_real!==personaId) return;
+        if(f.fecha < hoy) return;              // el pasado es historia, no se avisa
+        if(f.ausente) return;                  // ausente no consume el día
+        if(f.estacion_real===SUP_MARK) return; // supervisión trabaja en paralelo
+        const d = porDia[f.fecha] || (porDia[f.fecha] = { tareas:new Set(), horas:0 });
+        d.tareas.add(f.estacion_real + "|" + f.proyecto_id);
+        d.horas += (Number(f.horas_normales)||0) + (Number(f.horas_extra)||0);
+      });
+      const conflict = Object.keys(porDia).sort()
+        .filter(d => porDia[d].tareas.size >= 2 || porDia[d].horas > 8)
+        .map(d => dmy(d) + " (" + (porDia[d].tareas.size>=2 ? porDia[d].tareas.size+" tareas" : porDia[d].horas+"h") + ")");
+      if(!conflict.length) return "";
+      return "⚠ Atención: tras correr, "+nombrePersona(personaId)+" queda con superposición en:\n\n"
+        + "• " + conflict.join("\n• ")
+        + "\n\nRevisalo en el Detalle diario, o rearmá su agenda en Planificación General si el cambio es grande. (No se bloquea nada; vos decidís.)";
+    }
+    // Ofrece correr las tareas futuras de una persona a partir de una fila de referencia.
+    // Da dos alcances: solo esta tarea (misma estación+proyecto) o todas las tareas de la persona.
+    // 'motivo' es un texto descriptivo ("ausente el 12/03", "por atraso", etc.) para el diálogo.
+    async function ofrecerCorrerDetalle(filaRef, motivo){
+      const hoy = hoyISO();
+      motivo = motivo || ("quedó ausente el "+dmy(filaRef.fecha)+" en "+nombreEstacion(filaRef.estacion_real));
+      // Base común: filas futuras de la MISMA persona, de hoy en adelante, no ausentes, no día extra,
+      // posteriores a la fila de referencia.
+      const futuras = detalle.filter(x => x.id!==filaRef.id
+        && x.persona_real===filaRef.persona_real
+        && !x.ausente && !x.es_extra
+        && x.fecha > filaRef.fecha && x.fecha >= hoy);
+      const candTarea = futuras.filter(x => x.proyecto_id===filaRef.proyecto_id && x.estacion_real===filaRef.estacion_real)
+        .sort((a,b)=> a.fecha<b.fecha?-1:1);
+      const candTodo = [...futuras].sort((a,b)=> a.fecha<b.fecha?-1:1);
+      if(!candTodo.length) return; // no hay nada futuro que correr
+      // Elegir alcance. Si solo hay filas de esta misma tarea, no tiene sentido preguntar: es lo mismo.
+      let cand;
+      if(candTodo.length === candTarea.length){
+        const msg = nombrePersona(filaRef.persona_real)+" "+motivo+".\n\n"
+          + "¿Correr sus "+candTarea.length+" día(s) futuro(s) un día hábil hacia adelante?\n\n"
+          + "(De hoy en adelante. El pasado no se toca.)";
+        if(!confirm(msg)) return;
+        cand = candTarea;
+      } else {
+        // Hay más tareas futuras además de esta: ofrecer los dos alcances.
+        const msg = nombrePersona(filaRef.persona_real)+" "+motivo+".\n\n"
+          + "¿Qué querés correr un día hábil hacia adelante?\n\n"
+          + "• Aceptar = SOLO esta tarea ("+candTarea.length+" día/s en "+nombreEstacion(filaRef.estacion_real)+")\n"
+          + "• Cancelar = elegir en el próximo paso si corrés TODO\n\n"
+          + "(De hoy en adelante. El pasado no se toca.)";
+        if(confirm(msg)){
+          cand = candTarea;
+        } else {
+          const msg2 = "¿Correr TODAS las tareas futuras de "+nombrePersona(filaRef.persona_real)+"?\n\n"
+            + "Son "+candTodo.length+" día(s) en distintas estaciones/proyectos.\n\n"
+            + "(Aceptar = correr todo · Cancelar = no correr nada)";
+          if(!confirm(msg2)) return;
+          cand = candTodo;
+        }
+      }
+      if(!cand.length) return;
+      const ok = await correrFilasUnDia(cand);
       setEstado("\u2713 "+ok+" día(s) corrido(s) un día hábil hacia adelante.","ok");
+      // Aviso de solapamiento tras el corrimiento (no bloquea).
+      const aviso = avisoSolapamiento(filaRef.persona_real);
+      if(aviso) alert(aviso);
     }
 
     /* ---- DÍA EXTRA (trabajo real no planificado) ---- */
     function cerrarDiaExtra(){ const ov=document.getElementById("ovExtra"); if(ov) ov.remove(); }
-    function abrirDiaExtra(){
+    // abrirDiaExtra(pre): sin argumento = día extra manual en blanco (fecha = hoy).
+    // Con 'pre' (desde "sigue mañana") = pre-carga proyecto/persona/estación/tarea/módulos
+    // y fecha = mañana hábil. 'pre.origenFilaId' recuerda de qué fila de hoy salió.
+    function abrirDiaExtra(pre){
       cerrarDiaExtra();
+      pre = pre || null;
       const hoy = fechaStr(new Date());
-      const optProy = proyectos.map(p=>'<option value="'+p.id+'">'+p.nombre+'</option>').join('');
-      const optPers = personasHuella().map(p=>'<option value="'+p.id+'">'+p.nombre+(p.tipo==='Contratista'?' (contratista)':'')+'</option>').join('');
-      const optEst  = STKEYS.map(k=>'<option value="'+k+'">'+STATIONS[k].label+'</option>').join('');
+      const fechaDefault = pre && pre.fecha ? pre.fecha : hoy;
+      const esSeguir = !!pre;
+      const sel = (v, val) => (String(v)===String(val) ? ' selected' : '');
+      const optProy = proyectos.map(p=>'<option value="'+p.id+'"'+sel(p.id, pre&&pre.proyecto_id)+'>'+p.nombre+'</option>').join('');
+      const optPers = personasHuella().map(p=>'<option value="'+p.id+'"'+sel(p.id, pre&&pre.persona)+'>'+p.nombre+(p.tipo==='Contratista'?' (contratista)':'')+'</option>').join('');
+      const optEst  = STKEYS.map(k=>'<option value="'+k+'"'+sel(k, pre&&pre.estacion)+'>'+STATIONS[k].label+'</option>').join('');
       const ov = document.createElement("div");
       ov.id = "ovExtra";
+      ov.dataset.pre = esSeguir ? "1" : "";
+      ov.dataset.origen = (pre && pre.origenFilaId) ? pre.origenFilaId : "";
+      ov.dataset.subpre = (pre && pre.subtarea) ? pre.subtarea : "";
+      ov.dataset.modspre = (pre && pre.modulos) ? pre.modulos : "";
       ov.style.cssText = "position:fixed;inset:0;background:rgba(44,44,42,.45);display:flex;align-items:center;justify-content:center;z-index:2000;padding:16px";
+      const titulo = esSeguir ? "Esta tarea sigue mañana" : "Agregar día de trabajo no planificado";
+      const bajada = esSeguir
+        ? "La tarea no se terminó hoy. Se crea una jornada para mañana (o el día que elijas) como trabajo no planificado. <b>No toca la planificación</b>, genera sobrecosto cuando ese día cierre, y la regeneración del detalle no la borra. Lo de hoy queda registrado tal cual."
+        : "Usalo cuando un trabajo se estiró más de lo planificado. Este día se carga como real (no toca la planificación), genera <b>sobrecosto</b> y, si corre el fin del proyecto, <b>atraso</b>. La regeneración del detalle no lo borra.";
+      const btnLabel = esSeguir ? "Crear jornada de mañana" : "Agregar día extra";
       ov.innerHTML =
         '<div style="background:#fff;border-radius:16px;max-width:460px;width:100%;padding:22px;box-shadow:0 12px 40px rgba(0,0,0,.2)">'
-        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="background:#BA7517;color:#fff;font-size:10px;padding:2px 7px;border-radius:5px;font-weight:600">EXTRA</span><div style="font-size:17px;font-weight:700">Agregar día de trabajo no planificado</div></div>'
-        + '<p style="font-size:12px;color:#888780;margin:0 0 16px">Usalo cuando un trabajo se estiró más de lo planificado. Este día se carga como real (no toca la planificación), genera <b>sobrecosto</b> y, si corre el fin del proyecto, <b>atraso</b>. La regeneración del detalle no lo borra.</p>'
+        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="background:#BA7517;color:#fff;font-size:10px;padding:2px 7px;border-radius:5px;font-weight:600">EXTRA</span><div style="font-size:17px;font-weight:700">'+titulo+'</div></div>'
+        + '<p style="font-size:12px;color:#888780;margin:0 0 16px">'+bajada+'</p>'
         + '<div style="display:flex;flex-direction:column;gap:10px">'
-        + '<label style="font-size:12px;color:#5F5E5A">Fecha<input id="ex_fecha" type="date" value="'+hoy+'" style="width:100%;margin-top:3px"></label>'
+        + '<label style="font-size:12px;color:#5F5E5A">Fecha'+(esSeguir?' <span style="color:#A8A69E">(mañana hábil; cambiala si se trabaja sábado o feriado)</span>':'')+'<input id="ex_fecha" type="date" value="'+fechaDefault+'" style="width:100%;margin-top:3px"></label>'
         + '<label style="font-size:12px;color:#5F5E5A">Proyecto<select id="ex_proy" style="width:100%;margin-top:3px">'+optProy+'</select></label>'
         + '<label style="font-size:12px;color:#5F5E5A">Módulos (opcional)<div id="ex_mods" style="margin-top:4px"></div></label>'
         + '<label style="font-size:12px;color:#5F5E5A">Persona<select id="ex_pers" style="width:100%;margin-top:3px">'+optPers+'</select></label>'
@@ -2187,15 +2267,32 @@
         + '</div>'
         + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">'
         +   '<button class="btn" onclick="cerrarDiaExtra()">Cancelar</button>'
-        +   '<button class="btn btn-primary" style="background:#BA7517" onclick="guardarDiaExtra()">Agregar día extra</button>'
+        +   '<button class="btn btn-primary" style="background:#BA7517" onclick="guardarDiaExtra()">'+btnLabel+'</button>'
         + '</div></div>';
       document.body.appendChild(ov);
       ov.addEventListener("mousedown", e=>{ if(e.target===ov) cerrarDiaExtra(); });
-      const syncSub = ()=>{ const est=document.getElementById("ex_est").value; const subs=STATIONS[est]?STATIONS[est].subs:[]; document.getElementById("ex_sub").innerHTML = subs.map(s=>'<option>'+s+'</option>').join(''); };
-      const syncMods = ()=>{ const pid=document.getElementById("ex_proy").value; const mods=modulosDeProy(pid); const cont=document.getElementById("ex_mods"); if(!mods.length){ cont.innerHTML='<span style="font-size:11px;color:#A8A69E">— este proyecto no tiene módulos —</span>'; return; } cont.innerHTML='<div class="chips" style="gap:4px">'+mods.map(m=>'<button type="button" class="chip" data-mod="'+m.replace(/"/g,'&quot;')+'" onclick="this.classList.toggle(\'on\')" style="padding:3px 9px;font-size:11px">'+m+'</button>').join('')+'</div>'; };
-      document.getElementById("ex_est").addEventListener("change", syncSub);
-      document.getElementById("ex_proy").addEventListener("change", syncMods);
-      syncSub(); syncMods();
+      const syncSub = (preSub)=>{ const est=document.getElementById("ex_est").value; const subs=STATIONS[est]?STATIONS[est].subs:[]; document.getElementById("ex_sub").innerHTML = subs.map(s=>'<option'+(preSub&&s===preSub?' selected':'')+'>'+s+'</option>').join(''); };
+      const syncMods = (preMods)=>{ const pid=document.getElementById("ex_proy").value; const mods=modulosDeProy(pid); const cont=document.getElementById("ex_mods"); const pm=(preMods||"").split(",").map(s=>s.trim()).filter(Boolean); if(!mods.length){ cont.innerHTML='<span style="font-size:11px;color:#A8A69E">— este proyecto no tiene módulos —</span>'; return; } cont.innerHTML='<div class="chips" style="gap:4px">'+mods.map(m=>'<button type="button" class="chip'+(pm.includes(m)?' on':'')+'" data-mod="'+m.replace(/"/g,'&quot;')+'" onclick="this.classList.toggle(\'on\')" style="padding:3px 9px;font-size:11px">'+m+'</button>').join('')+'</div>'; };
+      document.getElementById("ex_est").addEventListener("change", ()=>syncSub());
+      document.getElementById("ex_proy").addEventListener("change", ()=>syncMods());
+      // Primer render: respeta el pre-llenado si vino de "sigue mañana".
+      syncSub(ov.dataset.subpre || null);
+      syncMods(ov.dataset.modspre || null);
+    }
+    // Handler del botón "↪ sigue mañana": arma el pre-llenado desde la fila de hoy y abre el modal.
+    function seguirManana(id){
+      const f = detalle.find(x=>x.id===id);
+      if(!f){ setEstado("No encontré la fila.","err"); return; }
+      const manana = sumarDiasHabiles(hoyISO(), 1); // mañana hábil (salta finde/feriado)
+      abrirDiaExtra({
+        fecha: manana,
+        proyecto_id: f.proyecto_id,
+        persona: f.persona_real,
+        estacion: f.estacion_real,
+        subtarea: f.subtarea_real,
+        modulos: f.modulos_real,
+        origenFilaId: f.id
+      });
     }
     async function guardarDiaExtra(){
       const fecha = document.getElementById("ex_fecha").value;
@@ -2221,9 +2318,35 @@
       if(error) return setEstado("Error al agregar día extra: "+error.message,"err");
       if(data && data[0]) detalle.push(data[0]);
       detalle.sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0);
+      // ¿Venía del flujo "sigue mañana"? Leer marcas del overlay antes de cerrarlo.
+      const ov = document.getElementById("ovExtra");
+      const eraSeguir = !!(ov && ov.dataset.pre);
+      const origenFilaId = ov ? (ov.dataset.origen || "") : "";
       cerrarDiaExtra();
-      setEstado("\u2713 Día extra agregado. Se computa como sobrecosto y, si corre el fin del proyecto, como atraso.","ok");
+      if(eraSeguir){
+        setEstado("\u2713 Jornada de mañana creada. Se computa como sobrecosto cuando ese día cierre.","ok");
+      } else {
+        setEstado("\u2713 Día extra agregado. Se computa como sobrecosto y, si corre el fin del proyecto, como atraso.","ok");
+      }
       renderDetalle();
+      // Si vino de "sigue mañana" y la persona YA tenía otra jornada ese día, ofrecer correr en cascada.
+      if(eraSeguir){
+        const nuevaFecha = fila.fecha;
+        const yaTenia = detalle.some(x => x.persona_real===persona
+          && x.fecha===nuevaFecha && !x.ausente && x.estacion_real!==SUP_MARK
+          && !(data && data[0] && x.id===data[0].id)); // excluir la recién creada
+        if(yaTenia){
+          const filaRef = origenFilaId ? detalle.find(x=>x.id===origenFilaId) : null;
+          if(filaRef){
+            await ofrecerCorrerDetalle(filaRef, "tiene una jornada nueva el "+dmy(nuevaFecha)+" que se superpone con lo que ya tenía");
+            renderDetalle();
+          } else {
+            // Sin fila de referencia (raro): al menos avisar del solapamiento.
+            const aviso = avisoSolapamiento(persona);
+            if(aviso) alert(aviso);
+          }
+        }
+      }
     }
 
     /* ---- DASHBOARD ---- */
