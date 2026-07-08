@@ -215,6 +215,9 @@
     }
     let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, planiHoras = {}, detalle = [], feriados = [], supervisiones = [];
     let lineasBase = {}; // proyecto_id -> fila de linea_base (con .contenido, .fijada_at, .fijada_por)
+    // Identificador de "tarea padre" de una fila de detalle: proyecto (La Huella) o trailer (Neuquén).
+    // Usado por las funciones compartidas (correr días, solapamiento) para agrupar sin importar la sede.
+    function refTarea(f){ return f.trailer_id != null ? f.trailer_id : f.proyecto_id; }
     // Histórico de valor-hora y especialidad por mes (YYYY-MM).
     // valorHoraHist[persona_id] = { 'YYYY-MM': valor, ... } (ordenado al consultar)
     let valorHoraHist = {}, especialidadHist = {};
@@ -968,7 +971,7 @@
         const gente = mantPers[t.id] || [];
         const selTrailer = '<select onchange="editarMt(\''+t.id+'\',\'trailer_id\',this.value)" style="min-width:180px">'
           + '<option value="">(elegir trailer)</option>'
-          + trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===t.trailer_id?'selected':'')+'>'+((tr.codigo||'(sin código)')).replace(/"/g,'&quot;')+'</option>').join('') + '</select>';
+          + trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===t.trailer_id?'selected':'')+'>'+((tr.if_codigo||tr.codigo||'(sin IF)')).replace(/"/g,'&quot;')+'</option>').join('') + '</select>';
         // Datos del trailer seleccionado (IF, tipo, medida) — informativos, no editables.
         const trSel = trailers.find(x=>x.id===t.trailer_id);
         const infoTrailer = trSel
@@ -2027,7 +2030,8 @@
           filas.push({
             fecha, sede:"neuquen",
             persona_plan: g, persona_real: g,
-            proyecto_id: t.trailer_id,          // trailer ocupa el lugar del proyecto
+            proyecto_id: null,
+            trailer_id: t.trailer_id,          // el trailer va en su propia columna
             estacion_plan: t.tarea||"", subtarea_plan: t.subtarea||"",
             estacion_real: t.tarea||"", subtarea_real: t.subtarea||"",
             modulos_plan: null, modulos_real: null,
@@ -2250,7 +2254,7 @@
         const btnSigue = (esHoy && !f.ausente && !f.es_extra)
           ? ' <button class="btn" title="Esta tarea sigue mañana" style="background:#fff;border:1px solid #BA7517;color:#BA7517;padding:2px 7px;font-size:10.5px;border-radius:6px" onclick="seguirMananaNqn(\''+f.id+'\')">↪ sigue mañana</button>'
           : '';
-        const trailerNom = (()=>{ const tr=trailers.find(x=>x.id===f.proyecto_id); return tr?(tr.codigo||'(sin código)'):'(trailer)'; })();
+        const trailerNom = (()=>{ const tr=trailers.find(x=>x.id===f.trailer_id); return tr?(tr.codigo||'(sin código)'):'(trailer)'; })();
         h += '<tr style="'+bg+'">'
           + '<td style="white-space:nowrap;color:#888780">'+dm(f.fecha)+(pasado?' 🔒':'')+tagExtra+btnSigue+'</td>'
           + '<td style="font-size:12px">'+trailerNom+'</td>'
@@ -2288,7 +2292,7 @@
       const f = detalle.find(x=>x.id===id);
       if(!f){ setEstado("No encontré la fila.","err"); return; }
       const manana = sumarDiasHabiles(hoyISO(), 1);
-      abrirDiaExtraNqn({ fecha: manana, trailer_id: f.proyecto_id, persona: f.persona_real, tarea: f.estacion_real, subtarea: f.subtarea_real, origenFilaId: f.id });
+      abrirDiaExtraNqn({ fecha: manana, trailer_id: f.trailer_id, persona: f.persona_real, tarea: f.estacion_real, subtarea: f.subtarea_real, origenFilaId: f.id });
     }
 
     function renderDetalle() {
@@ -2539,7 +2543,7 @@
         if(f.ausente) return;
         if(f.estacion_real===SUP_MARK) return;
         const d = porDia[f.fecha] || (porDia[f.fecha] = { tareas:new Set(), horas:0 });
-        d.tareas.add(f.estacion_real + "|" + f.proyecto_id);
+        d.tareas.add(f.estacion_real + "|" + refTarea(f));
         d.horas += (Number(f.horas_normales)||0) + (Number(f.horas_extra)||0);
       });
       const conflict = Object.keys(porDia).sort()
@@ -2559,7 +2563,7 @@
         && x.persona_real===filaRef.persona_real
         && !x.ausente && !x.es_extra
         && x.fecha > filaRef.fecha && x.fecha >= hoy);
-      const candTarea = futuras.filter(x => x.proyecto_id===filaRef.proyecto_id && x.estacion_real===filaRef.estacion_real)
+      const candTarea = futuras.filter(x => refTarea(x)===refTarea(filaRef) && x.estacion_real===filaRef.estacion_real)
         .sort((a,b)=> a.fecha<b.fecha?-1:1);
       const candTodo = [...futuras].sort((a,b)=> a.fecha<b.fecha?-1:1);
       if(!candTodo.length) return;
@@ -2753,7 +2757,7 @@
       if(!trailer_id){ setEstado("Falta el trailer.","err"); return; }
       if(!persona){ setEstado("Falta la persona.","err"); return; }
       if(hn<=0 && he<=0){ setEstado("Cargá al menos horas normales o extra.","err"); return; }
-      const fila = { fecha, sede:"neuquen", persona_plan:persona, persona_real:persona, proyecto_id:trailer_id,
+      const fila = { fecha, sede:"neuquen", persona_plan:persona, persona_real:persona, proyecto_id:null, trailer_id:trailer_id,
         estacion_plan:tarea||"", subtarea_plan:"", estacion_real:tarea||"", subtarea_real:"",
         modulos_plan:null, modulos_real:null, horas_plan:0, horas_normales:hn, horas_extra:he, ausente:false, es_extra:true };
       const { data, error } = await sb.from("detalle_diario").insert(fila).select();
@@ -3093,9 +3097,9 @@
         diasHabiles(t.fecha_desde,t.fecha_hasta).forEach(d=>{ (e.planByDay[d]=e.planByDay[d]||new Set()).add(t.tarea||"—"); });
       });
       detalle.forEach(f=>{
-        if(f.ausente) return; if(!f.proyecto_id || !pasa(f.proyecto_id)) return;
+        if(f.ausente) return; if(!f.trailer_id || !pasa(f.trailer_id)) return;
         if(!esFechaReal(f.fecha)) return;
-        const e=ensure(f.proyecto_id);
+        const e=ensure(f.trailer_id);
         (e.realByDay[f.fecha]=e.realByDay[f.fecha]||new Set()).add(f.estacion_real||"—");
       });
       const todas=[]; Object.values(porTr).forEach(e=>{ Object.keys(e.planByDay).forEach(d=>todas.push(d)); Object.keys(e.realByDay).forEach(d=>todas.push(d)); });
@@ -3128,7 +3132,7 @@
     /* ---- HISTOGRAMA — BASE NEUQUÉN (filas = personas, color por tarea) ---- */
     function renderHistoNqn(){
       if(!detalle.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">No hay detalle generado. Generalo desde Mantenimiento.</p>'; return; }
-      const detH = histoProy ? detalle.filter(f=>f.proyecto_id===histoProy) : detalle;
+      const detH = histoProy ? detalle.filter(f=>f.trailer_id===histoProy) : detalle;
       const filtro = '<label style="font-size:12px;color:#888780">Trailer <select onchange="setHistoProy(this.value)" style="width:auto"><option value="">Todos</option>'+trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===histoProy?'selected':'')+'>'+(tr.codigo||'(sin código)')+'</option>').join('')+'</select></label>';
       if(!detH.length){ contenido.innerHTML='<div class="no-print" style="margin-bottom:12px">'+filtro+'</div><p style="font-size:13px;color:#888780">Este trailer no tiene detalle cargado.</p>'; return; }
       const fechas=[...new Set(detH.map(f=>f.fecha))].sort();
