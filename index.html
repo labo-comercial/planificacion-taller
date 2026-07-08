@@ -434,9 +434,12 @@
     const mesActual = ()=> hoyISO().slice(0,7);
     function nombreMes(mes){ if(!mes) return "—"; const [y,m]=mes.split("-"); const N=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"]; return (N[Number(m)-1]||m)+" "+y; }
     function renderPersonal() {
-      let h = '<table><thead><tr><th>Legajo</th><th>Nombre</th><th>Especialidad actual</th><th>Tipo</th><th style="text-align:right">Valor hora base</th><th>Histórico</th><th></th></tr></thead><tbody>';
-      if (!personas.length) h += '<tr><td colspan="7" style="color:#A8A69E;padding:14px">Sin personas.</td></tr>';
-      personas.forEach(p => {
+      const lista = personasDe(SEDE); // solo el personal de la sede activa
+      const nombreSede = (SEDES[SEDE] && SEDES[SEDE].nombre) || SEDE;
+      let h = '<p style="font-size:12px;color:#888780;margin-top:0">Personal de <b>'+nombreSede+'</b>. Cada persona pertenece a una sede y solo aparece en la suya.</p>';
+      h += '<table><thead><tr><th>Legajo</th><th>Nombre</th><th>Especialidad actual</th><th>Tipo</th><th style="text-align:right">Valor hora base</th><th>Histórico</th><th></th></tr></thead><tbody>';
+      if (!lista.length) h += '<tr><td colspan="7" style="color:#A8A69E;padding:14px">Sin personas en esta sede.</td></tr>';
+      lista.forEach(p => {
         const esContr = p.tipo==="Contratista";
         const cc = esContr?'<span style="font-size:11px;color:#A8A69E;font-style:italic">s/valor (Compras)</span>':'<input type="number" value="'+(p.costo_hora||0)+'" onchange="editarP(\''+p.id+'\',\'costo_hora\',Number(this.value))" style="text-align:right" title="Valor base / fallback cuando un mes no tiene valor propio">';
         const abierto = !!personalAbierto[p.id];
@@ -514,7 +517,7 @@
       if(error) return setEstado("Error: "+error.message,"err");
       if(especialidadHist[pid]) delete especialidadHist[pid][mes]; setEstado("\u2713 Borrado.","ok"); renderPersonal();
     }
-    async function agregarP(){const{error}=await sb.from("personal").insert({nombre:"Nueva persona",tipo:"Directo",costo_hora:0});if(error)return setEstado("Error: "+error.message,"err");cargar();}
+    async function agregarP(){const{error}=await sb.from("personal").insert({nombre:"Nueva persona",tipo:"Directo",costo_hora:0,sede:SEDE});if(error)return setEstado("Error: "+error.message,"err");registrarLog("crear","personal","Nueva persona");cargar();}
     async function editarP(id,c,v){const u={};u[c]=v;const{error}=await sb.from("personal").update(u).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");setEstado("\u2713 Guardado.","ok");}
     async function eliminarP(id){
       const p = personas.find(x=>x.id===id);
@@ -889,12 +892,13 @@
         const selEstado = '<select onchange="editarTr(\''+t.id+'\',\'estado\',this.value)" style="width:auto;color:'+e.color+';font-weight:600">'
           + TRAILER_EST_KEYS.map(k=>'<option value="'+k+'" '+(k===t.estado?'selected':'')+'>'+TRAILER_ESTADOS[k].label+'</option>').join('') + '</select>';
         const opac = alquilado ? '' : 'opacity:.55';
+        const ro = (v,extra)=>'<span style="font-size:12.5px;color:#3A3A38;'+(extra||'')+'">'+((v==null||v==='')?'<span style="color:#C9C7BE">—</span>':String(v).replace(/</g,'&lt;'))+'</span>';
         h += '<tr>'
-          + '<td style="width:130px"><input value="'+(t.codigo||'').replace(/"/g,'&quot;')+'" placeholder="contenedor" onchange="editarTr(\''+t.id+'\',\'codigo\',this.value)"></td>'
-          + '<td style="width:100px"><input value="'+(t.if_codigo||'').replace(/"/g,'&quot;')+'" placeholder="IF" onchange="editarTr(\''+t.id+'\',\'if_codigo\',this.value)"></td>'
-          + '<td style="width:120px"><input value="'+(t.tipo||'').replace(/"/g,'&quot;')+'" placeholder="tipo" onchange="editarTr(\''+t.id+'\',\'tipo\',this.value)"></td>'
-          + '<td style="width:50px"><input value="'+(t.medida||'').replace(/"/g,'&quot;')+'" placeholder="—" onchange="editarTr(\''+t.id+'\',\'medida\',this.value)" style="text-align:center"></td>'
-          + '<td style="width:60px"><input value="'+(t.modelo||'').replace(/"/g,'&quot;')+'" placeholder="—" onchange="editarTr(\''+t.id+'\',\'modelo\',this.value)" style="text-align:center"></td>'
+          + '<td style="width:130px">'+ro(t.codigo, "font-weight:600")+'</td>'
+          + '<td style="width:100px">'+ro(t.if_codigo)+'</td>'
+          + '<td style="width:120px">'+ro(t.tipo)+'</td>'
+          + '<td style="width:50px;text-align:center">'+ro(t.medida)+'</td>'
+          + '<td style="width:60px;text-align:center">'+ro(t.modelo)+'</td>'
           + '<td style="width:140px">'+selEstado+'</td>'
           + '<td style="'+opac+'"><input value="'+(t.ubicacion||'').replace(/"/g,'&quot;')+'" placeholder="'+(alquilado?'obra / lugar':'—')+'" onchange="editarTr(\''+t.id+'\',\'ubicacion\',this.value)"></td>'
           + '<td style="'+opac+'"><input value="'+(t.cliente||'').replace(/"/g,'&quot;')+'" placeholder="'+(alquilado?'cliente':'—')+'" onchange="editarTr(\''+t.id+'\',\'cliente\',this.value)"></td>'
@@ -943,28 +947,43 @@
         const selTrailer = '<select onchange="editarMt(\''+t.id+'\',\'trailer_id\',this.value)" style="min-width:180px">'
           + '<option value="">(elegir trailer)</option>'
           + trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===t.trailer_id?'selected':'')+'>'+nombreTrailer(tr.id).replace(/"/g,'&quot;')+'</option>').join('') + '</select>';
-        // Selectores encadenados: Tarea (categoría) → Subtarea (filtrada por categoría).
+        // Datos del trailer seleccionado (IF, tipo, medida) — informativos, no editables.
+        const trSel = trailers.find(x=>x.id===t.trailer_id);
+        const infoTrailer = trSel
+          ? '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:#5F5E5A;background:#F4F7FB;border-radius:8px;padding:6px 10px;margin:6px 0"><span><b>IF:</b> '+(trSel.if_codigo||'—')+'</span><span><b>Tipo:</b> '+(trSel.tipo||'—')+'</span><span><b>Medida:</b> '+(trSel.medida||'—')+'</span></div>'
+          : '';
+        // Selector de Tarea (categoría) → subtareas MÚLTIPLES (chips toggleables).
         const tareasCatT = tareasDeMant();
         const catsT = Object.keys(tareasCatT).sort((a,b)=>a.localeCompare(b,"es"));
         const selTarea = '<select onchange="editarMt(\''+t.id+'\',\'tarea\',this.value)" style="min-width:170px">'
           + '<option value="">(elegir tarea)</option>'
           + catsT.map(c=>'<option value="'+c.replace(/"/g,'&quot;')+'" '+(c===t.tarea?'selected':'')+'>'+c+'</option>').join('') + '</select>';
+        // Subtareas elegidas (guardadas como texto separado por coma).
+        const subsElegidas = (t.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
         const subsDeCat = (t.tarea && tareasCatT[t.tarea]) ? tareasCatT[t.tarea] : [];
-        const selSub = '<select onchange="editarMt(\''+t.id+'\',\'subtarea\',this.value)" style="min-width:220px" '+(subsDeCat.length?'':'disabled')+'>'
-          + '<option value="">'+(t.tarea?'(elegir subtarea)':'elegí primero la tarea')+'</option>'
-          + subsDeCat.map(s=>'<option value="'+(s.subtarea||'').replace(/"/g,'&quot;')+'" '+((s.subtarea||'')===t.subtarea?'selected':'')+'>'+(s.subtarea||'')+'</option>').join('') + '</select>';
-        // Compatibilidad: si la tarea vieja tenía solo 'descripcion' libre, mostrarla como nota editable.
+        let subChips;
+        if(!t.tarea){ subChips = '<span style="font-size:11.5px;color:#A8A69E">Elegí primero la tarea para ver sus subtareas.</span>'; }
+        else if(!subsDeCat.length){ subChips = '<span style="font-size:11.5px;color:#A8A69E">Esta tarea no tiene subtareas en el catálogo.</span>'; }
+        else {
+          subChips = '<div class="chips">'+subsDeCat.map(s=>{ const on=subsElegidas.includes(s.subtarea); return '<button class="chip'+(on?' on':'')+'" onclick="toggleMtSubtarea(\''+t.id+'\',\''+(s.subtarea||'').replace(/'/g,"\\'").replace(/"/g,'&quot;')+'\')">'+(s.subtarea||'').replace(/</g,'&lt;')+'</button>'; }).join('')+'</div>';
+        }
+        // Horas POR TAREA (no por subtarea).
+        const inputHoras = '<div class="pl-row" style="margin-top:6px;align-items:center"><span style="font-size:12px;color:#5F5E5A">Horas de la tarea:</span><input type="number" min="0" value="'+(t.horas!=null?t.horas:'')+'" placeholder="ej. 8" onchange="editarMt(\''+t.id+'\',\'horas\',this.value)" style="width:90px"></div>';
         const notaLibre = (!t.tarea && t.descripcion)
           ? '<div style="margin-top:6px"><input value="'+(t.descripcion||'').replace(/"/g,'&quot;')+'" placeholder="Descripción libre (registro anterior)" onchange="editarMt(\''+t.id+'\',\'descripcion\',this.value)" style="width:100%"></div>'
           : '';
 
         h += '<div class="card">'
           + '<div class="pl-row" style="align-items:center">'+selTrailer+selEstado+'<button class="btn-del" style="margin-left:auto" onclick="eliminarMt(\''+t.id+'\')">×</button></div>'
-          + '<div class="pl-row" style="margin:8px 0;flex-wrap:wrap">'+selTarea+selSub+'</div>'
+          + infoTrailer
+          + '<div class="pl-row" style="margin:8px 0;flex-wrap:wrap">'+selTarea+'</div>'
+          + '<div style="font-size:11px;color:#A8A69E;margin:2px 0 4px">Subtareas (tildá una o varias):</div>'
+          + subChips
+          + inputHoras
           + notaLibre
-          + '<div class="pl-row"><input type="date" value="'+(t.fecha_desde||'')+'" onchange="editarMt(\''+t.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(t.fecha_hasta||'')+'" onchange="editarMt(\''+t.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+diasHabiles(t.fecha_desde,t.fecha_hasta).length+' días háb.</span></div>'
+          + '<div class="pl-row" style="margin-top:8px"><input type="date" value="'+(t.fecha_desde||'')+'" onchange="editarMt(\''+t.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(t.fecha_hasta||'')+'" onchange="editarMt(\''+t.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+diasHabiles(t.fecha_desde,t.fecha_hasta).length+' días háb.</span></div>'
           + '<div style="font-size:11px;color:#A8A69E;margin:6px 0 4px">Personas asignadas (tildá una o varias):</div>'
-          + '<div class="chips">'+personas.map(p=>{ const on=gente.includes(p.id); return '<button class="chip'+(on?' on':'')+'" onclick="toggleMtPersona(\''+t.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+'</button>'; }).join('')+'</div>'
+          + '<div class="chips">'+personasDe("neuquen").map(p=>{ const on=gente.includes(p.id); return '<button class="chip'+(on?' on':'')+'" onclick="toggleMtPersona(\''+t.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+'</button>'; }).join('')+'</div>'
           + '</div>';
       });
       h += '<div class="row-actions"><button class="btn-add" onclick="agregarMt()">+ Agregar tarea</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
@@ -997,12 +1016,25 @@
     async function eliminarTipica(id){ const t=mantTipicas.find(x=>x.id===id); const{error}=await sb.from("mant_tareas_tipicas").delete().eq("id",id); if(error)return setEstado("Error: "+error.message,"err"); registrarLog("eliminar","tarea_tipica",(t?((t.tarea||"")+(t.subtarea?(" · "+t.subtarea):"")||t.nombre):"")); cargar(); }
     // Tareas de mantenimiento
     async function agregarMt(){ const{error}=await sb.from("mant_tareas").insert({ sede:"neuquen", estado:"pendiente", trailer_id: (trailers[0]?trailers[0].id:null) }); if(error)return setEstado("Error: "+error.message,"err"); registrarLog("crear","mantenimiento","Nueva tarea de mantenimiento"); cargar(); }
-    async function editarMt(id,c,v){ const u={}; u[c]=(v===""?null:v);
-      // Si cambia la categoría (tarea), limpiar la subtarea previa para forzar reelección coherente.
+    async function editarMt(id,c,v){ const u={};
+      if(c==="horas"){ u.horas = (v===""? null : Number(v)); if(u.horas!==null && isNaN(u.horas)) return setEstado("Horas inválidas.","err"); }
+      else { u[c]=(v===""?null:v); }
+      // Si cambia la categoría (tarea), limpiar las subtareas previas (cambian con la categoría).
       if(c==="tarea") u.subtarea=null;
       const{error}=await sb.from("mant_tareas").update(u).eq("id",id); if(error)return setEstado("Error: "+error.message,"err");
       const t=mantTareas.find(x=>x.id===id); if(t){ Object.assign(t,u); if(c==="estado"||c==="fecha_desde"||c==="fecha_hasta"||c==="trailer_id"||c==="tarea") renderMantenimiento(); }
       registrarLog("editar","mantenimiento",(t?(nombreTrailer(t.trailer_id)):"")+" · "+c+" = "+(v||"—")); setEstado("\u2713 Guardado.","ok"); }
+    // Agrega o quita una subtarea del texto separado por coma (multi-selección).
+    async function toggleMtSubtarea(id, sub){
+      const t=mantTareas.find(x=>x.id===id); if(!t) return;
+      const actuales = (t.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
+      const idx = actuales.indexOf(sub);
+      if(idx>=0) actuales.splice(idx,1); else actuales.push(sub);
+      const nuevo = actuales.join(", ");
+      const{error}=await sb.from("mant_tareas").update({ subtarea: nuevo||null }).eq("id",id); if(error)return setEstado("Error: "+error.message,"err");
+      t.subtarea = nuevo||null; renderMantenimiento();
+      registrarLog("editar","mantenimiento",nombreTrailer(t.trailer_id)+" · subtareas = "+(nuevo||"—")); setEstado("\u2713 Guardado.","ok");
+    }
     async function eliminarMt(id){ const t=mantTareas.find(x=>x.id===id); if(!confirm("¿Eliminar esta tarea de mantenimiento?")) return; const{error}=await sb.from("mant_tareas").delete().eq("id",id); if(error)return setEstado("Error: "+error.message,"err"); registrarLog("eliminar","mantenimiento",(t?(nombreTrailer(t.trailer_id)+" · "+(t.tarea||t.descripcion||"")):"")); cargar(); }
     async function toggleMtPersona(tareaId, personaId, estaba){
       if (estaba) { const{error}=await sb.from("mant_tareas_personal").delete().eq("tarea_id",tareaId).eq("persona_id",personaId); if(error)return setEstado("Error: "+error.message,"err"); mantPers[tareaId]=(mantPers[tareaId]||[]).filter(x=>x!==personaId); }
