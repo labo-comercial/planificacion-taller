@@ -178,6 +178,8 @@
           { id:"nqn_trailers", label:"Trailers", c:"#E6F1FB" },
           { id:"nqn_manten", label:"Mantenimiento", c:"#E8F3DE" },
           { id:"nqn_detalle", label:"Detalle diario", c:"#E1F5EE" },
+          { id:"nqn_gantt", label:"Gantt", c:"#DEEEF5" },
+          { id:"nqn_histo", label:"Histograma", c:"#F2E8D8" },
           { id:"nqn_parte", label:"Parte diario", c:"#D9F0E6" },
           { id:"nqn_stock", label:"Stock", c:"#FAEEDA" },
           { id:"personal", label:"Personal", c:"#FBEAF0" },
@@ -206,6 +208,8 @@
       SEDE = s;
       try { localStorage.setItem("sede_activa", s); } catch(e){}
       tab = SEDES[s].tabDefault;
+      // Resetear filtros que guardan ids específicos de una sede, para no arrastrarlos a la otra.
+      ganttProy = ""; histoProy = ""; impactoProy = ""; planiProy = ""; detalleDesde = null; detalleVerTodo = false;
       renderTabs();
       cargar();
     }
@@ -226,6 +230,7 @@
     let planiOrdenFecha = false; // toggle: ordenar estaciones por fecha de inicio
     let planiResaltar = null;  // {persona, fecha, bloques:[ids]} para resaltar tras saltar a un conflicto
     let impactoProy = "";      // filtro de proyecto del panel de impacto ("" = todos)
+    let ganttProy = "", histoProy = "";  // filtros de Gantt e Histograma (compartidos; se resetean al cambiar de sede)
     function setImpactoProy(pid){ impactoProy = (impactoProy===pid ? "" : pid); renderDetalle(); }
     let proyVista = "operacion";   // vista de la pestaña Proyectos: "operacion" | "cotizaciones" | "archivados"
     function setProyVista(v){ proyVista = v; renderProyectos(); }
@@ -341,6 +346,16 @@
         { const { data, error } = await sb.from("detalle_diario").select("*").eq("sede","neuquen"); if (error) return errLoad(error); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
         setEstado("\u2713 " + detalle.length + " registro(s) en el detalle de Neuquén.", "ok");
         renderDetalleNqn();
+        return;
+      }
+      if (tab === "nqn_gantt" || tab === "nqn_histo") {
+        if (!personas.length) { const { data } = await sb.from("personal").select("*"); personas = (data||[]).sort((a,b)=>{if(a.tipo!==b.tipo)return a.tipo==="Directo"?-1:1;return (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999);}); }
+        { const { data } = await sb.from("trailers").select("*").eq("sede","neuquen"); trailers = (data||[]).sort((a,b)=> (a.codigo||"").localeCompare(b.codigo||"", "es", {numeric:true})); }
+        { const { data } = await sb.from("feriados").select("*"); feriados = data || []; }
+        { const { data } = await sb.from("mant_tareas").select("*").eq("sede","neuquen"); mantTareas = data || []; }
+        { const { data } = await sb.from("detalle_diario").select("*").eq("sede","neuquen"); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
+        setEstado("\u2713 Datos cargados.", "ok");
+        if (tab === "nqn_gantt") renderGanttNqn(); else renderHistoNqn();
         return;
       }
       if (tab === "nqn_parte") {
@@ -2987,9 +3002,8 @@
     }
     function setVista(v){ vistaDash=v; renderDash(); }
     function setDashProy(v){ dashProy=v; renderDash(); }
-    let ganttProy = "", histoProy = "";
-    function setGanttProy(v){ ganttProy=v; renderGantt(); }
-    function setHistoProy(v){ histoProy=v; renderHisto(); }
+    function setGanttProy(v){ ganttProy=v; if(SEDE==="neuquen") renderGanttNqn(); else renderGantt(); }
+    function setHistoProy(v){ histoProy=v; if(SEDE==="neuquen") renderHistoNqn(); else renderHisto(); }
 
     /* ---- GANTT ---- */
     function renderGantt() {
@@ -3066,8 +3080,78 @@
       contenido.innerHTML=h;
     }
 
-    /* ---- PARTE DIARIO ---- */
-    let parteFecha="", parteProy="", parteEst="", partePersona="";
+    /* ---- GANTT — BASE NEUQUÉN (filas = trailers) ---- */
+    function renderGanttNqn(){
+      if(!mantTareas.length && !detalle.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">No hay tareas de mantenimiento ni detalle cargado.</p>'; return; }
+      // Acumular por TRAILER. Plan: desde mant_tareas. Real: desde detalle (días trabajados hasta ayer).
+      const porTr = {}; // trailerId -> { planByDay:{fecha:Set(tarea)}, realByDay:{fecha:Set(tarea)} }
+      const ensure = (k)=>{ if(!porTr[k]) porTr[k]={planByDay:{}, realByDay:{}}; return porTr[k]; };
+      const pasa = (trid)=> !ganttProy || trid===ganttProy;
+      mantTareas.forEach(t=>{
+        if(!t.trailer_id || !pasa(t.trailer_id)) return;
+        const e=ensure(t.trailer_id);
+        diasHabiles(t.fecha_desde,t.fecha_hasta).forEach(d=>{ (e.planByDay[d]=e.planByDay[d]||new Set()).add(t.tarea||"—"); });
+      });
+      detalle.forEach(f=>{
+        if(f.ausente) return; if(!f.proyecto_id || !pasa(f.proyecto_id)) return;
+        if(!esFechaReal(f.fecha)) return;
+        const e=ensure(f.proyecto_id);
+        (e.realByDay[f.fecha]=e.realByDay[f.fecha]||new Set()).add(f.estacion_real||"—");
+      });
+      const todas=[]; Object.values(porTr).forEach(e=>{ Object.keys(e.planByDay).forEach(d=>todas.push(d)); Object.keys(e.realByDay).forEach(d=>todas.push(d)); });
+      const fechas=[...new Set(todas)].sort();
+      const trConDatos = trailers.filter(tr=>porTr[tr.id]);
+      const filtro = '<label style="font-size:12px;color:#888780">Trailer <select onchange="setGanttProy(this.value)" style="width:auto"><option value="">Todos</option>'+trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===ganttProy?'selected':'')+'>'+(tr.codigo||'(sin código)')+'</option>').join('')+'</select></label>';
+      if(!fechas.length){ contenido.innerHTML='<div class="no-print" style="margin-bottom:12px">'+filtro+'</div><p style="font-size:13px;color:#888780">Las tareas no tienen fechas cargadas.</p>'; return; }
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0"><span style="display:inline-block;width:14px;height:11px;background:#AEB6C2;border:1px solid #8C95A3;border-radius:2px;vertical-align:middle"></span> planificado &nbsp; <span style="display:inline-block;width:14px;height:11px;background:#185FA5;border-radius:2px;vertical-align:middle"></span> real (hasta ayer). Cada barra muestra la tarea.</p><div style="display:flex;gap:8px;align-items:center">'+filtro+botonesExport("ganttn-print","gantt_neuquen")+'</div></div>';
+      h+='<div id="ganttn-print"><div style="overflow-x:auto"><table style="min-width:'+(200+fechas.length*58)+'px;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8;z-index:6">Trailer</th>';
+      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:56px">'+dm(d)+'</th>');
+      h+='</tr></thead><tbody>';
+      const abbr = (s)=> (s||"—").toString().slice(0,8);
+      const title = (set)=>[...set].join(", ");
+      trConDatos.forEach(tr=>{
+        const e=porTr[tr.id];
+        h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+(tr.codigo||'(sin código)')+'</td>';
+        fechas.forEach(d=>{
+          const pSet=e.planByDay[d], rSet=e.realByDay[d];
+          let cell='';
+          if(pSet){ cell+='<div style="background:#AEB6C2;border:1px solid #8C95A3;height:17px;border-radius:3px;margin-bottom:2px;font-size:9px;font-weight:600;line-height:16px;color:#33373D;text-align:center;overflow:hidden;white-space:nowrap" title="Plan · '+title(pSet)+'">'+abbr([...pSet][0])+'</div>'; }
+          if(rSet){ cell+='<div style="background:#185FA5;height:17px;border-radius:3px;font-size:9px;font-weight:600;line-height:17px;color:#fff;text-align:center;overflow:hidden;white-space:nowrap" title="Real · '+title(rSet)+'">'+abbr([...rSet][0])+'</div>'; }
+          h+='<td style="padding:3px 2px;vertical-align:middle">'+cell+'</td>';
+        });
+        h+='</tr>';
+      });
+      h+='</tbody></table></div></div>';
+      contenido.innerHTML=h;
+    }
+
+    /* ---- HISTOGRAMA — BASE NEUQUÉN (filas = personas, color por tarea) ---- */
+    function renderHistoNqn(){
+      if(!detalle.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">No hay detalle generado. Generalo desde Mantenimiento.</p>'; return; }
+      const detH = histoProy ? detalle.filter(f=>f.proyecto_id===histoProy) : detalle;
+      const filtro = '<label style="font-size:12px;color:#888780">Trailer <select onchange="setHistoProy(this.value)" style="width:auto"><option value="">Todos</option>'+trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===histoProy?'selected':'')+'>'+(tr.codigo||'(sin código)')+'</option>').join('')+'</select></label>';
+      if(!detH.length){ contenido.innerHTML='<div class="no-print" style="margin-bottom:12px">'+filtro+'</div><p style="font-size:13px;color:#888780">Este trailer no tiene detalle cargado.</p>'; return; }
+      const fechas=[...new Set(detH.map(f=>f.fecha))].sort();
+      const pers=[...new Set(detH.map(f=>f.persona_real))];
+      const cell={}; detH.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?"__aus":(f.estacion_real||"—"); });
+      // Paleta simple por tarea (categoría).
+      const cats=[...new Set(detH.map(f=>f.estacion_real||"—"))];
+      const palette=["#E6F1FB|#185FA5","#E8F3DE|#3B6D11","#FAEEDA|#854F0B","#FBEAF0|#993556","#EFE7FB|#6B3FA0","#F2E8D8|#7A5C00","#E1F5EE|#0F6E56"];
+      const colorDe={}; cats.forEach((c,i)=>{ colorDe[c]=palette[i%palette.length].split("|"); });
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por tarea.</p><div style="display:flex;gap:8px;align-items:center">'+filtro+botonesExport("histon-print","histograma_neuquen")+'</div></div><div id="histon-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
+      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:50px">'+dm(d)+'</th>');
+      h+='</tr></thead><tbody>';
+      pers.forEach(pid=>{ h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+nombrePersona(pid)+'</td>';
+        fechas.forEach(d=>{ const t=cell[pid+"|"+d]; let c='<span style="color:#D3D1C7">—</span>';
+          if(t==="__aus")c='<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>';
+          else if(t){ const col=colorDe[t]||["#EEE","#555"]; c='<span style="display:inline-block;width:100%;background:'+col[0]+';color:'+col[1]+';border-radius:5px;padding:3px 1px;font-size:8.5px" title="'+t+'">'+t.slice(0,8)+'</span>'; }
+          h+='<td style="padding:4px;text-align:center">'+c+'</td>'; });
+        h+='</tr>';
+      });
+      h+='</tbody></table></div></div>';
+      contenido.innerHTML=h;
+    }
+
     function renderParte() {
       const proyOperP = new Set(proyectosOperativos().map(p=>p.id));
       const fechas=[...new Set(detalle.filter(f=>proyOperP.has(f.proyecto_id)).map(f=>f.fecha))].sort();
