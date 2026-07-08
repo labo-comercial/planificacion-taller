@@ -177,6 +177,7 @@
         tabs: [
           { id:"nqn_trailers", label:"Trailers", c:"#E6F1FB" },
           { id:"nqn_manten", label:"Mantenimiento", c:"#E8F3DE" },
+          { id:"nqn_detalle", label:"Detalle diario", c:"#E1F5EE" },
           { id:"nqn_parte", label:"Parte diario", c:"#D9F0E6" },
           { id:"nqn_stock", label:"Stock", c:"#FAEEDA" },
           { id:"personal", label:"Personal", c:"#FBEAF0" },
@@ -331,6 +332,15 @@
         { const { data } = await sb.from("mant_tareas_personal").select("*"); mantPers = {}; (data||[]).forEach(r=>{ if(!mantPers[r.tarea_id]) mantPers[r.tarea_id]=[]; mantPers[r.tarea_id].push(r.persona_id); }); }
         setEstado("\u2713 " + mantTareas.length + " tarea(s) de mantenimiento.", "ok");
         renderMantenimiento();
+        return;
+      }
+      if (tab === "nqn_detalle") {
+        if (!personas.length) { const { data } = await sb.from("personal").select("*"); personas = (data||[]).sort((a,b)=>{if(a.tipo!==b.tipo)return a.tipo==="Directo"?-1:1;return (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999);}); }
+        { const { data } = await sb.from("trailers").select("*").eq("sede","neuquen"); trailers = (data||[]).sort((a,b)=> (a.codigo||"").localeCompare(b.codigo||"", "es", {numeric:true})); }
+        { const { data } = await sb.from("feriados").select("*"); feriados = data || []; }
+        { const { data, error } = await sb.from("detalle_diario").select("*").eq("sede","neuquen"); if (error) return errLoad(error); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
+        setEstado("\u2713 " + detalle.length + " registro(s) en el detalle de Neuquén.", "ok");
+        renderDetalleNqn();
         return;
       }
       if (tab === "nqn_parte") {
@@ -940,10 +950,7 @@
       // Lista de tareas de mantenimiento
       if (!mantTareas.length) h += '<p style="color:#A8A69E;font-size:13px">Sin tareas de mantenimiento. Agregá la primera abajo.</p>';
       mantTareas.forEach(t=>{
-        const e = MANT_ESTADOS[t.estado] || MANT_ESTADOS.pendiente;
         const gente = mantPers[t.id] || [];
-        const selEstado = '<select onchange="editarMt(\''+t.id+'\',\'estado\',this.value)" style="width:auto;color:'+e.color+';font-weight:600;background:'+e.bg+'">'
-          + MANT_EST_KEYS.map(k=>'<option value="'+k+'" '+(k===t.estado?'selected':'')+'>'+MANT_ESTADOS[k].label+'</option>').join('') + '</select>';
         const selTrailer = '<select onchange="editarMt(\''+t.id+'\',\'trailer_id\',this.value)" style="min-width:180px">'
           + '<option value="">(elegir trailer)</option>'
           + trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===t.trailer_id?'selected':'')+'>'+((tr.codigo||'(sin código)')).replace(/"/g,'&quot;')+'</option>').join('') + '</select>';
@@ -974,7 +981,7 @@
           : '';
 
         h += '<div class="card">'
-          + '<div class="pl-row" style="align-items:center">'+selTrailer+selEstado+'<button class="btn-del" style="margin-left:auto" onclick="eliminarMt(\''+t.id+'\')">×</button></div>'
+          + '<div class="pl-row" style="align-items:center">'+selTrailer+'<button class="btn-del" style="margin-left:auto" onclick="eliminarMt(\''+t.id+'\')">×</button></div>'
           + infoTrailer
           + '<div class="pl-row" style="margin:8px 0;flex-wrap:wrap">'+selTarea+'</div>'
           + '<div style="font-size:11px;color:#A8A69E;margin:2px 0 4px">Subtareas (tildá una o varias):</div>'
@@ -986,7 +993,7 @@
           + '<div class="chips">'+personasDe("neuquen").map(p=>{ const on=gente.includes(p.id); return '<button class="chip'+(on?' on':'')+'" onclick="toggleMtPersona(\''+t.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+'</button>'; }).join('')+'</div>'
           + '</div>';
       });
-      h += '<div class="row-actions"><button class="btn-add" onclick="agregarMt()">+ Agregar tarea</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
+      h += '<div class="row-actions"><button class="btn-add" onclick="agregarMt()">+ Agregar tarea</button><button class="btn btn-primary" style="background:#3B6D11" onclick="generarDetalleNqn()">Generar detalle diario →</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
       contenido.innerHTML = h;
     }
     // Texto legible de una tarea de mantenimiento: "TAREA · Subtarea", con fallback a descripción libre.
@@ -1960,6 +1967,69 @@
       cargar();
     }
 
+    // ============================================================
+    // GENERADOR DE DETALLE DIARIO — BASE NEUQUÉN
+    // Genera el detalle desde las tareas de mantenimiento (trailer = "proyecto",
+    // tarea = "estación", subtareas = texto). Mismas reglas que La Huella:
+    // pasado congelado (borra solo de hoy en adelante), días extra intactos,
+    // filas con sede='neuquen'. Las horas de la tarea se aplican a CADA día.
+    // ============================================================
+    async function generarDetalleNqn() {
+      const hoy = fechaStr(new Date());
+      // Tareas válidas: con trailer, con fechas y con al menos una persona.
+      const invalidas = [];
+      const validas = mantTareas.filter(t=>{
+        const tieneFechas = t.fecha_desde && t.fecha_hasta && diasHabiles(t.fecha_desde, t.fecha_hasta).length>0;
+        const tienePers = (mantPers[t.id]||[]).length>0;
+        const tieneTrailer = !!t.trailer_id;
+        if(!tieneFechas || !tienePers || !tieneTrailer){ invalidas.push(t); return false; }
+        return true;
+      });
+      if(!validas.length){
+        setEstado("No hay tareas de mantenimiento completas para generar (necesitan trailer, fechas y al menos una persona).","err");
+        return;
+      }
+      // traer detalle existente de Neuquén
+      const { data: existente, error: eEx } = await sb.from("detalle_diario").select("*").eq("sede","neuquen");
+      if (eEx) return setEstado("Error: " + eEx.message, "err");
+      const futConDatos = (existente||[]).filter(d => d.fecha >= hoy && !d.es_extra && (d.ausente || d.horas_extra > 0 || d.estacion_real !== d.estacion_plan || d.persona_real !== d.persona_plan));
+      let aviso = "";
+      if (futConDatos.length > 0) aviso = "\n\nOJO: hay " + futConDatos.length + " registro(s) ya cargados de hoy en adelante que se regeneran y se pierden. (Los días extra no se tocan.)";
+      if(invalidas.length) aviso += "\n\n" + invalidas.length + " tarea(s) quedan afuera por estar incompletas (sin trailer, fechas o personas).";
+      if(!confirm("Generar el detalle diario de Base Neuquén desde "+validas.length+" tarea(s) de mantenimiento, de hoy en adelante."+aviso+"\n\n¿Continuar?")){ setEstado("Generación cancelada.","cargando"); return; }
+      // borrar SOLO el detalle planificado de Neuquén de hoy en adelante; los días extra quedan.
+      const { error: eDel } = await sb.from("detalle_diario").delete().eq("sede","neuquen").gte("fecha", hoy).or("es_extra.is.null,es_extra.eq.false");
+      if (eDel) return setEstado("Error al limpiar futuro: " + eDel.message, "err");
+      // generar filas nuevas de hoy en adelante
+      const filas = [];
+      validas.forEach(t=>{
+        const dias = diasHabiles(t.fecha_desde, t.fecha_hasta).filter(d=> d>=hoy);
+        const gente = mantPers[t.id] || [];
+        const hrs = (t.horas!=null && t.horas!=="") ? Number(t.horas) : 8; // horas POR DÍA
+        gente.forEach(g => dias.forEach(fecha => {
+          if (noDispoEn(g, fecha)) return;
+          const vhPlan = costoHora(g, fecha);
+          filas.push({
+            fecha, sede:"neuquen",
+            persona_plan: g, persona_real: g,
+            proyecto_id: t.trailer_id,          // trailer ocupa el lugar del proyecto
+            estacion_plan: t.tarea||"", subtarea_plan: t.subtarea||"",
+            estacion_real: t.tarea||"", subtarea_real: t.subtarea||"",
+            modulos_plan: null, modulos_real: null,
+            horas_plan: hrs, horas_normales: hrs, horas_extra: 0,
+            ausente: false, valor_hora_plan: vhPlan
+          });
+        }));
+      });
+      if (filas.length > 0) {
+        const { error: eIns } = await sb.from("detalle_diario").insert(filas);
+        if (eIns) return setEstado("Error al generar: " + eIns.message, "err");
+      }
+      registrarLog("crear","detalle","Detalle generado: "+filas.length+" jornada(s)");
+      setEstado("\u2713 Detalle de Neuquén generado: " + filas.length + " registro(s) de hoy en adelante. El pasado quedó intacto.", "ok");
+      cambiarTab("nqn_detalle");
+    }
+
     /* ===== MOTOR DE IMPACTO (costo y tiempo, con signo) =====
        Devuelve:
        - porFila[id] = { costoDelta, costoTipo }  (costoDelta>0 sobrecosto, <0 ahorro)
@@ -2127,6 +2197,84 @@
       planreal: { label:"Plan vs real",bg:"#F1EFE8", fg:"#5F5E5A" }
     };
     function tagOrigen(origen){ const m = ORIGEN_META[origen]||ORIGEN_META.planreal; return '<span style="background:'+m.bg+';color:'+m.fg+';font-size:9.5px;padding:1px 6px;border-radius:5px;font-weight:600;white-space:nowrap">'+m.label+'</span>'; }
+
+    // Render del detalle diario de Neuquén. (Fase 3: grilla editable completa + desvíos.)
+    function renderDetalleNqn() {
+      const hoy = fechaStr(new Date());
+      if (detalle.length === 0) {
+        contenido.innerHTML = '<p style="font-size:13px;color:#888780">Todavía no hay detalle de Neuquén. Andá a <b>Mantenimiento</b>, cargá las tareas (con trailer, fechas, subtareas, horas y personas) y tocá <b>«Generar detalle diario»</b>.</p>';
+        return;
+      }
+      // Grilla de registro diario, adaptada a Neuquén: trailer = "proyecto", tarea = "estación".
+      const ayer = fechaStr(new Date(Date.now() - 86400000));
+      if (detalleDesde === null) detalleDesde = ayer;
+      const filasVisibles = detalleVerTodo ? detalle : detalle.filter(f => f.fecha >= detalleDesde);
+      const ocultas = detalle.length - filasVisibles.length;
+      // horas por persona/día para detectar sobreasignación (todas las tareas cuentan).
+      const horasDia = {};
+      detalle.forEach(f => { if (f.ausente) return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
+
+      let h = '<p style="font-size:13px;color:#888780;margin-top:0">Registro real día por día de Base Neuquén. Editá lo que pasó: cargar horas trabajadas y extra, marcar ausencias. Los días anteriores a hoy son historia (🔒).</p>';
+      h += '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;background:#FAFAF8;border:1px solid #EEECE4;border-radius:10px;padding:8px 12px">';
+      h += '<span style="font-size:12px;color:#888780">Ver desde:</span>';
+      h += '<input type="date" value="'+detalleDesde+'" '+(detalleVerTodo?'disabled':'')+' onchange="detalleDesde=this.value;detalleVerTodo=false;renderDetalleNqn()" style="width:auto">';
+      h += '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:5px 10px;font-size:12px" onclick="detalleDesde=\''+ayer+'\';detalleVerTodo=false;renderDetalleNqn()">Ayer + hoy en adelante</button>';
+      h += '<label style="font-size:12px;color:#888780;display:flex;align-items:center;gap:5px;margin-left:auto"><input type="checkbox" '+(detalleVerTodo?'checked':'')+' onchange="detalleVerTodo=this.checked;renderDetalleNqn()" style="width:auto">Ver todo el historial</label>';
+      if (ocultas > 0 && !detalleVerTodo) h += '<span style="font-size:11.5px;color:#A8A69E;width:100%">'+ocultas+' registro(s) más antiguos ocultos.</span>';
+      h += '</div>';
+      const conf = Object.entries(horasDia).filter(([,v])=>v>8);
+      if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación:</b> '+conf.map(([k,v])=>{const [pid,f]=k.split("|");return nombrePersona(pid)+" ("+dm(f)+"): "+v+"h";}).join(" · ")+'</div>';
+
+      h += '<table><thead><tr><th>Fecha</th><th>Trailer</th><th>Tarea</th><th>Subtareas</th><th>Persona</th><th>H. norm.</th><th>H. extra</th><th>Aus.</th></tr></thead><tbody>';
+      filasVisibles.forEach(f=>{
+        const pasado = f.fecha < hoy;
+        const dis = pasado ? 'disabled' : '';
+        const esHoy = (f.fecha === hoy);
+        const bg = f.es_extra ? 'background:#FAEEDA;box-shadow:inset 3px 0 0 #BA7517' : f.ausente ? 'background:#FCEBEB' : '';
+        const tagExtra = f.es_extra ? ' <span style="background:#BA7517;color:#fff;font-size:9px;padding:1px 5px;border-radius:5px;font-weight:600">EXTRA</span>' : '';
+        const btnSigue = (esHoy && !f.ausente && !f.es_extra)
+          ? ' <button class="btn" title="Esta tarea sigue mañana" style="background:#fff;border:1px solid #BA7517;color:#BA7517;padding:2px 7px;font-size:10.5px;border-radius:6px" onclick="seguirMananaNqn(\''+f.id+'\')">↪ sigue mañana</button>'
+          : '';
+        const trailerNom = (()=>{ const tr=trailers.find(x=>x.id===f.proyecto_id); return tr?(tr.codigo||'(sin código)'):'(trailer)'; })();
+        h += '<tr style="'+bg+'">'
+          + '<td style="white-space:nowrap;color:#888780">'+dm(f.fecha)+(pasado?' 🔒':'')+tagExtra+btnSigue+'</td>'
+          + '<td style="font-size:12px">'+trailerNom+'</td>'
+          + '<td style="font-size:12px">'+(f.estacion_real||'—')+'</td>'
+          + '<td style="font-size:11.5px;color:#5F5E5A">'+(f.subtarea_real||'—')+'</td>'
+          + '<td style="font-size:12px">'+nombrePersona(f.persona_real)+'</td>'
+          + '<td style="width:70px"><input type="number" min="0" value="'+(f.horas_normales!=null?f.horas_normales:'')+'" '+dis+' onchange="editarDetNqn(\''+f.id+'\',\'horas_normales\',this.value)" style="width:60px"></td>'
+          + '<td style="width:70px"><input type="number" min="0" value="'+(f.horas_extra!=null?f.horas_extra:0)+'" '+dis+' onchange="editarDetNqn(\''+f.id+'\',\'horas_extra\',this.value)" style="width:60px"></td>'
+          + '<td style="width:40px;text-align:center"><input type="checkbox" '+(f.ausente?'checked':'')+' '+dis+' onchange="toggleAusenteNqn(\''+f.id+'\',this.checked)"></td>'
+          + '</tr>';
+      });
+      h += '</tbody></table>';
+      h += '<p style="font-size:12px;color:#A8A69E;margin-top:10px">🔒 = día anterior a hoy (no editable). <b style="color:#BA7517">↪ sigue mañana</b> (en filas de hoy): crea una jornada para mañana sin tocar el plan de mantenimiento. Para cambios grandes, editá la tarea en Mantenimiento y regenerá.</p>';
+      h += '<div class="row-actions"><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
+      contenido.innerHTML = h;
+    }
+    // Editar una fila del detalle de Neuquén (horas normales/extra).
+    async function editarDetNqn(id, c, v){
+      const val = (v===""?0:Number(v)); if(isNaN(val)) return setEstado("Valor inválido.","err");
+      const { error } = await sb.from("detalle_diario").update({ [c]: val }).eq("id", id);
+      if (error) return setEstado("Error: "+error.message,"err");
+      const f = detalle.find(x=>x.id===id); if(f) f[c]=val; setEstado("\u2713 Guardado.","ok"); renderDetalleNqn();
+    }
+    // Marcar ausente en el detalle de Neuquén, con la misma opción de correr tareas.
+    async function toggleAusenteNqn(id, aus){
+      const { error } = await sb.from("detalle_diario").update({ ausente: aus }).eq("id", id);
+      if (error) return setEstado("Error: "+error.message,"err");
+      const f = detalle.find(x=>x.id===id); if(f) f.ausente = aus;
+      setEstado("\u2713 Guardado.","ok");
+      if(aus && f){ await ofrecerCorrerDetalle(f); }
+      renderDetalleNqn();
+    }
+    // "Sigue mañana" para Neuquén: crea una jornada extra para mañana desde la fila de hoy.
+    function seguirMananaNqn(id){
+      const f = detalle.find(x=>x.id===id);
+      if(!f){ setEstado("No encontré la fila.","err"); return; }
+      const manana = sumarDiasHabiles(hoyISO(), 1);
+      abrirDiaExtraNqn({ fecha: manana, trailer_id: f.proyecto_id, persona: f.persona_real, tarea: f.estacion_real, subtarea: f.subtarea_real, origenFilaId: f.id });
+    }
 
     function renderDetalle() {
       if (detalle.length === 0) { contenido.innerHTML = '<p style="font-size:13px;color:#888780">Todavía no hay detalle. Andá a Planificación General, completá la asignación y tocá "Generar detalle diario".</p>'; return; }
@@ -2550,6 +2698,60 @@
           }
         }
       }
+    }
+
+    /* ---- DÍA EXTRA — BASE NEUQUÉN (trabajo real no planificado sobre un trailer) ---- */
+    function abrirDiaExtraNqn(pre){
+      cerrarDiaExtra();
+      pre = pre || {};
+      const fechaDefault = pre.fecha || fechaStr(new Date());
+      const sel = (v,val)=> (String(v)===String(val)?' selected':'');
+      const optTrailer = trailers.map(tr=>'<option value="'+tr.id+'"'+sel(tr.id, pre.trailer_id)+'>'+((tr.codigo||'(sin código)')).replace(/"/g,'&quot;')+'</option>').join('');
+      const optPers = personasDe("neuquen").map(p=>'<option value="'+p.id+'"'+sel(p.id, pre.persona)+'>'+p.nombre+'</option>').join('');
+      const cats = Object.keys(tareasDeMant()).sort((a,b)=>a.localeCompare(b,"es"));
+      const optTarea = cats.map(c=>'<option value="'+c.replace(/"/g,'&quot;')+'"'+sel(c, pre.tarea)+'>'+c+'</option>').join('');
+      const ov = document.createElement("div"); ov.id="ovExtra"; ov.dataset.origen = pre.origenFilaId||"";
+      ov.style.cssText = "position:fixed;inset:0;background:rgba(44,44,42,.45);display:flex;align-items:center;justify-content:center;z-index:2000;padding:16px";
+      ov.innerHTML = '<div style="background:#fff;border-radius:16px;max-width:460px;width:100%;padding:22px;box-shadow:0 12px 40px rgba(0,0,0,.2)">'
+        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="background:#BA7517;color:#fff;font-size:10px;padding:2px 7px;border-radius:5px;font-weight:600">EXTRA</span><div style="font-size:17px;font-weight:700">Jornada no planificada (Neuquén)</div></div>'
+        + '<p style="font-size:12px;color:#888780;margin:0 0 16px">Trabajo real sobre un trailer que no estaba en el plan de mantenimiento. Genera sobrecosto cuando el día cierre y no se borra al regenerar.</p>'
+        + '<div style="display:flex;flex-direction:column;gap:10px">'
+        + '<label style="font-size:12px;color:#5F5E5A">Fecha<input id="ex_fecha" type="date" value="'+fechaDefault+'" style="width:100%;margin-top:3px"></label>'
+        + '<label style="font-size:12px;color:#5F5E5A">Trailer<select id="ex_trailer" style="width:100%;margin-top:3px">'+optTrailer+'</select></label>'
+        + '<label style="font-size:12px;color:#5F5E5A">Persona<select id="ex_pers" style="width:100%;margin-top:3px">'+optPers+'</select></label>'
+        + '<label style="font-size:12px;color:#5F5E5A">Tarea<select id="ex_tarea" style="width:100%;margin-top:3px"><option value="">(elegir)</option>'+optTarea+'</select></label>'
+        + '<div style="display:flex;gap:10px"><label style="font-size:12px;color:#5F5E5A;flex:1">Horas normales<input id="ex_hn" type="number" value="8" min="0" style="width:100%;margin-top:3px"></label>'
+        + '<label style="font-size:12px;color:#5F5E5A;flex:1">Horas extra<input id="ex_he" type="number" value="0" min="0" style="width:100%;margin-top:3px"></label></div>'
+        + '</div>'
+        + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px"><button class="btn" onclick="cerrarDiaExtra()">Cancelar</button><button class="btn btn-primary" style="background:#BA7517" onclick="guardarDiaExtraNqn()">Crear jornada</button></div></div>';
+      document.body.appendChild(ov);
+      ov.addEventListener("mousedown", e=>{ if(e.target===ov) cerrarDiaExtra(); });
+    }
+    async function guardarDiaExtraNqn(){
+      const fecha=document.getElementById("ex_fecha").value;
+      const trailer_id=document.getElementById("ex_trailer").value;
+      const persona=document.getElementById("ex_pers").value;
+      const tarea=document.getElementById("ex_tarea").value;
+      const hn=Number(document.getElementById("ex_hn").value)||0;
+      const he=Number(document.getElementById("ex_he").value)||0;
+      if(!fecha){ setEstado("Falta la fecha.","err"); return; }
+      if(!trailer_id){ setEstado("Falta el trailer.","err"); return; }
+      if(!persona){ setEstado("Falta la persona.","err"); return; }
+      if(hn<=0 && he<=0){ setEstado("Cargá al menos horas normales o extra.","err"); return; }
+      const fila = { fecha, sede:"neuquen", persona_plan:persona, persona_real:persona, proyecto_id:trailer_id,
+        estacion_plan:tarea||"", subtarea_plan:"", estacion_real:tarea||"", subtarea_real:"",
+        modulos_plan:null, modulos_real:null, horas_plan:0, horas_normales:hn, horas_extra:he, ausente:false, es_extra:true };
+      const { data, error } = await sb.from("detalle_diario").insert(fila).select();
+      if(error) return setEstado("Error: "+error.message,"err");
+      if(data && data[0]) detalle.push(data[0]);
+      detalle.sort((a,b)=> a.fecha<b.fecha?-1:a.fecha>b.fecha?1:0);
+      const ov=document.getElementById("ovExtra"); const origen = ov?ov.dataset.origen:"";
+      cerrarDiaExtra();
+      registrarLog("crear","detalle","Jornada extra "+dmy(fecha));
+      setEstado("\u2713 Jornada creada.","ok");
+      renderDetalleNqn();
+      const yaTenia = detalle.some(x=> x.persona_real===persona && x.fecha===fila.fecha && !x.ausente && !(data&&data[0]&&x.id===data[0].id));
+      if(yaTenia && origen){ const filaRef=detalle.find(x=>x.id===origen); if(filaRef){ await ofrecerCorrerDetalle(filaRef, "tiene una jornada nueva el "+dmy(fila.fecha)+" que se superpone"); renderDetalleNqn(); } }
     }
 
     /* ---- DASHBOARD ---- */
