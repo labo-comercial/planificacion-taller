@@ -218,6 +218,7 @@
     let detalleVerTodo = false;
     let planiDesde = null;     // filtro de visualización en Planificación General (null = aún sin fijar)
     let planiVerTodo = false;
+    let planiResaltar = null;  // {persona, fecha, bloques:[ids]} para resaltar tras saltar a un conflicto
     let impactoProy = "";      // filtro de proyecto del panel de impacto ("" = todos)
     function setImpactoProy(pid){ impactoProy = (impactoProy===pid ? "" : pid); renderDetalle(); }
     let proyVista = "operacion";   // vista de la pestaña Proyectos: "operacion" | "cotizaciones" | "archivados"
@@ -1430,6 +1431,9 @@
       });
       const directos = personas.filter(p => p.tipo !== "Contratista");
       const faltantes = [], excesos = [];
+      const faltantesObj = [], excesosObj = [];
+      // Para excesos: qué bloques (estaciones) tiene esa persona ese día (para resaltarlos al saltar).
+      const bloquesDe = (pid, d) => plani.filter(b => (planiPers[b.id]||[]).includes(pid) && diasHabiles(b.fecha_desde,b.fecha_hasta).includes(d)).map(b=>b.id);
       fechas.forEach(d => {
         directos.forEach(p => {
           if (noDispoEn(p.id, d)) return;
@@ -1439,17 +1443,65 @@
           // Si supervisa ese día, queda cubierto por las 8h de supervisión; el trabajo en
           // estación es paralelo y no se suma (ni cuenta como exceso).
           if (hSup > 0) {
-            if (hSup < 8) faltantes.push(nombrePersona(p.id) + " · " + dm(d) + " (supervisión < 8h)");
-            else if (hSup > 8) excesos.push(nombrePersona(p.id) + " · " + dm(d) + " (supervisión > 8h)");
+            if (hSup < 8) { faltantes.push(nombrePersona(p.id) + " · " + dm(d) + " (supervisión < 8h)"); faltantesObj.push({persona:p.id, fecha:d, txt:nombrePersona(p.id)+" · "+dm(d)+" (supervisión < 8h)", bloques:[]}); }
+            else if (hSup > 8) { excesos.push(nombrePersona(p.id) + " · " + dm(d) + " (supervisión > 8h)"); excesosObj.push({persona:p.id, fecha:d, txt:nombrePersona(p.id)+" · "+dm(d)+" (supervisión > 8h)", bloques:[]}); }
             return;
           }
           // Sin supervisión: cuenta el trabajo en estación como cualquier directo.
-          if (hEst < 8) faltantes.push(nombrePersona(p.id) + " · " + dm(d));
-          else if (hEst > 8) excesos.push(nombrePersona(p.id) + " · " + dm(d));
+          if (hEst < 8) { faltantes.push(nombrePersona(p.id) + " · " + dm(d)); faltantesObj.push({persona:p.id, fecha:d, txt:nombrePersona(p.id)+" · "+dm(d), bloques:bloquesDe(p.id,d)}); }
+          else if (hEst > 8) { excesos.push(nombrePersona(p.id) + " · " + dm(d)); excesosObj.push({persona:p.id, fecha:d, txt:nombrePersona(p.id)+" · "+dm(d), bloques:bloquesDe(p.id,d)}); }
         });
       });
       const cubierto = faltantes.length===0 && excesos.length===0 && fechas.length>0;
-      return { fechas, faltantes: [...new Set(faltantes)], excesos: [...new Set(excesos)], ok: VALIDAR_COBERTURA ? cubierto : (fechas.length>0), cubiertoReal: cubierto };
+      // Deduplicar los objetos por persona|fecha (mismo criterio que el Set de strings).
+      const dedup = (arr) => { const seen=new Set(), out=[]; arr.forEach(o=>{ const k=o.persona+"|"+o.fecha; if(!seen.has(k)){ seen.add(k); out.push(o); } }); return out; };
+      return { fechas, faltantes: [...new Set(faltantes)], excesos: [...new Set(excesos)], faltantesObj: dedup(faltantesObj), excesosObj: dedup(excesosObj), ok: VALIDAR_COBERTURA ? cubierto : (fechas.length>0), cubiertoReal: cubierto };
+    }
+    // Salta a Planificación General y resalta la persona/estaciones de un conflicto.
+    // Se invoca desde las alertas clickeables (cobertura en plani, sobreasignación en detalle).
+    function saltarAConflicto(personaId, fechaISO, bloquesCSV){
+      const bloques = (bloquesCSV||"").split(",").map(s=>s.trim()).filter(Boolean);
+      planiResaltar = { persona: personaId, fecha: fechaISO, bloques };
+      // Asegurar que la fecha del conflicto sea visible: si el filtro "ver desde" la esconde, ampliarlo.
+      if (!planiVerTodo && planiDesde && fechaISO < planiDesde) planiDesde = fechaISO;
+      // Cambiar a Planificación General (cambiarTab llama a cargar, que re-renderiza y aplica el resaltado).
+      cambiarTab("plani");
+    }
+    // Aplica el resaltado visual tras renderizar Planificación General (scroll + highlight temporal).
+    function aplicarResaltadoPlani(){
+      if(!planiResaltar) return;
+      const r = planiResaltar; planiResaltar = null; // consumir una sola vez
+      setTimeout(()=>{
+        // Bloques a resaltar: si el conflicto trae bloques (exceso o falta con estaciones), esos.
+        let ids = r.bloques && r.bloques.length ? r.bloques.slice() : [];
+        // Si no hay bloques (p. ej. falta total de cobertura), resaltar todas las estaciones de esa fecha.
+        if(!ids.length){ ids = plani.filter(b=>diasHabiles(b.fecha_desde,b.fecha_hasta).includes(r.fecha)).map(b=>b.id); }
+        let primero = null;
+        ids.forEach(bid=>{
+          const el = document.getElementById("plibloque-"+bid);
+          if(!el) return;
+          if(!primero) primero = el;
+          const prev = el.style.boxShadow;
+          el.style.transition = "box-shadow .3s, background .3s";
+          el.style.boxShadow = "0 0 0 3px #BA7517, 0 4px 16px rgba(186,117,23,.35)";
+          // Resaltar el chip de la persona dentro del bloque, si está.
+          el.querySelectorAll(".chip.on").forEach(chip=>{
+            if(chip.textContent.replace(/[◇⚠\s]+$/,"").trim() === nombrePersona(r.persona)){
+              chip.style.outline = "2px solid #BA7517"; chip.style.outlineOffset = "1px";
+            }
+          });
+          setTimeout(()=>{ el.style.boxShadow = prev || "0 1px 4px rgba(44,44,42,0.05)"; }, 4000);
+        });
+        if(primero){ primero.scrollIntoView({behavior:"smooth", block:"center"}); }
+        else { setEstado("No encontré la estación del conflicto (puede estar fuera del filtro de fecha; probá «Ver todo»).","cargando"); }
+      }, 120);
+    }
+    // Genera un ítem de conflicto clickeable para las alertas.
+    function chipConflicto(o, color){
+      const b = (o.bloques||[]).join(",");
+      return '<a href="javascript:void(0)" onclick="saltarAConflicto(\''+o.persona+'\',\''+o.fecha+'\',\''+b+'\')" '
+        + 'style="color:'+color+';text-decoration:underline;text-decoration-style:dotted;cursor:pointer" '
+        + 'title="Ir a Planificación General y resaltar este conflicto">'+o.txt+'</a>';
     }
     function renderPlani() {
       let h = '<p style="font-size:13px;color:#888780;margin-top:0">Agregá estaciones, asignalas a un proyecto, elegí tarea, fechas y gente. Para generar el detalle, cada día todo el personal directo disponible debe estar asignado a su jornada.</p>';
@@ -1457,14 +1509,14 @@
       const val = validarCobertura();
       if (!VALIDAR_COBERTURA && plani.length > 0) {
         if (val.faltantes.length) {
-          h += '<div class="estado cargando" style="margin-bottom:12px">ℹ️ <b>Cobertura incompleta.</b> Podés generar el detalle igual; esto es solo un aviso. <span style="color:#A8A69E">Sin asignar hoy: '+val.faltantes.slice(0,6).join(" · ")+(val.faltantes.length>6?"…":"")+'</span></div>';
+          h += '<div class="estado cargando" style="margin-bottom:12px">ℹ️ <b>Cobertura incompleta.</b> Podés generar el detalle igual; esto es solo un aviso. <span style="color:#A8A69E">Sin asignar (tocá para resolver): '+val.faltantesObj.slice(0,6).map(o=>chipConflicto(o,"#8A6A2A")).join(" · ")+(val.faltantesObj.length>6?"…":"")+'</span></div>';
         } else {
           h += '<div class="estado ok" style="margin-bottom:12px">✓ Cobertura completa. Todo el personal directo disponible está asignado cada día.</div>';
         }
       } else if (plani.length > 0 && !val.ok) {
         h += '<div class="estado err" style="margin-bottom:12px"><b>⚠ No se puede generar el detalle todavía.</b> Cada día, todo el personal directo disponible debe estar asignado a su jornada (los de vacaciones/licencia y los contratistas se excluyen).';
-        if (val.faltantes.length) h += '<div style="margin-top:4px">Sin asignar: ' + val.faltantes.slice(0,10).join(" · ") + (val.faltantes.length>10?(" … y "+(val.faltantes.length-10)+" más"):"") + '</div>';
-        if (val.excesos.length) h += '<div style="margin-top:4px">Sobreasignados (+8h): ' + val.excesos.slice(0,8).join(" · ") + '</div>';
+        if (val.faltantes.length) h += '<div style="margin-top:4px">Sin asignar (tocá para resolver): ' + val.faltantesObj.slice(0,10).map(o=>chipConflicto(o,"#A32D2D")).join(" · ") + (val.faltantesObj.length>10?(" … y "+(val.faltantesObj.length-10)+" más"):"") + '</div>';
+        if (val.excesos.length) h += '<div style="margin-top:4px">Sobreasignados (+8h) (tocá para resolver): ' + val.excesosObj.slice(0,8).map(o=>chipConflicto(o,"#A32D2D")).join(" · ") + '</div>';
         h += '</div>';
       } else if (plani.length > 0 && val.ok) {
         h += '<div class="estado ok" style="margin-bottom:12px">✓ Cobertura completa. Todo el personal directo disponible está asignado cada día.</div>';
@@ -1492,7 +1544,7 @@
         const st = STATIONS[b.estacion]; if (!st) return;
         const gente = planiPers[b.id] || [];
         const subsSel = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
-        h += '<div class="card" style="border:1px solid #E6E4DC;border-left:6px solid '+st.color+';border-radius:12px;margin-bottom:16px;padding:0;overflow:hidden;box-shadow:0 1px 4px rgba(44,44,42,0.05)">'
+        h += '<div class="card" id="plibloque-'+b.id+'" style="border:1px solid #E6E4DC;border-left:6px solid '+st.color+';border-radius:12px;margin-bottom:16px;padding:0;overflow:hidden;box-shadow:0 1px 4px rgba(44,44,42,0.05)">'
           + '<div class="pl-row" style="background:'+st.bg+';margin:0;padding:12px 14px;border-bottom:1px solid '+st.color+'22"><span class="estpill" style="background:'+st.color+';color:#fff;min-width:130px;display:inline-block;text-align:center;font-weight:600">'+st.label+'</span>'
           + '<select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px">'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>'
           + '<button class="btn-del" style="margin-left:auto" onclick="eliminarPl(\''+b.id+'\')">×</button></div>'
@@ -1519,9 +1571,11 @@
       h += '<button class="btn btn-add" onclick="agregarEstacionDefault()">Cargar las 20 estaciones</button>';
       h += '<button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button>';
       h += '<button class="btn btn-primary" style="background:'+(val.ok?'#185FA5':'#A8A69E')+';cursor:'+(val.ok?'pointer':'not-allowed')+'" '+(val.ok?'':'disabled')+' onclick="generarDetalle()">Generar detalle diario →</button>';
+      h += '<button class="btn" title="Uso excepcional: rellena el detalle de UN día puntual que quedó sin generar (p. ej. un día pasado). No toca lo ya cargado." style="background:#fff;border:1px solid #BA7517;color:#BA7517;padding:6px 12px" onclick="generarDetalleFecha()">🩹 Rellenar un día suelto…</button>';
       h += '</div>';
       contenido.innerHTML = h;
       document.getElementById("selAgregar").onchange = function(){ if(this.value){ agregarEstacion(this.value); } };
+      aplicarResaltadoPlani();
     }
     // Panel de línea base: por cada proyecto con planificación, muestra estado y acción.
     function bloqueLineaBase(){
@@ -1748,6 +1802,73 @@
       cargar();
     }
 
+    // GENERACIÓN DE EXCEPCIÓN: rellena el detalle de UNA fecha puntual que quedó sin generar.
+    // No borra nada. Solo crea las filas que faltan para ese día (misma persona+estación+proyecto),
+    // respetando el candado del pasado: si el día ya tiene una fila, esa fila no se toca.
+    // Pensado para tapar huecos (p. ej. un día pasado que nunca se generó porque "Generar detalle"
+    // solo alcanza de hoy en adelante). NO es el flujo normal de planificación.
+    async function generarDetalleFecha() {
+      const val = validarCobertura();
+      // Aviso claro de uso excepcional.
+      const seguir = confirm(
+        "RELLENAR UN DÍA SUELTO — uso excepcional\n\n"
+        + "Esto sirve solo para tapar un hueco: un día que quedó SIN detalle generado (por ejemplo, un día pasado).\n\n"
+        + "• Crea únicamente las jornadas que falten para ese día, tomándolas del plan.\n"
+        + "• NO toca ninguna fila ya cargada (respeta el candado del pasado).\n"
+        + "• NO es el flujo normal: para planificar a futuro usá «Generar detalle diario».\n\n"
+        + "¿Continuar?"
+      );
+      if (!seguir) { setEstado("Cancelado.", "cargando"); return; }
+      const fecha = prompt("Fecha a rellenar (formato AAAA-MM-DD).\nEjemplo: 2026-07-06", "");
+      if (!fecha) { setEstado("Cancelado.", "cargando"); return; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) { setEstado("Fecha inválida. Usá el formato AAAA-MM-DD.", "err"); return; }
+      // No permitir rellenar un día no hábil (finde/feriado) salvo que se decida trabajar.
+      const d = new Date(fecha + "T12:00:00");
+      const finde = (d.getDay() === 0 || d.getDay() === 6);
+      if ((finde || esFeriado(fecha)) && !confirm("El " + dmy(fecha) + " es fin de semana o feriado. ¿Rellenarlo igual?")) { setEstado("Cancelado.", "cargando"); return; }
+      // Traer lo ya cargado ese día para no duplicar.
+      const { data: exist, error: eEx } = await sb.from("detalle_diario").select("*").eq("fecha", fecha);
+      if (eEx) return setEstado("Error: " + eEx.message, "err");
+      const yaHay = new Set((exist||[]).map(r => r.persona_real + "|" + r.estacion_real + "|" + r.proyecto_id));
+      const filas = [];
+      // Estaciones: recorrer el plan y quedarse con los bloques que cubren esa fecha.
+      plani.forEach(b => {
+        const dias = diasHabiles(b.fecha_desde, b.fecha_hasta);
+        if (!dias.includes(fecha)) return;
+        const gente = planiPers[b.id] || [];
+        gente.forEach(g => {
+          if (noDispoEn(g, fecha)) return;
+          const clave = g + "|" + b.estacion + "|" + b.proyecto_id;
+          if (yaHay.has(clave)) return; // ya existe: no pisar
+          const hrs = (planiHoras[b.id] && planiHoras[b.id][g]!=null) ? planiHoras[b.id][g] : 8;
+          const vhPlan = costoHora(g, fecha);
+          filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, modulos_plan: b.modulos||null, modulos_real: b.modulos||null, horas_plan: hrs, horas_normales: hrs, horas_extra: 0, ausente: false, valor_hora_plan: vhPlan });
+        });
+      });
+      // Supervisión: misma lógica, un supervisor por día si el bloque cubre la fecha.
+      supervisiones.forEach(s => {
+        const ids = (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean);
+        if (!ids.length) return;
+        const dias = diasHabiles(s.fecha_desde, s.fecha_hasta);
+        if (!dias.includes(fecha)) return;
+        if (noDispoEn(s.supervisor_id, fecha)) return;
+        const clave = s.supervisor_id + "|" + SUP_MARK + "|" + ids[0];
+        if (yaHay.has(clave)) return;
+        const nombres = ids.map(nombreProy).join(", ");
+        const hrs = (s.horas != null ? s.horas : 8);
+        const vhPlanS = costoHora(s.supervisor_id, fecha);
+        filas.push({ fecha, persona_plan: s.supervisor_id, persona_real: s.supervisor_id, proyecto_id: ids[0], estacion_plan: SUP_MARK, subtarea_plan: nombres, estacion_real: SUP_MARK, subtarea_real: nombres, modulos_plan: null, modulos_real: null, horas_plan: hrs, horas_normales: hrs, horas_extra: 0, ausente: false, valor_hora_plan: vhPlanS });
+      });
+      if (!filas.length) {
+        setEstado("No hay nada para rellenar el " + dmy(fecha) + ": o no había plan para ese día, o ya estaba todo cargado.", "cargando");
+        return;
+      }
+      const { error: eIns } = await sb.from("detalle_diario").insert(filas);
+      if (eIns) return setEstado("Error al rellenar: " + eIns.message, "err");
+      setEstado("\u2713 " + dmy(fecha) + " rellenado: " + filas.length + " jornada(s) creada(s) desde el plan. Lo que ya estaba cargado no se tocó.", "ok");
+      cargar();
+    }
+
     /* ===== MOTOR DE IMPACTO (costo y tiempo, con signo) =====
        Devuelve:
        - porFila[id] = { costoDelta, costoTipo }  (costoDelta>0 sobrecosto, <0 ahorro)
@@ -1948,7 +2069,12 @@
       if (ocultas > 0 && !detalleVerTodo) h += '<span style="font-size:11.5px;color:#A8A69E;width:100%">'+ocultas+' registro(s) más antiguos ocultos. Cambiá la fecha o tildá "Ver todo" para consultarlos.</span>';
       h += '</div>';
       const conf = Object.entries(horasDia).filter(([,v])=>v>8);
-      if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación:</b> '+conf.map(([k,v])=>{const [pid,f]=k.split("|");return nombrePersona(pid)+" ("+dm(f)+"): "+v+"h";}).join(" · ")+'</div>';
+      if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación</b> (tocá para resolver en Planificación General): '+conf.map(([k,v])=>{
+          const [pid,f]=k.split("|");
+          const bloques = plani.filter(b=>(planiPers[b.id]||[]).includes(pid) && diasHabiles(b.fecha_desde,b.fecha_hasta).includes(f)).map(b=>b.id).join(",");
+          const txt = nombrePersona(pid)+" ("+dm(f)+"): "+v+"h";
+          return '<a href="javascript:void(0)" onclick="saltarAConflicto(\''+pid+'\',\''+f+'\',\''+bloques+'\')" style="color:#A32D2D;text-decoration:underline;text-decoration-style:dotted;cursor:pointer" title="Ir a Planificación General y resaltar este conflicto">'+txt+'</a>';
+        }).join(" · ")+'</div>';
 
       // ---- Resumen de impacto (costo y tiempo, plan vs real) ----
       const imp = calcularImpacto();
