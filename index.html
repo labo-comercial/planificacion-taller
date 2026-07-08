@@ -400,14 +400,14 @@
         const { data: pp, error: e2 } = await sb.from("planificacion_personal").select("*"); if (e2) return errLoad(e2);
         planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); });
         { const { data: sv } = await sb.from("supervision").select("*").order("creado_en", { ascending: true }); supervisiones = sv || []; }
-        { const { data } = await sb.from("detalle_diario").select("*"); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
+        { const { data } = await sb.from("detalle_diario").select("*").eq("sede","la_huella"); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
         await cargarLineasBase();
         setEstado("\u2713 " + plani.length + " estación(es) planificada(s).", "ok"); renderPlani();
       } else if (tab === "detalle") {
         await asegurarBase();
         { const { data } = await sb.from("planificacion").select("*").order("creado_en", { ascending: true }); plani = data || []; }
         { const { data: pp } = await sb.from("planificacion_personal").select("*"); planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); }); }
-        const { data, error } = await sb.from("detalle_diario").select("*"); if (error) return errLoad(error);
+        const { data, error } = await sb.from("detalle_diario").select("*").eq("sede","la_huella"); if (error) return errLoad(error);
         detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0);
         await cargarLineasBase();
         setEstado("\u2713 " + detalle.length + " registro(s) en el detalle.", "ok"); renderDetalle();
@@ -418,7 +418,7 @@
         { const { data } = await sb.from("planificacion").select("*").order("creado_en", { ascending: true }); plani = data || []; }
         { const { data: pp } = await sb.from("planificacion_personal").select("*"); planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); }); }
         { const { data: sv } = await sb.from("supervision").select("*"); supervisiones = sv || []; }
-        { const { data } = await sb.from("detalle_diario").select("*"); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
+        { const { data } = await sb.from("detalle_diario").select("*").eq("sede","la_huella"); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
         await cargarLineasBase();
         setEstado("\u2713 Datos cargados.", "ok");
         if (tab === "dash") renderDash();
@@ -1857,7 +1857,7 @@
       }
       const hoy = fechaStr(new Date());
       // traer detalle existente
-      const { data: existente, error: eEx } = await sb.from("detalle_diario").select("*");
+      const { data: existente, error: eEx } = await sb.from("detalle_diario").select("*").eq("sede","la_huella");
       if (eEx) return setEstado("Error: " + eEx.message, "err");
       // ¿hay algo cargado (real) en días futuros (>= hoy)? (los días extra NO se borran, no cuentan acá)
       const futConDatos = (existente||[]).filter(d => d.fecha >= hoy && !d.es_extra && (d.ausente || d.horas_extra > 0 || d.estacion_real !== d.estacion_plan || d.persona_real !== d.persona_plan));
@@ -1866,7 +1866,7 @@
       }
       // borrar SOLO el detalle planificado de hoy en adelante; los días extra quedan intactos.
       // (es_extra distinto de true cubre tanto false como NULL en filas viejas)
-      const { error: eDel } = await sb.from("detalle_diario").delete().gte("fecha", hoy).or("es_extra.is.null,es_extra.eq.false");
+      const { error: eDel } = await sb.from("detalle_diario").delete().eq("sede","la_huella").gte("fecha", hoy).or("es_extra.is.null,es_extra.eq.false");
       if (eDel) return setEstado("Error al limpiar futuro: " + eDel.message, "err");
       // generar filas nuevas de hoy en adelante
       const filas = [];
@@ -1877,7 +1877,7 @@
           if (noDispoEn(g, fecha)) return; // no genera filas para días no disponibles
           const hrs = (planiHoras[b.id] && planiHoras[b.id][g]!=null) ? planiHoras[b.id][g] : 8;
           const vhPlan = costoHora(g, fecha); // valor-hora asumido al planificar (futuro sin valor → base actual)
-          filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, modulos_plan: b.modulos||null, modulos_real: b.modulos||null, horas_plan: hrs, horas_normales: hrs, horas_extra: 0, ausente: false, valor_hora_plan: vhPlan });
+          filas.push({ fecha, sede:"la_huella", persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, modulos_plan: b.modulos||null, modulos_real: b.modulos||null, horas_plan: hrs, horas_normales: hrs, horas_extra: 0, ausente: false, valor_hora_plan: vhPlan });
         }));
       });
       // supervisión: una fila por supervisor por día, con la marca SUP_MARK y los proyectos como "tarea"
@@ -1890,7 +1890,7 @@
         dias.forEach(fecha => {
           if (noDispoEn(s.supervisor_id, fecha)) return;
           const vhPlanS = costoHora(s.supervisor_id, fecha);
-          filas.push({ fecha, persona_plan: s.supervisor_id, persona_real: s.supervisor_id, proyecto_id: ids[0], estacion_plan: SUP_MARK, subtarea_plan: nombres, estacion_real: SUP_MARK, subtarea_real: nombres, modulos_plan: null, modulos_real: null, horas_plan: hrs, horas_normales: hrs, horas_extra: 0, ausente: false, valor_hora_plan: vhPlanS });
+          filas.push({ fecha, sede:"la_huella", persona_plan: s.supervisor_id, persona_real: s.supervisor_id, proyecto_id: ids[0], estacion_plan: SUP_MARK, subtarea_plan: nombres, estacion_real: SUP_MARK, subtarea_real: nombres, modulos_plan: null, modulos_real: null, horas_plan: hrs, horas_normales: hrs, horas_extra: 0, ausente: false, valor_hora_plan: vhPlanS });
         });
       });
       if (filas.length > 0) {
@@ -1920,7 +1920,7 @@
       const d = new Date(fecha + "T12:00:00");
       const finde = (d.getDay() === 0 || d.getDay() === 6);
       if ((finde || esFeriado(fecha)) && !confirm("El " + dmy(fecha) + " es fin de semana o feriado. ¿Rellenarlo igual?")) { setEstado("Cancelado.", "cargando"); return; }
-      const { data: exist, error: eEx } = await sb.from("detalle_diario").select("*").eq("fecha", fecha);
+      const { data: exist, error: eEx } = await sb.from("detalle_diario").select("*").eq("sede","la_huella").eq("fecha", fecha);
       if (eEx) return setEstado("Error: " + eEx.message, "err");
       const yaHay = new Set((exist||[]).map(r => r.persona_real + "|" + r.estacion_real + "|" + r.proyecto_id));
       const filas = [];
@@ -1934,7 +1934,7 @@
           if (yaHay.has(clave)) return;
           const hrs = (planiHoras[b.id] && planiHoras[b.id][g]!=null) ? planiHoras[b.id][g] : 8;
           const vhPlan = costoHora(g, fecha);
-          filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, modulos_plan: b.modulos||null, modulos_real: b.modulos||null, horas_plan: hrs, horas_normales: hrs, horas_extra: 0, ausente: false, valor_hora_plan: vhPlan });
+          filas.push({ fecha, sede:"la_huella", persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, modulos_plan: b.modulos||null, modulos_real: b.modulos||null, horas_plan: hrs, horas_normales: hrs, horas_extra: 0, ausente: false, valor_hora_plan: vhPlan });
         });
       });
       supervisiones.forEach(s => {
@@ -1948,7 +1948,7 @@
         const nombres = ids.map(nombreProy).join(", ");
         const hrs = (s.horas != null ? s.horas : 8);
         const vhPlanS = costoHora(s.supervisor_id, fecha);
-        filas.push({ fecha, persona_plan: s.supervisor_id, persona_real: s.supervisor_id, proyecto_id: ids[0], estacion_plan: SUP_MARK, subtarea_plan: nombres, estacion_real: SUP_MARK, subtarea_real: nombres, modulos_plan: null, modulos_real: null, horas_plan: hrs, horas_normales: hrs, horas_extra: 0, ausente: false, valor_hora_plan: vhPlanS });
+        filas.push({ fecha, sede:"la_huella", persona_plan: s.supervisor_id, persona_real: s.supervisor_id, proyecto_id: ids[0], estacion_plan: SUP_MARK, subtarea_plan: nombres, estacion_real: SUP_MARK, subtarea_real: nombres, modulos_plan: null, modulos_real: null, horas_plan: hrs, horas_normales: hrs, horas_extra: 0, ausente: false, valor_hora_plan: vhPlanS });
       });
       if (!filas.length) {
         setEstado("No hay nada para rellenar el " + dmy(fecha) + ": o no había plan para ese día, o ya estaba todo cargado.", "cargando");
@@ -2515,7 +2515,7 @@
       const mods = [...document.querySelectorAll('#ex_mods .chip.on')].map(b=>b.getAttribute("data-mod")).join(", ");
       // es_extra=true y horas_plan=0 → todo el peso cae como sobrecosto.
       const fila = {
-        fecha, persona_plan: persona, persona_real: persona, proyecto_id,
+        fecha, sede: SEDE, persona_plan: persona, persona_real: persona, proyecto_id,
         estacion_plan: est, subtarea_plan: sub, estacion_real: est, subtarea_real: sub,
         modulos_plan: mods||null, modulos_real: mods||null,
         horas_plan: 0, horas_normales: hn, horas_extra: he, ausente: false, es_extra: true
