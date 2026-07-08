@@ -2371,7 +2371,9 @@
       let cand;
       if(candTodo.length === candTarea.length){
         const msg = nombrePersona(filaRef.persona_real)+" "+motivo+".\n\n"
-          + "¿Correr sus "+candTarea.length+" día(s) futuro(s) un día hábil hacia adelante?\n\n"
+          + "Sus tareas siguientes ("+candTarea.length+" día/s futuro/s) quedaron desfasadas. ¿Qué hacemos?\n\n"
+          + "• Aceptar = ARRASTRAR todo automáticamente (corre esos "+candTarea.length+" día/s un día hábil hacia adelante).\n"
+          + "• Cancelar = NO tocar nada; lo ajusto yo después en Planificación General.\n\n"
           + "(De hoy en adelante. El pasado no se toca.)";
         if(!confirm(msg)) return;
         cand = candTarea;
