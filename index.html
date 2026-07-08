@@ -946,7 +946,7 @@
           + MANT_EST_KEYS.map(k=>'<option value="'+k+'" '+(k===t.estado?'selected':'')+'>'+MANT_ESTADOS[k].label+'</option>').join('') + '</select>';
         const selTrailer = '<select onchange="editarMt(\''+t.id+'\',\'trailer_id\',this.value)" style="min-width:180px">'
           + '<option value="">(elegir trailer)</option>'
-          + trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===t.trailer_id?'selected':'')+'>'+nombreTrailer(tr.id).replace(/"/g,'&quot;')+'</option>').join('') + '</select>';
+          + trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===t.trailer_id?'selected':'')+'>'+((tr.codigo||'(sin código)')).replace(/"/g,'&quot;')+'</option>').join('') + '</select>';
         // Datos del trailer seleccionado (IF, tipo, medida) — informativos, no editables.
         const trSel = trailers.find(x=>x.id===t.trailer_id);
         const infoTrailer = trSel
