@@ -218,6 +218,8 @@
     let detalleVerTodo = false;
     let planiDesde = null;     // filtro de visualización en Planificación General (null = aún sin fijar)
     let planiVerTodo = false;
+    let planiProy = "";        // filtro por proyecto en Planificación General ("" = todos)
+    let planiOrdenFecha = false; // toggle: ordenar estaciones por fecha de inicio
     let planiResaltar = null;  // {persona, fecha, bloques:[ids]} para resaltar tras saltar a un conflicto
     let impactoProy = "";      // filtro de proyecto del panel de impacto ("" = todos)
     function setImpactoProy(pid){ impactoProy = (impactoProy===pid ? "" : pid); renderDetalle(); }
@@ -1464,6 +1466,8 @@
       planiResaltar = { persona: personaId, fecha: fechaISO, bloques };
       // Asegurar que la fecha del conflicto sea visible: si el filtro "ver desde" la esconde, ampliarlo.
       if (!planiVerTodo && planiDesde && fechaISO < planiDesde) planiDesde = fechaISO;
+      // Quitar el filtro por proyecto para que la estación del conflicto no quede oculta.
+      planiProy = "";
       // Cambiar a Planificación General (cambiarTab llama a cargar, que re-renderiza y aplica el resaltado).
       cambiarTab("plani");
     }
@@ -1526,18 +1530,32 @@
       if (planiDesde === null) planiDesde = ayerPl;
       // una estación se oculta solo si TIENE fecha_hasta y terminó antes del filtro.
       // sin fechas = configuración pendiente → siempre visible.
-      const planiVisibles = planiVerTodo ? plani : plani.filter(b => !b.fecha_hasta || b.fecha_hasta >= planiDesde);
+      let planiVisibles = planiVerTodo ? plani.slice() : plani.filter(b => !b.fecha_hasta || b.fecha_hasta >= planiDesde);
+      // Filtro por proyecto (afecta estaciones y, más abajo, el panel de supervisión).
+      if (planiProy) planiVisibles = planiVisibles.filter(b => b.proyecto_id === planiProy);
+      // Orden por fecha de inicio (toggle). Los sin fecha van al final. Desempate por creado_en (orden natural).
+      if (planiOrdenFecha) {
+        planiVisibles.sort((a,b)=>{
+          const fa = a.fecha_desde || "9999-12-31", fb = b.fecha_desde || "9999-12-31";
+          return fa < fb ? -1 : fa > fb ? 1 : 0;
+        });
+      }
       const planiOcultas = plani.length - planiVisibles.length;
+      // Proyectos que tienen alguna estación planificada (para poblar el filtro).
+      const proyEnPlan = [...new Set(plani.map(b=>b.proyecto_id).filter(Boolean))];
       h += '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;background:#FAFAF8;border:1px solid #EEECE4;border-radius:10px;padding:8px 12px">';
-      h += '<span style="font-size:12px;color:#888780">Ver desde:</span>';
+      h += '<span style="font-size:12px;color:#888780">Proyecto:</span>';
+      h += '<select onchange="planiProy=this.value;renderPlani()" style="width:auto"><option value="">Todos</option>'+proyectos.filter(p=>proyEnPlan.includes(p.id)).map(p=>'<option value="'+p.id+'" '+(p.id===planiProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>';
+      h += '<span style="font-size:12px;color:#888780;margin-left:6px">Ver desde:</span>';
       h += '<input type="date" value="'+planiDesde+'" '+(planiVerTodo?'disabled':'')+' onchange="planiDesde=this.value;planiVerTodo=false;renderPlani()" style="width:auto">';
       h += '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:5px 10px;font-size:12px" onclick="planiDesde=\''+ayerPl+'\';planiVerTodo=false;renderPlani()">Ayer + en adelante</button>';
+      h += '<button class="btn" style="background:'+(planiOrdenFecha?'#185FA5':'#fff')+';border:1px solid '+(planiOrdenFecha?'#185FA5':'#E6E4DC')+';color:'+(planiOrdenFecha?'#fff':'#5F5E5A')+';padding:5px 10px;font-size:12px" onclick="planiOrdenFecha='+(!planiOrdenFecha)+';renderPlani()" title="Ordenar las estaciones por fecha de inicio">↕ Orden por fecha'+(planiOrdenFecha?' ✓':'')+'</button>';
       h += '<label style="font-size:12px;color:#888780;display:flex;align-items:center;gap:5px;margin-left:auto"><input type="checkbox" '+(planiVerTodo?'checked':'')+' onchange="planiVerTodo=this.checked;renderPlani()" style="width:auto">Ver todo</label>';
-      if (planiOcultas > 0 && !planiVerTodo) h += '<span style="font-size:11.5px;color:#A8A69E;width:100%">'+planiOcultas+' estación(es) ya terminada(s) ocultas. Cambiá la fecha o tildá "Ver todo" para consultarlas.</span>';
+      if (planiOcultas > 0 && !planiVerTodo) h += '<span style="font-size:11.5px;color:#A8A69E;width:100%">'+planiOcultas+' estación(es) fuera del filtro (fecha o proyecto). Cambiá los filtros o tildá "Ver todo" para consultarlas.</span>';
       h += '</div>';
 
       // ---- Supervisores primero (es lo primero que se establece) ----
-      h += renderPanelSupervision();
+      h += renderPanelSupervision(planiProy);
 
       // ---- Estaciones (filtradas por fecha) ----
       planiVisibles.forEach(b => {
@@ -1681,7 +1699,7 @@
       b.modulos = nuevo; setEstado("\u2713 Guardado.", "ok"); renderPlani();
     }
     /* ---- PANEL DE SUPERVISIÓN (rol jerárquico, separado de las estaciones) ---- */
-    function renderPanelSupervision() {
+    function renderPanelSupervision(filtroProy) {
       const sups = personas.filter(esSupervisor);
       let h = '<div class="card" style="border-left:3px solid '+SUP_COLOR+';background:#FBFDFC">';
       h += '<div class="pl-row" style="align-items:center"><span class="estpill" style="background:'+SUP_BG+';color:'+SUP_COLOR+';min-width:130px;display:inline-block;text-align:center">'+SUP_LABEL+'</span>';
@@ -1690,10 +1708,14 @@
         h += '<div style="font-size:12px;color:#A8A69E;margin-top:8px">No hay personas con especialidad «Supervisor de proyecto». Cargalas en Personal.</div></div>';
         return h;
       }
-      if (!supervisiones.length) {
-        h += '<div style="font-size:12px;color:#A8A69E;margin:8px 0">Sin asignaciones de supervisión.</div>';
+      // Filtrar por proyecto si hay filtro activo: solo supervisiones que incluyen ese proyecto.
+      const supsFiltradas = filtroProy
+        ? supervisiones.filter(s => (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean).includes(filtroProy))
+        : supervisiones;
+      if (!supsFiltradas.length) {
+        h += '<div style="font-size:12px;color:#A8A69E;margin:8px 0">'+(filtroProy ? 'Ningún supervisor asignado a este proyecto.' : 'Sin asignaciones de supervisión.')+'</div>';
       }
-      supervisiones.forEach(s => {
+      supsFiltradas.forEach(s => {
         const proySel = (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean);
         const dias = diasHabiles(s.fecha_desde, s.fecha_hasta);
         const diasNoDispo = dias.filter(d=>noDispoEn(s.supervisor_id,d));
