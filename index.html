@@ -221,6 +221,9 @@
     let detalleVerTodo = false;
     let planiDesde = null;     // filtro de visualización en Planificación General (null = aún sin fijar)
     let planiVerTodo = false;
+    let planiProy = "";        // filtro por proyecto en Planificación General ("" = todos)
+    let planiOrdenFecha = false; // toggle: ordenar estaciones por fecha de inicio
+    let planiResaltar = null;  // {persona, fecha, bloques:[ids]} para resaltar tras saltar a un conflicto
     let impactoProy = "";      // filtro de proyecto del panel de impacto ("" = todos)
     function setImpactoProy(pid){ impactoProy = (impactoProy===pid ? "" : pid); renderDetalle(); }
     let proyVista = "operacion";   // vista de la pestaña Proyectos: "operacion" | "cotizaciones" | "archivados"
@@ -1492,26 +1495,67 @@
       });
       const directos = personas.filter(p => p.tipo !== "Contratista");
       const faltantes = [], excesos = [];
+      const faltantesObj = [], excesosObj = [];
+      const bloquesDe = (pid, d) => plani.filter(b => (planiPers[b.id]||[]).includes(pid) && diasHabiles(b.fecha_desde,b.fecha_hasta).includes(d)).map(b=>b.id);
       fechas.forEach(d => {
         directos.forEach(p => {
           if (noDispoEn(p.id, d)) return;
           const k = p.id+"|"+d;
           const hSup = cargaSup[k] || 0;
           const hEst = cargaEst[k] || 0;
-          // Si supervisa ese día, queda cubierto por las 8h de supervisión; el trabajo en
-          // estación es paralelo y no se suma (ni cuenta como exceso).
           if (hSup > 0) {
-            if (hSup < 8) faltantes.push(nombrePersona(p.id) + " · " + dm(d) + " (supervisión < 8h)");
-            else if (hSup > 8) excesos.push(nombrePersona(p.id) + " · " + dm(d) + " (supervisión > 8h)");
+            if (hSup < 8) { faltantes.push(nombrePersona(p.id) + " · " + dm(d) + " (supervisión < 8h)"); faltantesObj.push({persona:p.id, fecha:d, txt:nombrePersona(p.id)+" · "+dm(d)+" (supervisión < 8h)", bloques:[]}); }
+            else if (hSup > 8) { excesos.push(nombrePersona(p.id) + " · " + dm(d) + " (supervisión > 8h)"); excesosObj.push({persona:p.id, fecha:d, txt:nombrePersona(p.id)+" · "+dm(d)+" (supervisión > 8h)", bloques:[]}); }
             return;
           }
-          // Sin supervisión: cuenta el trabajo en estación como cualquier directo.
-          if (hEst < 8) faltantes.push(nombrePersona(p.id) + " · " + dm(d));
-          else if (hEst > 8) excesos.push(nombrePersona(p.id) + " · " + dm(d));
+          if (hEst < 8) { faltantes.push(nombrePersona(p.id) + " · " + dm(d)); faltantesObj.push({persona:p.id, fecha:d, txt:nombrePersona(p.id)+" · "+dm(d), bloques:bloquesDe(p.id,d)}); }
+          else if (hEst > 8) { excesos.push(nombrePersona(p.id) + " · " + dm(d)); excesosObj.push({persona:p.id, fecha:d, txt:nombrePersona(p.id)+" · "+dm(d), bloques:bloquesDe(p.id,d)}); }
         });
       });
       const cubierto = faltantes.length===0 && excesos.length===0 && fechas.length>0;
-      return { fechas, faltantes: [...new Set(faltantes)], excesos: [...new Set(excesos)], ok: VALIDAR_COBERTURA ? cubierto : (fechas.length>0), cubiertoReal: cubierto };
+      const dedup = (arr) => { const seen=new Set(), out=[]; arr.forEach(o=>{ const k=o.persona+"|"+o.fecha; if(!seen.has(k)){ seen.add(k); out.push(o); } }); return out; };
+      return { fechas, faltantes: [...new Set(faltantes)], excesos: [...new Set(excesos)], faltantesObj: dedup(faltantesObj), excesosObj: dedup(excesosObj), ok: VALIDAR_COBERTURA ? cubierto : (fechas.length>0), cubiertoReal: cubierto };
+    }
+    // Salta a Planificación General y resalta la persona/estaciones de un conflicto.
+    function saltarAConflicto(personaId, fechaISO, bloquesCSV){
+      const bloques = (bloquesCSV||"").split(",").map(s=>s.trim()).filter(Boolean);
+      planiResaltar = { persona: personaId, fecha: fechaISO, bloques };
+      if (!planiVerTodo && planiDesde && fechaISO < planiDesde) planiDesde = fechaISO;
+      planiProy = "";
+      cambiarTab("plani");
+    }
+    // Aplica el resaltado visual tras renderizar Planificación General (scroll + highlight temporal).
+    function aplicarResaltadoPlani(){
+      if(!planiResaltar) return;
+      const r = planiResaltar; planiResaltar = null;
+      setTimeout(()=>{
+        let ids = r.bloques && r.bloques.length ? r.bloques.slice() : [];
+        if(!ids.length){ ids = plani.filter(b=>diasHabiles(b.fecha_desde,b.fecha_hasta).includes(r.fecha)).map(b=>b.id); }
+        let primero = null;
+        ids.forEach(bid=>{
+          const el = document.getElementById("plibloque-"+bid);
+          if(!el) return;
+          if(!primero) primero = el;
+          const prev = el.style.boxShadow;
+          el.style.transition = "box-shadow .3s, background .3s";
+          el.style.boxShadow = "0 0 0 3px #BA7517, 0 4px 16px rgba(186,117,23,.35)";
+          el.querySelectorAll(".chip.on").forEach(chip=>{
+            if(chip.textContent.replace(/[◇⚠\s]+$/,"").trim() === nombrePersona(r.persona)){
+              chip.style.outline = "2px solid #BA7517"; chip.style.outlineOffset = "1px";
+            }
+          });
+          setTimeout(()=>{ el.style.boxShadow = prev || "0 1px 4px rgba(44,44,42,0.05)"; }, 4000);
+        });
+        if(primero){ primero.scrollIntoView({behavior:"smooth", block:"center"}); }
+        else { setEstado("No encontré la estación del conflicto (puede estar fuera del filtro de fecha; probá «Ver todo»).","cargando"); }
+      }, 120);
+    }
+    // Genera un ítem de conflicto clickeable para las alertas.
+    function chipConflicto(o, color){
+      const b = (o.bloques||[]).join(",");
+      return '<a href="javascript:void(0)" onclick="saltarAConflicto(\''+o.persona+'\',\''+o.fecha+'\',\''+b+'\')" '
+        + 'style="color:'+color+';text-decoration:underline;text-decoration-style:dotted;cursor:pointer" '
+        + 'title="Ir a Planificación General y resaltar este conflicto">'+o.txt+'</a>';
     }
     function renderPlani() {
       let h = '<p style="font-size:13px;color:#888780;margin-top:0">Agregá estaciones, asignalas a un proyecto, elegí tarea, fechas y gente. Para generar el detalle, cada día todo el personal directo disponible debe estar asignado a su jornada.</p>';
@@ -1519,14 +1563,14 @@
       const val = validarCobertura();
       if (!VALIDAR_COBERTURA && plani.length > 0) {
         if (val.faltantes.length) {
-          h += '<div class="estado cargando" style="margin-bottom:12px">ℹ️ <b>Cobertura incompleta.</b> Podés generar el detalle igual; esto es solo un aviso. <span style="color:#A8A69E">Sin asignar hoy: '+val.faltantes.slice(0,6).join(" · ")+(val.faltantes.length>6?"…":"")+'</span></div>';
+          h += '<div class="estado cargando" style="margin-bottom:12px">ℹ️ <b>Cobertura incompleta.</b> Podés generar el detalle igual; esto es solo un aviso. <span style="color:#A8A69E">Sin asignar (tocá para resolver): '+val.faltantesObj.slice(0,6).map(o=>chipConflicto(o,"#8A6A2A")).join(" · ")+(val.faltantesObj.length>6?"…":"")+'</span></div>';
         } else {
           h += '<div class="estado ok" style="margin-bottom:12px">✓ Cobertura completa. Todo el personal directo disponible está asignado cada día.</div>';
         }
       } else if (plani.length > 0 && !val.ok) {
         h += '<div class="estado err" style="margin-bottom:12px"><b>⚠ No se puede generar el detalle todavía.</b> Cada día, todo el personal directo disponible debe estar asignado a su jornada (los de vacaciones/licencia y los contratistas se excluyen).';
-        if (val.faltantes.length) h += '<div style="margin-top:4px">Sin asignar: ' + val.faltantes.slice(0,10).join(" · ") + (val.faltantes.length>10?(" … y "+(val.faltantes.length-10)+" más"):"") + '</div>';
-        if (val.excesos.length) h += '<div style="margin-top:4px">Sobreasignados (+8h): ' + val.excesos.slice(0,8).join(" · ") + '</div>';
+        if (val.faltantes.length) h += '<div style="margin-top:4px">Sin asignar (tocá para resolver): ' + val.faltantesObj.slice(0,10).map(o=>chipConflicto(o,"#A32D2D")).join(" · ") + (val.faltantesObj.length>10?(" … y "+(val.faltantesObj.length-10)+" más"):"") + '</div>';
+        if (val.excesos.length) h += '<div style="margin-top:4px">Sobreasignados (+8h) (tocá para resolver): ' + val.excesosObj.slice(0,8).map(o=>chipConflicto(o,"#A32D2D")).join(" · ") + '</div>';
         h += '</div>';
       } else if (plani.length > 0 && val.ok) {
         h += '<div class="estado ok" style="margin-bottom:12px">✓ Cobertura completa. Todo el personal directo disponible está asignado cada día.</div>';
@@ -1536,25 +1580,36 @@
       if (planiDesde === null) planiDesde = ayerPl;
       // una estación se oculta solo si TIENE fecha_hasta y terminó antes del filtro.
       // sin fechas = configuración pendiente → siempre visible.
-      const planiVisibles = planiVerTodo ? plani : plani.filter(b => !b.fecha_hasta || b.fecha_hasta >= planiDesde);
+      let planiVisibles = planiVerTodo ? plani.slice() : plani.filter(b => !b.fecha_hasta || b.fecha_hasta >= planiDesde);
+      if (planiProy) planiVisibles = planiVisibles.filter(b => b.proyecto_id === planiProy);
+      if (planiOrdenFecha) {
+        planiVisibles.sort((a,b)=>{
+          const fa = a.fecha_desde || "9999-12-31", fb = b.fecha_desde || "9999-12-31";
+          return fa < fb ? -1 : fa > fb ? 1 : 0;
+        });
+      }
       const planiOcultas = plani.length - planiVisibles.length;
+      const proyEnPlan = [...new Set(plani.map(b=>b.proyecto_id).filter(Boolean))];
       h += '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;background:#FAFAF8;border:1px solid #EEECE4;border-radius:10px;padding:8px 12px">';
-      h += '<span style="font-size:12px;color:#888780">Ver desde:</span>';
+      h += '<span style="font-size:12px;color:#888780">Proyecto:</span>';
+      h += '<select onchange="planiProy=this.value;renderPlani()" style="width:auto"><option value="">Todos</option>'+proyectos.filter(p=>proyEnPlan.includes(p.id)).map(p=>'<option value="'+p.id+'" '+(p.id===planiProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>';
+      h += '<span style="font-size:12px;color:#888780;margin-left:6px">Ver desde:</span>';
       h += '<input type="date" value="'+planiDesde+'" '+(planiVerTodo?'disabled':'')+' onchange="planiDesde=this.value;planiVerTodo=false;renderPlani()" style="width:auto">';
       h += '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:5px 10px;font-size:12px" onclick="planiDesde=\''+ayerPl+'\';planiVerTodo=false;renderPlani()">Ayer + en adelante</button>';
+      h += '<button class="btn" style="background:'+(planiOrdenFecha?'#185FA5':'#fff')+';border:1px solid '+(planiOrdenFecha?'#185FA5':'#E6E4DC')+';color:'+(planiOrdenFecha?'#fff':'#5F5E5A')+';padding:5px 10px;font-size:12px" onclick="planiOrdenFecha='+(!planiOrdenFecha)+';renderPlani()" title="Ordenar las estaciones por fecha de inicio">↕ Orden por fecha'+(planiOrdenFecha?' ✓':'')+'</button>';
       h += '<label style="font-size:12px;color:#888780;display:flex;align-items:center;gap:5px;margin-left:auto"><input type="checkbox" '+(planiVerTodo?'checked':'')+' onchange="planiVerTodo=this.checked;renderPlani()" style="width:auto">Ver todo</label>';
-      if (planiOcultas > 0 && !planiVerTodo) h += '<span style="font-size:11.5px;color:#A8A69E;width:100%">'+planiOcultas+' estación(es) ya terminada(s) ocultas. Cambiá la fecha o tildá "Ver todo" para consultarlas.</span>';
+      if (planiOcultas > 0 && !planiVerTodo) h += '<span style="font-size:11.5px;color:#A8A69E;width:100%">'+planiOcultas+' estación(es) fuera del filtro (fecha o proyecto). Cambiá los filtros o tildá "Ver todo" para consultarlas.</span>';
       h += '</div>';
 
       // ---- Supervisores primero (es lo primero que se establece) ----
-      h += renderPanelSupervision();
+      h += renderPanelSupervision(planiProy);
 
       // ---- Estaciones (filtradas por fecha) ----
       planiVisibles.forEach(b => {
         const st = STATIONS[b.estacion]; if (!st) return;
         const gente = planiPers[b.id] || [];
         const subsSel = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
-        h += '<div class="card" style="border:1px solid #E6E4DC;border-left:6px solid '+st.color+';border-radius:12px;margin-bottom:16px;padding:0;overflow:hidden;box-shadow:0 1px 4px rgba(44,44,42,0.05)">'
+        h += '<div class="card" id="plibloque-'+b.id+'" style="border:1px solid #E6E4DC;border-left:6px solid '+st.color+';border-radius:12px;margin-bottom:16px;padding:0;overflow:hidden;box-shadow:0 1px 4px rgba(44,44,42,0.05)">'
           + '<div class="pl-row" style="background:'+st.bg+';margin:0;padding:12px 14px;border-bottom:1px solid '+st.color+'22"><span class="estpill" style="background:'+st.color+';color:#fff;min-width:130px;display:inline-block;text-align:center;font-weight:600">'+st.label+'</span>'
           + '<select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px">'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>'
           + '<button class="btn-del" style="margin-left:auto" onclick="eliminarPl(\''+b.id+'\')">×</button></div>'
@@ -1581,9 +1636,11 @@
       h += '<button class="btn btn-add" onclick="agregarEstacionDefault()">Cargar las 20 estaciones</button>';
       h += '<button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button>';
       h += '<button class="btn btn-primary" style="background:'+(val.ok?'#185FA5':'#A8A69E')+';cursor:'+(val.ok?'pointer':'not-allowed')+'" '+(val.ok?'':'disabled')+' onclick="generarDetalle()">Generar detalle diario →</button>';
+      h += '<button class="btn" title="Uso excepcional: rellena el detalle de UN día puntual que quedó sin generar (p. ej. un día pasado). No toca lo ya cargado." style="background:#fff;border:1px solid #BA7517;color:#BA7517;padding:6px 12px" onclick="generarDetalleFecha()">🩹 Rellenar un día suelto…</button>';
       h += '</div>';
       contenido.innerHTML = h;
       document.getElementById("selAgregar").onchange = function(){ if(this.value){ agregarEstacion(this.value); } };
+      aplicarResaltadoPlani();
     }
     // Panel de línea base: por cada proyecto con planificación, muestra estado y acción.
     function bloqueLineaBase(){
@@ -1689,7 +1746,7 @@
       b.modulos = nuevo; setEstado("\u2713 Guardado.", "ok"); renderPlani();
     }
     /* ---- PANEL DE SUPERVISIÓN (rol jerárquico, separado de las estaciones) ---- */
-    function renderPanelSupervision() {
+    function renderPanelSupervision(filtroProy) {
       const sups = personas.filter(esSupervisor);
       let h = '<div class="card" style="border-left:3px solid '+SUP_COLOR+';background:#FBFDFC">';
       h += '<div class="pl-row" style="align-items:center"><span class="estpill" style="background:'+SUP_BG+';color:'+SUP_COLOR+';min-width:130px;display:inline-block;text-align:center">'+SUP_LABEL+'</span>';
@@ -1698,10 +1755,13 @@
         h += '<div style="font-size:12px;color:#A8A69E;margin-top:8px">No hay personas con especialidad «Supervisor de proyecto». Cargalas en Personal.</div></div>';
         return h;
       }
-      if (!supervisiones.length) {
-        h += '<div style="font-size:12px;color:#A8A69E;margin:8px 0">Sin asignaciones de supervisión.</div>';
+      const supsFiltradas = filtroProy
+        ? supervisiones.filter(s => (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean).includes(filtroProy))
+        : supervisiones;
+      if (!supsFiltradas.length) {
+        h += '<div style="font-size:12px;color:#A8A69E;margin:8px 0">'+(filtroProy ? 'Ningún supervisor asignado a este proyecto.' : 'Sin asignaciones de supervisión.')+'</div>';
       }
-      supervisiones.forEach(s => {
+      supsFiltradas.forEach(s => {
         const proySel = (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean);
         const dias = diasHabiles(s.fecha_desde, s.fecha_hasta);
         const diasNoDispo = dias.filter(d=>noDispoEn(s.supervisor_id,d));
@@ -1807,6 +1867,64 @@
       }
       setEstado("\u2713 Detalle generado: " + filas.length + " registro(s) de hoy en adelante. El pasado quedó intacto.", "ok");
       tab = "detalle"; ["personal","proyectos","dispo","plani","detalle"].forEach(x => document.getElementById("tab-"+x).className = "tab" + (x==="detalle"?" active":""));
+      cargar();
+    }
+
+    // GENERACIÓN DE EXCEPCIÓN: rellena el detalle de UNA fecha puntual que quedó sin generar.
+    // No borra nada. Solo crea las filas que faltan para ese día, respetando el candado del pasado.
+    async function generarDetalleFecha() {
+      const seguir = confirm(
+        "RELLENAR UN DÍA SUELTO — uso excepcional\n\n"
+        + "Esto sirve solo para tapar un hueco: un día que quedó SIN detalle generado (por ejemplo, un día pasado).\n\n"
+        + "• Crea únicamente las jornadas que falten para ese día, tomándolas del plan.\n"
+        + "• NO toca ninguna fila ya cargada (respeta el candado del pasado).\n"
+        + "• NO es el flujo normal: para planificar a futuro usá «Generar detalle diario».\n\n"
+        + "¿Continuar?"
+      );
+      if (!seguir) { setEstado("Cancelado.", "cargando"); return; }
+      const fecha = prompt("Fecha a rellenar (formato AAAA-MM-DD).\nEjemplo: 2026-07-06", "");
+      if (!fecha) { setEstado("Cancelado.", "cargando"); return; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) { setEstado("Fecha inválida. Usá el formato AAAA-MM-DD.", "err"); return; }
+      const d = new Date(fecha + "T12:00:00");
+      const finde = (d.getDay() === 0 || d.getDay() === 6);
+      if ((finde || esFeriado(fecha)) && !confirm("El " + dmy(fecha) + " es fin de semana o feriado. ¿Rellenarlo igual?")) { setEstado("Cancelado.", "cargando"); return; }
+      const { data: exist, error: eEx } = await sb.from("detalle_diario").select("*").eq("fecha", fecha);
+      if (eEx) return setEstado("Error: " + eEx.message, "err");
+      const yaHay = new Set((exist||[]).map(r => r.persona_real + "|" + r.estacion_real + "|" + r.proyecto_id));
+      const filas = [];
+      plani.forEach(b => {
+        const dias = diasHabiles(b.fecha_desde, b.fecha_hasta);
+        if (!dias.includes(fecha)) return;
+        const gente = planiPers[b.id] || [];
+        gente.forEach(g => {
+          if (noDispoEn(g, fecha)) return;
+          const clave = g + "|" + b.estacion + "|" + b.proyecto_id;
+          if (yaHay.has(clave)) return;
+          const hrs = (planiHoras[b.id] && planiHoras[b.id][g]!=null) ? planiHoras[b.id][g] : 8;
+          const vhPlan = costoHora(g, fecha);
+          filas.push({ fecha, persona_plan: g, persona_real: g, proyecto_id: b.proyecto_id, estacion_plan: b.estacion, subtarea_plan: b.subtarea, estacion_real: b.estacion, subtarea_real: b.subtarea, modulos_plan: b.modulos||null, modulos_real: b.modulos||null, horas_plan: hrs, horas_normales: hrs, horas_extra: 0, ausente: false, valor_hora_plan: vhPlan });
+        });
+      });
+      supervisiones.forEach(s => {
+        const ids = (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean);
+        if (!ids.length) return;
+        const dias = diasHabiles(s.fecha_desde, s.fecha_hasta);
+        if (!dias.includes(fecha)) return;
+        if (noDispoEn(s.supervisor_id, fecha)) return;
+        const clave = s.supervisor_id + "|" + SUP_MARK + "|" + ids[0];
+        if (yaHay.has(clave)) return;
+        const nombres = ids.map(nombreProy).join(", ");
+        const hrs = (s.horas != null ? s.horas : 8);
+        const vhPlanS = costoHora(s.supervisor_id, fecha);
+        filas.push({ fecha, persona_plan: s.supervisor_id, persona_real: s.supervisor_id, proyecto_id: ids[0], estacion_plan: SUP_MARK, subtarea_plan: nombres, estacion_real: SUP_MARK, subtarea_real: nombres, modulos_plan: null, modulos_real: null, horas_plan: hrs, horas_normales: hrs, horas_extra: 0, ausente: false, valor_hora_plan: vhPlanS });
+      });
+      if (!filas.length) {
+        setEstado("No hay nada para rellenar el " + dmy(fecha) + ": o no había plan para ese día, o ya estaba todo cargado.", "cargando");
+        return;
+      }
+      const { error: eIns } = await sb.from("detalle_diario").insert(filas);
+      if (eIns) return setEstado("Error al rellenar: " + eIns.message, "err");
+      setEstado("\u2713 " + dmy(fecha) + " rellenado: " + filas.length + " jornada(s) creada(s) desde el plan. Lo que ya estaba cargado no se tocó.", "ok");
       cargar();
     }
 
@@ -2010,7 +2128,12 @@
       if (ocultas > 0 && !detalleVerTodo) h += '<span style="font-size:11.5px;color:#A8A69E;width:100%">'+ocultas+' registro(s) más antiguos ocultos. Cambiá la fecha o tildá "Ver todo" para consultarlos.</span>';
       h += '</div>';
       const conf = Object.entries(horasDia).filter(([,v])=>v>8);
-      if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación:</b> '+conf.map(([k,v])=>{const [pid,f]=k.split("|");return nombrePersona(pid)+" ("+dm(f)+"): "+v+"h";}).join(" · ")+'</div>';
+      if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación</b> (tocá para resolver en Planificación General): '+conf.map(([k,v])=>{
+          const [pid,f]=k.split("|");
+          const bloques = plani.filter(b=>(planiPers[b.id]||[]).includes(pid) && diasHabiles(b.fecha_desde,b.fecha_hasta).includes(f)).map(b=>b.id).join(",");
+          const txt = nombrePersona(pid)+" ("+dm(f)+"): "+v+"h";
+          return '<a href="javascript:void(0)" onclick="saltarAConflicto(\''+pid+'\',\''+f+'\',\''+bloques+'\')" style="color:#A32D2D;text-decoration:underline;text-decoration-style:dotted;cursor:pointer" title="Ir a Planificación General y resaltar este conflicto">'+txt+'</a>';
+        }).join(" · ")+'</div>';
 
       // ---- Resumen de impacto (costo y tiempo, plan vs real) ----
       const imp = calcularImpacto();
@@ -2132,11 +2255,19 @@
         const pasado = f.fecha < hoy;
         const norm = (x) => (x==null ? "" : String(x));
         const reasig = (norm(f.estacion_real) !== norm(f.estacion_plan)) || (norm(f.persona_real) !== norm(f.persona_plan)) || !!f.ausente;
+        // El motivo se pide solo cuando hay reasignación de estación o persona, NO por ausencia sola.
+        const pideMotivo = (norm(f.estacion_real) !== norm(f.estacion_plan)) || (norm(f.persona_real) !== norm(f.persona_plan));
         const bg = f.es_extra ? 'background:#FAEEDA;box-shadow:inset 3px 0 0 #BA7517' : f.ausente ? 'background:#FCEBEB' : reasig ? 'background:#FBFAF5' : '';
         const dis = pasado ? 'disabled' : '';
         const tagExtra = f.es_extra ? ' <span style="background:#BA7517;color:#fff;font-size:9px;padding:1px 5px;border-radius:5px;vertical-align:middle;font-weight:600">EXTRA</span>' : '';
+        // Botón "sigue mañana": solo en filas de HOY, de estación real, no ausentes, no día extra.
+        const esHoy = (f.fecha === hoy);
+        const puedeSeguir = esHoy && !f.ausente && !f.es_extra && f.estacion_real!==SUP_MARK;
+        const btnSigue = puedeSeguir
+          ? ' <button class="btn" title="Esta tarea no se terminó hoy: crear una jornada para mañana sin tocar la planificación" style="background:#fff;border:1px solid #BA7517;color:#BA7517;padding:2px 7px;font-size:10.5px;border-radius:6px;margin-left:4px" onclick="seguirManana(\''+f.id+'\')">↪ sigue mañana</button>'
+          : '';
         h += '<tr style="'+bg+'">'
-          + '<td style="white-space:nowrap;color:#888780">'+dm(f.fecha)+(pasado?' 🔒':'')+tagExtra+'</td>'
+          + '<td style="white-space:nowrap;color:#888780">'+dm(f.fecha)+(pasado?' 🔒':'')+tagExtra+btnSigue+'</td>'
           + '<td><select '+dis+' onchange="cambiarProyDet(\''+f.id+'\',this.value)" style="min-width:130px">'+opcProy(f.proyecto_id)+'</select></td>'
           + '<td><select '+dis+' onchange="editarDet(\''+f.id+'\',\'persona_real\',this.value)">'+opcPersona(f.persona_real)+'</select></td>'
           + '<td>'+(f.ausente?'<span style="color:#A32D2D;font-size:11.5px">— ausente —</span>':(f.estacion_real===SUP_MARK?'<span style="background:'+SUP_BG+';color:'+SUP_COLOR+';padding:2px 8px;border-radius:6px;font-size:11.5px">'+SUP_LABEL+'</span>':'<select '+dis+' onchange="cambiarEstDet(\''+f.id+'\',this.value)" style="'+(f.estacion_real!==f.estacion_plan?'border-color:#BA7517;background:#FAEEDA':'')+'">'+opcEst(f.estacion_real)+'</select>'))+'</td>'
@@ -2146,12 +2277,12 @@
           + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_normales||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_normales\',Number(this.value))" style="width:42px;text-align:center;'+(exceso(f)?'border-color:#A32D2D;background:#FCEBEB;color:#A32D2D':'')+'" '+(f.ausente?'disabled':'')+'></td>'
           + '<td style="text-align:center"><input type="number" '+dis+' value="'+(f.horas_extra||0)+'" onchange="editarDet(\''+f.id+'\',\'horas_extra\',Number(this.value))" style="width:42px;text-align:center;'+(f.horas_extra>0?'color:#BA7517':'')+'" '+(f.ausente?'disabled':'')+'></td>'
           + (function(){ const fi=imp.porFila[f.id]; if(!fi||fi.costoTipo==="neutro") return '<td style="text-align:right"><span style="color:#D3D1C7;font-size:11px">—</span></td>'; const col=fi.costoDelta>0?'#A32D2D':'#3B6D11'; const et=fi.costoDelta>0?'sobrecosto':'ahorro'; return '<td style="text-align:right"><span style="color:'+col+';font-size:11.5px;font-weight:600" title="'+et+'">'+fmtPlata(fi.costoDelta)+'</span></td>'; })()
-          + '<td>'+(reasig?'<select '+dis+' onchange="editarDet(\''+f.id+'\',\'motivo_desvio\',this.value)" style="min-width:160px;border-color:'+(f.motivo_desvio?'#BA7517':'#A32D2D')+';'+(f.motivo_desvio?'':'background:#FCEBEB')+'">'+opcMotivo(f.motivo_desvio)+'</select>':'<span style="color:#D3D1C7;font-size:11px">—</span>')+'</td>'
+          + '<td>'+(pideMotivo?'<select '+dis+' onchange="editarDet(\''+f.id+'\',\'motivo_desvio\',this.value)" style="min-width:160px;border-color:'+(f.motivo_desvio?'#BA7517':'#A32D2D')+';'+(f.motivo_desvio?'':'background:#FCEBEB')+'">'+opcMotivo(f.motivo_desvio)+'</select>':'<span style="color:#D3D1C7;font-size:11px">—</span>')+'</td>'
           + '</tr>';
       });
       h += '</tbody></table></div><div class="row-actions"><button class="btn btn-primary" onclick="cargar()">↻ Recargar</button></div>';
 
-      h += '<p style="font-size:12px;color:#A8A69E;margin-top:10px">🔒 = día anterior a hoy (historia, no editable). Las filas con fondo crema tienen desvío (estación o persona distinta a lo planificado) y piden un motivo. Para sumar o cambiar tareas futuras, hacelo en Planificación General y regenerá el detalle.</p>';
+      h += '<p style="font-size:12px;color:#A8A69E;margin-top:10px">🔒 = día anterior a hoy (historia, no editable). Las filas con fondo crema tienen desvío (estación o persona distinta a lo planificado) y piden un motivo. <b style="color:#BA7517">↪ sigue mañana</b> (solo en filas de hoy): si una tarea no se terminó, crea una jornada para mañana sin tocar la planificación. Para cambios grandes (reasignar, redistribuir), usá Planificación General y regenerá el detalle.</p>';
       contenido.innerHTML = h;
     }
     async function cambiarProyDet(id, proyId){
@@ -2189,25 +2320,8 @@
       if(val && f && !f.es_extra){ await ofrecerCorrerDetalle(f); }
       renderDetalle();
     }
-    // Empuja un día hábil hacia adelante los días futuros de la misma persona en el mismo proyecto+estación.
-    async function ofrecerCorrerDetalle(filaAusente){
-      const hoy = hoyISO();
-      // candidatos: filas de la MISMA persona, MISMO proyecto y MISMA estación, con fecha POSTERIOR
-      // a la ausencia y de hoy en adelante (pasado congelado), no ausentes y no día extra.
-      const cand = detalle.filter(x => x.id!==filaAusente.id
-        && x.persona_real===filaAusente.persona_real
-        && x.proyecto_id===filaAusente.proyecto_id
-        && x.estacion_real===filaAusente.estacion_real
-        && !x.ausente && !x.es_extra
-        && x.fecha > filaAusente.fecha && x.fecha >= hoy)
-        .sort((a,b)=> a.fecha<b.fecha?-1:1);
-      if(!cand.length) return;
-      const msg = nombrePersona(filaAusente.persona_real)+" quedó ausente el "+dmy(filaAusente.fecha)+" en "+nombreEstacion(filaAusente.estacion_real)+".\n\n"
-        + "¿Correr sus "+cand.length+" día(s) futuro(s) de esta tarea un día hábil hacia adelante?\n\n"
-        + "(Solo días de esta persona en esta tarea, de hoy en adelante. El pasado no se toca.)";
-      if(!confirm(msg)) return;
-      // Recalcular fechas hábiles: tomar el bloque de días reales y desplazar cada uno un hábil adelante.
-      // Procesar de la última a la primera para no colisionar fechas.
+    // Corre un día hábil hacia adelante las filas dadas (de la última a la primera para no colisionar).
+    async function correrFilasUnDia(cand){
       let ok=0;
       for(let i=cand.length-1;i>=0;i--){
         const x=cand[i];
@@ -2217,26 +2331,103 @@
         x.fecha = nueva; ok++;
       }
       detalle.sort((a,b)=> a.fecha<b.fecha?-1:a.fecha>b.fecha?1:0);
+      return ok;
+    }
+    // Revisa las filas futuras (de hoy en adelante) de una persona y detecta días con
+    // solapamiento: 2+ tareas el mismo día O más de 8 horas. Supervisión NO cuenta.
+    function avisoSolapamiento(personaId){
+      const hoy = hoyISO();
+      const porDia = {};
+      detalle.forEach(f=>{
+        if(f.persona_real!==personaId) return;
+        if(f.fecha < hoy) return;
+        if(f.ausente) return;
+        if(f.estacion_real===SUP_MARK) return;
+        const d = porDia[f.fecha] || (porDia[f.fecha] = { tareas:new Set(), horas:0 });
+        d.tareas.add(f.estacion_real + "|" + f.proyecto_id);
+        d.horas += (Number(f.horas_normales)||0) + (Number(f.horas_extra)||0);
+      });
+      const conflict = Object.keys(porDia).sort()
+        .filter(d => porDia[d].tareas.size >= 2 || porDia[d].horas > 8)
+        .map(d => dmy(d) + " (" + (porDia[d].tareas.size>=2 ? porDia[d].tareas.size+" tareas" : porDia[d].horas+"h") + ")");
+      if(!conflict.length) return "";
+      return "⚠ Atención: tras correr, "+nombrePersona(personaId)+" queda con superposición en:\n\n"
+        + "• " + conflict.join("\n• ")
+        + "\n\nRevisalo en el Detalle diario, o rearmá su agenda en Planificación General si el cambio es grande. (No se bloquea nada; vos decidís.)";
+    }
+    // Ofrece correr las tareas futuras de una persona a partir de una fila de referencia.
+    // Dos alcances: solo esta tarea (misma estación+proyecto) o todas las tareas de la persona.
+    async function ofrecerCorrerDetalle(filaRef, motivo){
+      const hoy = hoyISO();
+      motivo = motivo || ("quedó ausente el "+dmy(filaRef.fecha)+" en "+nombreEstacion(filaRef.estacion_real));
+      const futuras = detalle.filter(x => x.id!==filaRef.id
+        && x.persona_real===filaRef.persona_real
+        && !x.ausente && !x.es_extra
+        && x.fecha > filaRef.fecha && x.fecha >= hoy);
+      const candTarea = futuras.filter(x => x.proyecto_id===filaRef.proyecto_id && x.estacion_real===filaRef.estacion_real)
+        .sort((a,b)=> a.fecha<b.fecha?-1:1);
+      const candTodo = [...futuras].sort((a,b)=> a.fecha<b.fecha?-1:1);
+      if(!candTodo.length) return;
+      let cand;
+      if(candTodo.length === candTarea.length){
+        const msg = nombrePersona(filaRef.persona_real)+" "+motivo+".\n\n"
+          + "¿Correr sus "+candTarea.length+" día(s) futuro(s) un día hábil hacia adelante?\n\n"
+          + "(De hoy en adelante. El pasado no se toca.)";
+        if(!confirm(msg)) return;
+        cand = candTarea;
+      } else {
+        const msg = nombrePersona(filaRef.persona_real)+" "+motivo+".\n\n"
+          + "¿Qué querés correr un día hábil hacia adelante?\n\n"
+          + "• Aceptar = SOLO esta tarea ("+candTarea.length+" día/s en "+nombreEstacion(filaRef.estacion_real)+")\n"
+          + "• Cancelar = elegir en el próximo paso si corrés TODO\n\n"
+          + "(De hoy en adelante. El pasado no se toca.)";
+        if(confirm(msg)){
+          cand = candTarea;
+        } else {
+          const msg2 = "¿Correr TODAS las tareas futuras de "+nombrePersona(filaRef.persona_real)+"?\n\n"
+            + "Son "+candTodo.length+" día(s) en distintas estaciones/proyectos.\n\n"
+            + "(Aceptar = correr todo · Cancelar = no correr nada)";
+          if(!confirm(msg2)) return;
+          cand = candTodo;
+        }
+      }
+      if(!cand.length) return;
+      const ok = await correrFilasUnDia(cand);
       setEstado("\u2713 "+ok+" día(s) corrido(s) un día hábil hacia adelante.","ok");
+      const aviso = avisoSolapamiento(filaRef.persona_real);
+      if(aviso) alert(aviso);
     }
 
     /* ---- DÍA EXTRA (trabajo real no planificado) ---- */
     function cerrarDiaExtra(){ const ov=document.getElementById("ovExtra"); if(ov) ov.remove(); }
-    function abrirDiaExtra(){
+    function abrirDiaExtra(pre){
       cerrarDiaExtra();
+      pre = pre || null;
       const hoy = fechaStr(new Date());
-      const optProy = proyectos.map(p=>'<option value="'+p.id+'">'+p.nombre+'</option>').join('');
-      const optPers = personasHuella().map(p=>'<option value="'+p.id+'">'+p.nombre+(p.tipo==='Contratista'?' (contratista)':'')+'</option>').join('');
-      const optEst  = STKEYS.map(k=>'<option value="'+k+'">'+STATIONS[k].label+'</option>').join('');
+      const fechaDefault = pre && pre.fecha ? pre.fecha : hoy;
+      const esSeguir = !!pre;
+      const sel = (v, val) => (String(v)===String(val) ? ' selected' : '');
+      const optProy = proyectos.map(p=>'<option value="'+p.id+'"'+sel(p.id, pre&&pre.proyecto_id)+'>'+p.nombre+'</option>').join('');
+      const optPers = personasHuella().map(p=>'<option value="'+p.id+'"'+sel(p.id, pre&&pre.persona)+'>'+p.nombre+(p.tipo==='Contratista'?' (contratista)':'')+'</option>').join('');
+      const optEst  = STKEYS.map(k=>'<option value="'+k+'"'+sel(k, pre&&pre.estacion)+'>'+STATIONS[k].label+'</option>').join('');
       const ov = document.createElement("div");
       ov.id = "ovExtra";
+      ov.dataset.pre = esSeguir ? "1" : "";
+      ov.dataset.origen = (pre && pre.origenFilaId) ? pre.origenFilaId : "";
+      ov.dataset.subpre = (pre && pre.subtarea) ? pre.subtarea : "";
+      ov.dataset.modspre = (pre && pre.modulos) ? pre.modulos : "";
       ov.style.cssText = "position:fixed;inset:0;background:rgba(44,44,42,.45);display:flex;align-items:center;justify-content:center;z-index:2000;padding:16px";
+      const titulo = esSeguir ? "Esta tarea sigue mañana" : "Agregar día de trabajo no planificado";
+      const bajada = esSeguir
+        ? "La tarea no se terminó hoy. Se crea una jornada para mañana (o el día que elijas) como trabajo no planificado. <b>No toca la planificación</b>, genera sobrecosto cuando ese día cierre, y la regeneración del detalle no la borra. Lo de hoy queda registrado tal cual."
+        : "Usalo cuando un trabajo se estiró más de lo planificado. Este día se carga como real (no toca la planificación), genera <b>sobrecosto</b> y, si corre el fin del proyecto, <b>atraso</b>. La regeneración del detalle no lo borra.";
+      const btnLabel = esSeguir ? "Crear jornada de mañana" : "Agregar día extra";
       ov.innerHTML =
         '<div style="background:#fff;border-radius:16px;max-width:460px;width:100%;padding:22px;box-shadow:0 12px 40px rgba(0,0,0,.2)">'
-        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="background:#BA7517;color:#fff;font-size:10px;padding:2px 7px;border-radius:5px;font-weight:600">EXTRA</span><div style="font-size:17px;font-weight:700">Agregar día de trabajo no planificado</div></div>'
-        + '<p style="font-size:12px;color:#888780;margin:0 0 16px">Usalo cuando un trabajo se estiró más de lo planificado. Este día se carga como real (no toca la planificación), genera <b>sobrecosto</b> y, si corre el fin del proyecto, <b>atraso</b>. La regeneración del detalle no lo borra.</p>'
+        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="background:#BA7517;color:#fff;font-size:10px;padding:2px 7px;border-radius:5px;font-weight:600">EXTRA</span><div style="font-size:17px;font-weight:700">'+titulo+'</div></div>'
+        + '<p style="font-size:12px;color:#888780;margin:0 0 16px">'+bajada+'</p>'
         + '<div style="display:flex;flex-direction:column;gap:10px">'
-        + '<label style="font-size:12px;color:#5F5E5A">Fecha<input id="ex_fecha" type="date" value="'+hoy+'" style="width:100%;margin-top:3px"></label>'
+        + '<label style="font-size:12px;color:#5F5E5A">Fecha'+(esSeguir?' <span style="color:#A8A69E">(mañana hábil; cambiala si se trabaja sábado o feriado)</span>':'')+'<input id="ex_fecha" type="date" value="'+fechaDefault+'" style="width:100%;margin-top:3px"></label>'
         + '<label style="font-size:12px;color:#5F5E5A">Proyecto<select id="ex_proy" style="width:100%;margin-top:3px">'+optProy+'</select></label>'
         + '<label style="font-size:12px;color:#5F5E5A">Módulos (opcional)<div id="ex_mods" style="margin-top:4px"></div></label>'
         + '<label style="font-size:12px;color:#5F5E5A">Persona<select id="ex_pers" style="width:100%;margin-top:3px">'+optPers+'</select></label>'
@@ -2249,15 +2440,31 @@
         + '</div>'
         + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">'
         +   '<button class="btn" onclick="cerrarDiaExtra()">Cancelar</button>'
-        +   '<button class="btn btn-primary" style="background:#BA7517" onclick="guardarDiaExtra()">Agregar día extra</button>'
+        +   '<button class="btn btn-primary" style="background:#BA7517" onclick="guardarDiaExtra()">'+btnLabel+'</button>'
         + '</div></div>';
       document.body.appendChild(ov);
       ov.addEventListener("mousedown", e=>{ if(e.target===ov) cerrarDiaExtra(); });
-      const syncSub = ()=>{ const est=document.getElementById("ex_est").value; const subs=STATIONS[est]?STATIONS[est].subs:[]; document.getElementById("ex_sub").innerHTML = subs.map(s=>'<option>'+s+'</option>').join(''); };
-      const syncMods = ()=>{ const pid=document.getElementById("ex_proy").value; const mods=modulosDeProy(pid); const cont=document.getElementById("ex_mods"); if(!mods.length){ cont.innerHTML='<span style="font-size:11px;color:#A8A69E">— este proyecto no tiene módulos —</span>'; return; } cont.innerHTML='<div class="chips" style="gap:4px">'+mods.map(m=>'<button type="button" class="chip" data-mod="'+m.replace(/"/g,'&quot;')+'" onclick="this.classList.toggle(\'on\')" style="padding:3px 9px;font-size:11px">'+m+'</button>').join('')+'</div>'; };
-      document.getElementById("ex_est").addEventListener("change", syncSub);
-      document.getElementById("ex_proy").addEventListener("change", syncMods);
-      syncSub(); syncMods();
+      const syncSub = (preSub)=>{ const est=document.getElementById("ex_est").value; const subs=STATIONS[est]?STATIONS[est].subs:[]; document.getElementById("ex_sub").innerHTML = subs.map(s=>'<option'+(preSub&&s===preSub?' selected':'')+'>'+s+'</option>').join(''); };
+      const syncMods = (preMods)=>{ const pid=document.getElementById("ex_proy").value; const mods=modulosDeProy(pid); const cont=document.getElementById("ex_mods"); const pm=(preMods||"").split(",").map(s=>s.trim()).filter(Boolean); if(!mods.length){ cont.innerHTML='<span style="font-size:11px;color:#A8A69E">— este proyecto no tiene módulos —</span>'; return; } cont.innerHTML='<div class="chips" style="gap:4px">'+mods.map(m=>'<button type="button" class="chip'+(pm.includes(m)?' on':'')+'" data-mod="'+m.replace(/"/g,'&quot;')+'" onclick="this.classList.toggle(\'on\')" style="padding:3px 9px;font-size:11px">'+m+'</button>').join('')+'</div>'; };
+      document.getElementById("ex_est").addEventListener("change", ()=>syncSub());
+      document.getElementById("ex_proy").addEventListener("change", ()=>syncMods());
+      syncSub(ov.dataset.subpre || null);
+      syncMods(ov.dataset.modspre || null);
+    }
+    // Handler del botón "↪ sigue mañana": arma el pre-llenado desde la fila de hoy y abre el modal.
+    function seguirManana(id){
+      const f = detalle.find(x=>x.id===id);
+      if(!f){ setEstado("No encontré la fila.","err"); return; }
+      const manana = sumarDiasHabiles(hoyISO(), 1);
+      abrirDiaExtra({
+        fecha: manana,
+        proyecto_id: f.proyecto_id,
+        persona: f.persona_real,
+        estacion: f.estacion_real,
+        subtarea: f.subtarea_real,
+        modulos: f.modulos_real,
+        origenFilaId: f.id
+      });
     }
     async function guardarDiaExtra(){
       const fecha = document.getElementById("ex_fecha").value;
@@ -2283,9 +2490,32 @@
       if(error) return setEstado("Error al agregar día extra: "+error.message,"err");
       if(data && data[0]) detalle.push(data[0]);
       detalle.sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0);
+      const ov = document.getElementById("ovExtra");
+      const eraSeguir = !!(ov && ov.dataset.pre);
+      const origenFilaId = ov ? (ov.dataset.origen || "") : "";
       cerrarDiaExtra();
-      setEstado("\u2713 Día extra agregado. Se computa como sobrecosto y, si corre el fin del proyecto, como atraso.","ok");
+      if(eraSeguir){
+        setEstado("\u2713 Jornada de mañana creada. Se computa como sobrecosto cuando ese día cierre.","ok");
+      } else {
+        setEstado("\u2713 Día extra agregado. Se computa como sobrecosto y, si corre el fin del proyecto, como atraso.","ok");
+      }
       renderDetalle();
+      if(eraSeguir){
+        const nuevaFecha = fila.fecha;
+        const yaTenia = detalle.some(x => x.persona_real===persona
+          && x.fecha===nuevaFecha && !x.ausente && x.estacion_real!==SUP_MARK
+          && !(data && data[0] && x.id===data[0].id));
+        if(yaTenia){
+          const filaRef = origenFilaId ? detalle.find(x=>x.id===origenFilaId) : null;
+          if(filaRef){
+            await ofrecerCorrerDetalle(filaRef, "tiene una jornada nueva el "+dmy(nuevaFecha)+" que se superpone con lo que ya tenía");
+            renderDetalle();
+          } else {
+            const aviso = avisoSolapamiento(persona);
+            if(aviso) alert(aviso);
+          }
+        }
+      }
     }
 
     /* ---- DASHBOARD ---- */
