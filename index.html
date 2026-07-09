@@ -173,10 +173,11 @@
         nombre: "Base Neuquén",
         titulo: "Base de mantenimiento · Neuquén",
         sub: "Mantenimiento de trailers de rental y gestión de stock · Base Neuquén · conectado a Supabase",
-        tabDefault: "nqn_trailers",
+        tabDefault: "nqn_dash",
         tabs: [
+          { id:"nqn_dash", label:"Dashboard", c:"#E6F1FB" },
           { id:"nqn_trailers", label:"Trailers", c:"#E6F1FB" },
-          { id:"nqn_manten", label:"Mantenimiento", c:"#E8F3DE" },
+          { id:"nqn_manten", label:"Planificación", c:"#E8F3DE" },
           { id:"nqn_detalle", label:"Detalle diario", c:"#E1F5EE" },
           { id:"nqn_gantt", label:"Gantt", c:"#DEEEF5" },
           { id:"nqn_histo", label:"Histograma", c:"#F2E8D8" },
@@ -210,6 +211,7 @@
       tab = SEDES[s].tabDefault;
       // Resetear filtros que guardan ids específicos de una sede, para no arrastrarlos a la otra.
       ganttProy = ""; histoProy = ""; impactoProy = ""; planiProy = ""; detalleDesde = null; detalleVerTodo = false;
+      trailerEstadoFiltro = ""; mantTrailerFiltro = ""; mantDesdeFiltro = "";
       renderTabs();
       cargar();
     }
@@ -238,6 +240,9 @@
     let proyVista = "operacion";   // vista de la pestaña Proyectos: "operacion" | "cotizaciones" | "archivados"
     function setProyVista(v){ proyVista = v; renderProyectos(); }
     let trailers = [];
+    let trailerEstadoFiltro = "";   // filtro de estado activo en la pestaña Trailers (click en indicador)
+    let mantTrailerFiltro = "";     // filtro por trailer en Planificación (mantenimiento)
+    let mantDesdeFiltro = "";       // filtro "desde tal fecha" en Planificación (oculta tareas que terminan antes)
     let mantTareas = [], mantPers = {}, mantTipicas = [];
     let mantParte = {};            // clave "tareaId|fecha" -> avance (texto)
     let nqnParteFecha = "";        // día seleccionado en el parte de Neuquén
@@ -323,6 +328,18 @@
       setEstado("Cargando…", "cargando");
       draftPr = {}; // limpiar borrador de Proyectos en cada recarga completa
       // ===== Pestañas de Base Neuquén =====
+      if (tab === "nqn_dash") {
+        if (!personas.length) { const { data } = await sb.from("personal").select("*"); personas = (data||[]).sort((a,b)=>{if(a.tipo!==b.tipo)return a.tipo==="Directo"?-1:1;return (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999);}); }
+        { const { data } = await sb.from("trailers").select("*").eq("sede","neuquen"); trailers = (data||[]).sort((a,b)=> (a.codigo||"").localeCompare(b.codigo||"", "es", {numeric:true})); }
+        { const { data } = await sb.from("mant_tareas").select("*").eq("sede","neuquen"); mantTareas = (data||[]).sort((a,b)=> (b.creado_en||"").localeCompare(a.creado_en||"")); }
+        { const { data } = await sb.from("mant_tareas_personal").select("*"); mantPers = {}; (data||[]).forEach(r=>{ if(!mantPers[r.tarea_id]) mantPers[r.tarea_id]=[]; mantPers[r.tarea_id].push(r.persona_id); }); }
+        { const { data } = await sb.from("mant_parte").select("*").eq("sede","neuquen"); mantParte = {}; (data||[]).forEach(r=>{ mantParte[r.tarea_id+"|"+r.fecha] = r.avance||""; }); }
+        { const { data } = await sb.from("detalle_diario").select("*").eq("sede","neuquen"); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
+        { const { data } = await sb.from("stock_items").select("*").eq("sede","neuquen"); stockItems = data || []; }
+        setEstado("\u2713 Dashboard · Base Neuquén.", "ok");
+        renderDashNqn();
+        return;
+      }
       if (tab === "nqn_trailers") {
         const { data, error } = await sb.from("trailers").select("*").eq("sede","neuquen");
         if (error) return errLoad(error);
@@ -545,7 +562,7 @@
       if(error) return setEstado("Error: "+error.message,"err");
       if(especialidadHist[pid]) delete especialidadHist[pid][mes]; setEstado("\u2713 Borrado.","ok"); renderPersonal();
     }
-    async function agregarP(){const{error}=await sb.from("personal").insert({nombre:"Nueva persona",tipo:"Directo",costo_hora:0,sede:SEDE});if(error)return setEstado("Error: "+error.message,"err");registrarLog("crear","personal","Nueva persona");cargar();}
+    async function agregarP(){const ch=(SEDE==="neuquen"?17000:0);const{error}=await sb.from("personal").insert({nombre:"Nueva persona",tipo:"Directo",costo_hora:ch,sede:SEDE});if(error)return setEstado("Error: "+error.message,"err");registrarLog("crear","personal","Nueva persona");cargar();}
     async function editarP(id,c,v){const u={};u[c]=v;const{error}=await sb.from("personal").update(u).eq("id",id);if(error)return setEstado("Error: "+error.message,"err");setEstado("\u2713 Guardado.","ok");}
     async function eliminarP(id){
       const p = personas.find(x=>x.id===id);
@@ -901,20 +918,135 @@
       const mods = modulosDeProy(proyId); mods.push("M"+(mods.length+1)); guardarModulos(proyId, mods);
     }
 
-    /* ---- TRAILERS (Base Neuquén) ---- */
-    function renderTrailers() {
-      // Resumen por estado
+    /* ---- DASHBOARD (Base Neuquén) — control de sede ---- */
+    function renderDashNqn(){
+      const hoy = hoyISO();
+      const manana = sumarDiasHabiles(hoy, 1);
+      const total = trailers.length;
       const conteo = {}; TRAILER_EST_KEYS.forEach(k=> conteo[k]=0);
       trailers.forEach(t=>{ if(conteo[t.estado]!=null) conteo[t.estado]++; });
-      let resumen = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 16px">';
+      const alquilados = conteo.alquilado||0;
+      const utilPct = total ? Math.round(alquilados*100/total) : 0;
+      const fueraServicio = trailers.filter(t=> t.estado==="mantenimiento" || t.estado==="rebuilding");
+
+      // Mantenimientos: en curso hoy / próximos 7 días naturales
+      const en7 = (()=>{ let c=0; const lim=new Date(hoy+"T12:00:00").getTime()+7*86400000; mantTareas.forEach(t=>{ if(!t.fecha_desde) return; const ini=new Date(t.fecha_desde+"T12:00:00").getTime(); if(ini> new Date(hoy+"T12:00:00").getTime() && ini<=lim) c++; }); return c; })();
+      const enCurso = mantTareas.filter(t=> diasHabiles(t.fecha_desde,t.fecha_hasta).includes(hoy));
+
+      // Stock: ítems bajo mínimo + valorizado total
+      const bajos = stockItems.filter(bajoMinimo);
+      const valorizado = stockItems.reduce((s,i)=> s + (Number(i.cantidad)||0)*(Number(i.costo)||0), 0);
+
+      // Indicadores de gestión
+      // Antigüedad de mantenimientos abiertos (pendiente/en curso, no finalizados) cuyo fin planificado ya pasó.
+      const abiertosVencidos = mantTareas.filter(t=> t.estado!=="finalizada" && t.fecha_hasta && t.fecha_hasta < hoy);
+      // Trailers sin actividad de mantenimiento registrada en los últimos 30 días (parte diario).
+      const hace30 = fechaStr(new Date(new Date(hoy+"T12:00:00").getTime()-30*86400000));
+      const conParteReciente = new Set();
+      Object.keys(mantParte).forEach(k=>{ const [tid,f]=k.split("|"); if(f>=hace30){ const mt=mantTareas.find(x=>x.id===tid); if(mt&&mt.trailer_id) conParteReciente.add(mt.trailer_id); } });
+      const sinMantReciente = trailers.filter(t=> !conParteReciente.has(t.id));
+
+      const card = (num,label,color,extra)=> '<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 18px">'
+        + '<div style="font-size:30px;font-weight:800;color:'+(color||'#2C2C2A')+';line-height:1">'+num+'</div>'
+        + '<div style="font-size:12.5px;color:#5F5E5A;margin-top:5px">'+label+'</div>'+(extra?'<div style="font-size:11px;color:#A8A69E;margin-top:2px">'+extra+'</div>':'')+'</div>';
+
+      let h = '<p style="font-size:13px;color:#888780;margin-top:0">Panorama de la sede: estado del parque, mantenimientos, stock y qué se trabaja hoy y mañana.</p>';
+
+      // Fila 1 — KPIs principales
+      h += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">';
+      h += card(total, "Trailers en el parque");
+      h += card(utilPct+"%", "Utilización (alquilados)", utilPct>=70?'#3B6D11':utilPct>=40?'#854F0B':'#A32D2D', alquilados+" de "+total+" alquilados");
+      h += card(enCurso.length, "Mantenimientos en curso hoy", enCurso.length?'#185FA5':'#888780', en7?("+"+en7+" en los próximos 7 días"):"");
+      h += card(bajos.length, "Ítems bajo mínimo", bajos.length?'#A32D2D':'#3B6D11');
+      h += card(fmtMoneda(valorizado), "Valorizado de stock", '#2C2C2A');
+      h += '</div>';
+
+      // Fila 2 — desglose del parque por estado (clickeable → va a Trailers filtrado)
+      h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px">';
       TRAILER_EST_KEYS.forEach(k=>{ const e=TRAILER_ESTADOS[k];
-        resumen += '<div style="display:flex;align-items:center;gap:7px;background:'+e.bg+';border-radius:10px;padding:7px 12px"><span style="font-weight:700;color:'+e.color+';font-size:16px">'+conteo[k]+'</span><span style="font-size:12px;color:'+e.color+'">'+e.label+'</span></div>';
+        h += '<div onclick="trailerEstadoFiltro=\''+k+'\';cambiarTab(\'nqn_trailers\')" title="Ver en Trailers" style="cursor:pointer;display:flex;align-items:center;gap:8px;background:'+e.bg+';border-radius:10px;padding:8px 14px"><span style="font-weight:800;color:'+e.color+';font-size:20px">'+(conteo[k]||0)+'</span><span style="font-size:12px;color:'+e.color+'">'+e.label+'</span></div>';
+      });
+      h += '</div>';
+
+      // Dos columnas: "hoy y mañana" + alertas/indicadores
+      h += '<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">';
+
+      // Columna izquierda — en qué se trabaja hoy y mañana
+      const bloqueDia = (titulo, fecha)=>{
+        const activas = mantTareas.filter(t=> diasHabiles(t.fecha_desde,t.fecha_hasta).includes(fecha));
+        let b = '<div style="font-size:13px;font-weight:700;margin:0 0 6px">'+titulo+' · '+dmy(fecha)+' <span style="font-weight:500;color:#A8A69E">('+activas.length+')</span></div>';
+        if(!activas.length){ b += '<div style="font-size:12px;color:#A8A69E;padding:6px 0">Sin tareas planificadas.</div>'; return b; }
+        activas.forEach(t=>{ const e=MANT_ESTADOS[t.estado]||MANT_ESTADOS.pendiente; const quien=(mantPers[t.id]||[]).map(nombrePersona).join(", ")||"sin asignar";
+          b += '<div style="padding:7px 0;border-bottom:1px solid #F1EFE8"><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span style="background:#E6F1FB;color:#185FA5;padding:1px 6px;border-radius:5px;font-size:10.5px;font-weight:600">'+trailerIfTipoId(t.trailer_id)+'</span><span style="font-size:12px;font-weight:600">'+descMant(t)+'</span><span style="background:'+e.bg+';color:'+e.color+';padding:1px 6px;border-radius:5px;font-size:10px">'+e.label+'</span></div><div style="font-size:11px;color:#888780;margin-top:2px">'+quien+'</div></div>';
+        });
+        return b;
+      };
+      h += '<div style="flex:1;min-width:300px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px 18px">';
+      h += '<div style="font-size:14px;font-weight:700;margin-bottom:10px">🔧 Trabajo de mantenimiento</div>';
+      h += bloqueDia("Hoy", hoy);
+      h += '<div style="height:12px"></div>';
+      h += bloqueDia("Mañana", manana);
+      h += '</div>';
+
+      // Columna derecha — alertas y control
+      h += '<div style="flex:1;min-width:300px;display:flex;flex-direction:column;gap:14px">';
+
+      // Trailers fuera de servicio
+      h += '<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px 18px">';
+      h += '<div style="font-size:14px;font-weight:700;margin-bottom:8px">🚧 Fuera de servicio <span style="font-weight:500;color:#A8A69E">('+fueraServicio.length+')</span></div>';
+      if(!fueraServicio.length) h += '<div style="font-size:12px;color:#A8A69E">Ningún trailer en mantenimiento o rebuilding.</div>';
+      else fueraServicio.forEach(t=>{ const e=TRAILER_ESTADOS[t.estado]||{color:'#55544F',bg:'#F1EFE8',label:t.estado}; h += '<div style="display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #F1EFE8;font-size:12.5px"><span style="font-weight:600">'+trailerIfTipo(t)+'</span><span style="background:'+e.bg+';color:'+e.color+';padding:1px 6px;border-radius:5px;font-size:10px;margin-left:auto">'+e.label+'</span></div>'; });
+      h += '</div>';
+
+      // Alertas de stock
+      h += '<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px 18px">';
+      h += '<div style="font-size:14px;font-weight:700;margin-bottom:8px">📦 Stock bajo mínimo <span style="font-weight:500;color:#A8A69E">('+bajos.length+')</span></div>';
+      if(!bajos.length) h += '<div style="font-size:12px;color:#3B6D11">Todo el stock está por encima del mínimo.</div>';
+      else bajos.slice(0,8).forEach(i=>{ h += '<div style="display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #F1EFE8;font-size:12.5px"><span>'+((i.descripcion||i.codigo||"(ítem)")).replace(/</g,"&lt;")+'</span><span style="margin-left:auto;color:#A32D2D;font-weight:600">'+fmtNum(i.cantidad)+' / mín '+fmtNum(i.minimo)+'</span></div>'; });
+      if(bajos.length>8) h += '<div style="font-size:11px;color:#A8A69E;margin-top:6px">y '+(bajos.length-8)+' más…</div>';
+      h += '</div>';
+
+      // Indicadores de gestión
+      h += '<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px 18px">';
+      h += '<div style="font-size:14px;font-weight:700;margin-bottom:8px">📈 Control de gestión</div>';
+      h += '<div style="display:flex;gap:8px;align-items:baseline;padding:4px 0;font-size:12.5px"><span style="font-size:19px;font-weight:800;color:'+(abiertosVencidos.length?'#A32D2D':'#3B6D11')+';min-width:30px">'+abiertosVencidos.length+'</span><span style="color:#5F5E5A">mantenimientos con fecha de fin vencida y sin finalizar</span></div>';
+      h += '<div style="display:flex;gap:8px;align-items:baseline;padding:4px 0;font-size:12.5px"><span style="font-size:19px;font-weight:800;color:'+(sinMantReciente.length?'#854F0B':'#3B6D11')+';min-width:30px">'+sinMantReciente.length+'</span><span style="color:#5F5E5A">trailers sin parte de mantenimiento en los últimos 30 días</span></div>';
+      h += '</div>';
+
+      h += '</div>'; // fin columna derecha
+      h += '</div>'; // fin dos columnas
+
+      h += '<div class="row-actions"><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
+      contenido.innerHTML = h;
+    }
+
+    /* ---- TRAILERS (Base Neuquén) ---- */
+    function setTrailerFiltro(k){ trailerEstadoFiltro = (trailerEstadoFiltro===k ? "" : k); renderTrailers(); }
+    function renderTrailers() {
+      // Resumen por estado — indicadores grandes y clickeables (filtran la tabla de abajo)
+      const conteo = {}; TRAILER_EST_KEYS.forEach(k=> conteo[k]=0);
+      trailers.forEach(t=>{ if(conteo[t.estado]!=null) conteo[t.estado]++; });
+      const total = trailers.length;
+      let resumen = '<div style="display:flex;gap:12px;flex-wrap:wrap;margin:0 0 18px">';
+      // Tarjeta "Total" (deselecciona el filtro)
+      const totalSel = trailerEstadoFiltro==="";
+      resumen += '<div onclick="setTrailerFiltro(\'\')" title="Ver todos" style="cursor:pointer;flex:1;min-width:130px;background:#fff;border:2px solid '+(totalSel?'#2C2C2A':'#E6E4DC')+';border-radius:14px;padding:14px 18px;transition:border-color .15s">'
+        + '<div style="font-size:34px;font-weight:800;color:#2C2C2A;line-height:1">'+total+'</div>'
+        + '<div style="font-size:13px;color:#5F5E5A;margin-top:4px">Parque total'+(totalSel?' <span style="color:#2C2C2A;font-weight:600">●</span>':'')+'</div></div>';
+      TRAILER_EST_KEYS.forEach(k=>{ const e=TRAILER_ESTADOS[k]; const sel=trailerEstadoFiltro===k;
+        const pct = total ? Math.round(conteo[k]*100/total) : 0;
+        resumen += '<div onclick="setTrailerFiltro(\''+k+'\')" title="Filtrar: '+e.label+'" style="cursor:pointer;flex:1;min-width:130px;background:'+e.bg+';border:2px solid '+(sel?e.color:'transparent')+';border-radius:14px;padding:14px 18px;transition:border-color .15s">'
+          + '<div style="font-size:34px;font-weight:800;color:'+e.color+';line-height:1">'+conteo[k]+'</div>'
+          + '<div style="font-size:13px;color:'+e.color+';margin-top:4px">'+e.label+' <span style="opacity:.7;font-size:11px">('+pct+'%)</span>'+(sel?' <span style="font-weight:700">●</span>':'')+'</div></div>';
       });
       resumen += '</div>';
+      if(trailerEstadoFiltro) resumen += '<div style="margin:0 0 10px"><button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:4px 11px;font-size:12px" onclick="setTrailerFiltro(\''+trailerEstadoFiltro+'\')">✕ Quitar filtro · ver todos</button></div>';
+
+      const filtrados = trailerEstadoFiltro ? trailers.filter(t=>t.estado===trailerEstadoFiltro) : trailers;
 
       let h = resumen + '<table><thead><tr><th>Código (contenedor)</th><th>IF</th><th>Tipo</th><th>Med</th><th>Mod</th><th>Estado</th><th>Ubicación</th><th>Cliente</th><th>Obs.</th><th></th></tr></thead><tbody>';
-      if (!trailers.length) h += '<tr><td colspan="10" style="color:#A8A69E;padding:14px">Sin trailers cargados. Agregá el primero abajo.</td></tr>';
-      trailers.forEach(t=>{
+      if (!filtrados.length) h += '<tr><td colspan="10" style="color:#A8A69E;padding:14px">'+(trailerEstadoFiltro?'Sin trailers en este estado.':'Sin trailers cargados. Agregá el primero abajo.')+'</td></tr>';
+      filtrados.forEach(t=>{
         const e = TRAILER_ESTADOS[t.estado] || { color:"#55544F" };
         const alquilado = (t.estado === "alquilado");
         const selEstado = '<select onchange="editarTr(\''+t.id+'\',\'estado\',this.value)" style="width:auto;color:'+e.color+';font-weight:600">'
@@ -944,6 +1076,9 @@
 
     /* ---- MANTENIMIENTO (Base Neuquén) ---- */
     function nombreTrailer(id){ const t=trailers.find(x=>x.id===id); if(!t) return "(sin trailer)"; const extra = t.alias || [t.tipo,t.medida].filter(Boolean).join(" "); return (t.codigo||"(sin código)")+(extra?(" · "+extra):""); }
+    // Etiqueta corta de un trailer por IF + Tipo (sin el código de contenedor). Usada en Gantt, Histograma, Parte, filtros.
+    function trailerIfTipo(t){ if(!t) return "(sin trailer)"; const iff = t.if_codigo || "(sin IF)"; const tipo = (t.tipo||"").trim(); return tipo ? (iff+" · "+tipo) : iff; }
+    function trailerIfTipoId(id){ return trailerIfTipo(trailers.find(x=>x.id===id)); }
     function renderMantenimiento() {
       let h = '<p style="font-size:13px;color:#888780;margin-top:0">Tareas de mantenimiento sobre los trailers. Cada tarea tiene un trailer, una descripción (de la lista típica o libre), fechas, estado y una o varias personas asignadas.</p>';
 
@@ -965,13 +1100,30 @@
       });
       h += '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><input id="nuevaTareaCat" placeholder="Categoría (ej: PINTURA)" style="width:180px"><input id="nuevaSubtarea" placeholder="Subtarea (ej: PI. PINTURA INTERIOR)" style="flex:1;min-width:200px" onkeydown="if(event.key===\'Enter\')agregarTipica()"><button class="btn-add" onclick="agregarTipica()">+ Agregar</button></div></div></details>';
 
+      // ---- Filtros: por trailer y "desde tal fecha" (achica la ventana) ----
+      const hoyF = fechaStr(new Date());
+      if (mantDesdeFiltro === "") mantDesdeFiltro = hoyF;
+      h += '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;background:#FAFAF8;border:1px solid #EEECE4;border-radius:10px;padding:8px 12px">';
+      h += '<label style="font-size:12px;color:#888780">Trailer <select onchange="mantTrailerFiltro=this.value;renderMantenimiento()" style="width:auto"><option value="">Todos</option>'
+        + trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===mantTrailerFiltro?'selected':'')+'>'+trailerIfTipo(tr).replace(/"/g,'&quot;')+'</option>').join('') + '</select></label>';
+      h += '<label style="font-size:12px;color:#888780">Desde <input type="date" value="'+mantDesdeFiltro+'" onchange="mantDesdeFiltro=this.value;renderMantenimiento()" style="width:auto"></label>';
+      h += '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:5px 10px;font-size:12px" onclick="mantTrailerFiltro=\'\';mantDesdeFiltro=\'\';renderMantenimiento()">Limpiar filtros</button>';
+      h += '</div>';
+
+      // Aplicar filtros: por trailer y por fecha ("desde" oculta tareas que terminan antes de esa fecha).
+      let mantVisibles = mantTareas.slice();
+      if (mantTrailerFiltro) mantVisibles = mantVisibles.filter(t=> t.trailer_id===mantTrailerFiltro);
+      if (mantDesdeFiltro) mantVisibles = mantVisibles.filter(t=> !t.fecha_hasta || t.fecha_hasta >= mantDesdeFiltro);
+      const ocultasMant = mantTareas.length - mantVisibles.length;
+      if (ocultasMant > 0) h += '<p style="font-size:11.5px;color:#A8A69E;margin:0 0 10px">'+ocultasMant+' tarea(s) ocultas por los filtros.</p>';
+
       // Lista de tareas de mantenimiento
-      if (!mantTareas.length) h += '<p style="color:#A8A69E;font-size:13px">Sin tareas de mantenimiento. Agregá la primera abajo.</p>';
-      mantTareas.forEach(t=>{
+      if (!mantVisibles.length) h += '<p style="color:#A8A69E;font-size:13px">'+(mantTareas.length?'Ninguna tarea coincide con los filtros.':'Sin tareas de mantenimiento. Agregá la primera abajo.')+'</p>';
+      mantVisibles.forEach(t=>{
         const gente = mantPers[t.id] || [];
         const selTrailer = '<select onchange="editarMt(\''+t.id+'\',\'trailer_id\',this.value)" style="min-width:180px">'
           + '<option value="">(elegir trailer)</option>'
-          + trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===t.trailer_id?'selected':'')+'>'+((tr.if_codigo||tr.codigo||'(sin IF)')).replace(/"/g,'&quot;')+'</option>').join('') + '</select>';
+          + trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===t.trailer_id?'selected':'')+'>'+trailerIfTipo(tr).replace(/"/g,'&quot;')+'</option>').join('') + '</select>';
         // Datos del trailer seleccionado (IF, tipo, medida) — informativos, no editables.
         const trSel = trailers.find(x=>x.id===t.trailer_id);
         const infoTrailer = trSel
@@ -1088,7 +1240,7 @@
         const e = MANT_ESTADOS[t.estado]||MANT_ESTADOS.pendiente;
         const quien = (mantPers[t.id]||[]).map(nombrePersona).join(", ") || "sin asignar";
         const av = (mantParte[t.id+"|"+fSel]||"").trim();
-        return "• "+nombreTrailer(t.trailer_id)+" → "+descMant(t)+" ["+e.label+"]\n   "+quien+(av?("\n   Avance: "+av):"");
+        return "• "+trailerIfTipoId(t.trailer_id)+" → "+descMant(t)+" ["+e.label+"]\n   "+quien+(av?("\n   Avance: "+av):"");
       });
       const texto = "*Parte diario · Base Neuquén*\n"+dmy(fSel)+"\n\n"+(lineas.length?lineas.join("\n"):"Sin tareas activas este día.");
 
@@ -1110,7 +1262,7 @@
         const quien = (mantPers[t.id]||[]).map(nombrePersona).join(", ") || '<span style="color:#A8A69E">sin asignar</span>';
         const av = mantParte[t.id+"|"+fSel]||"";
         h += '<div style="padding:10px 0;border-bottom:1px solid #F1EFE8">'
-          + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="background:#E6F1FB;color:#185FA5;padding:2px 7px;border-radius:6px;font-size:11px;font-weight:600">'+nombreTrailer(t.trailer_id)+'</span>'
+          + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="background:#E6F1FB;color:#185FA5;padding:2px 7px;border-radius:6px;font-size:11px;font-weight:600">'+trailerIfTipoId(t.trailer_id)+'</span>'
           + '<span style="font-size:13px;font-weight:600">'+descMant(t)+'</span>'
           + '<span style="background:'+e.bg+';color:'+e.color+';padding:2px 7px;border-radius:6px;font-size:10.5px">'+e.label+'</span></div>'
           + '<div style="font-size:12px;color:#888780;margin:4px 0 6px">'+quien+'</div>'
@@ -2244,6 +2396,13 @@
       const conf = Object.entries(horasDia).filter(([,v])=>v>8);
       if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación:</b> '+conf.map(([k,v])=>{const [pid,f]=k.split("|");return nombrePersona(pid)+" ("+dm(f)+"): "+v+"h";}).join(" · ")+'</div>';
 
+      // Opciones editables (igual que en La Huella): trailer, tarea (categoría), subtarea, persona.
+      const optTr = (sel)=> '<option value="">(sin trailer)</option>'+trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===sel?'selected':'')+'>'+trailerIfTipo(tr).replace(/"/g,'&quot;')+'</option>').join('');
+      const catsNqn = Object.keys(tareasDeMant()).sort((a,b)=>a.localeCompare(b,"es"));
+      const optTareaN = (sel)=>{ const base=catsNqn.slice(); if(sel && !base.includes(sel)) base.unshift(sel); return '<option value="">(tarea)</option>'+base.map(c=>'<option value="'+c.replace(/"/g,'&quot;')+'" '+(c===sel?'selected':'')+'>'+c.replace(/</g,'&lt;')+'</option>').join(''); };
+      const optSubN = (cat,sel)=>{ const cc=tareasDeMant(); const base=(cat&&cc[cat])?cc[cat].map(s=>s.subtarea).filter(Boolean):[]; if(sel && !base.includes(sel)) base.unshift(sel); return '<option value="">(subtarea)</option>'+base.map(s=>'<option value="'+String(s).replace(/"/g,'&quot;')+'" '+(s===sel?'selected':'')+'>'+String(s).replace(/</g,'&lt;')+'</option>').join(''); };
+      const optPersN = (sel)=> personasDe("neuquen").map(p=>'<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
+
       h += '<table><thead><tr><th>Fecha</th><th>Trailer</th><th>Tarea</th><th>Subtareas</th><th>Persona</th><th>H. norm.</th><th>H. extra</th><th>Aus.</th></tr></thead><tbody>';
       filasVisibles.forEach(f=>{
         const pasado = f.fecha < hoy;
@@ -2254,13 +2413,12 @@
         const btnSigue = (esHoy && !f.ausente && !f.es_extra)
           ? ' <button class="btn" title="Esta tarea sigue mañana" style="background:#fff;border:1px solid #BA7517;color:#BA7517;padding:2px 7px;font-size:10.5px;border-radius:6px" onclick="seguirMananaNqn(\''+f.id+'\')">↪ sigue mañana</button>'
           : '';
-        const trailerNom = (()=>{ const tr=trailers.find(x=>x.id===f.trailer_id); return tr?(tr.codigo||'(sin código)'):'(trailer)'; })();
         h += '<tr style="'+bg+'">'
           + '<td style="white-space:nowrap;color:#888780">'+dm(f.fecha)+(pasado?' 🔒':'')+tagExtra+btnSigue+'</td>'
-          + '<td style="font-size:12px">'+trailerNom+'</td>'
-          + '<td style="font-size:12px">'+(f.estacion_real||'—')+'</td>'
-          + '<td style="font-size:11.5px;color:#5F5E5A">'+(f.subtarea_real||'—')+'</td>'
-          + '<td style="font-size:12px">'+nombrePersona(f.persona_real)+'</td>'
+          + '<td><select '+dis+' onchange="editarDetNqnCampo(\''+f.id+'\',\'trailer_id\',this.value)" style="min-width:150px;font-size:12px">'+optTr(f.trailer_id)+'</select></td>'
+          + '<td>'+(f.ausente?'<span style="color:#A8A69E">—</span>':'<select '+dis+' onchange="cambiarTareaDetNqn(\''+f.id+'\',this.value)" style="min-width:130px;font-size:12px">'+optTareaN(f.estacion_real)+'</select>')+'</td>'
+          + '<td>'+(f.ausente?'<span style="color:#A8A69E">—</span>':'<select '+dis+' onchange="editarDetNqnCampo(\''+f.id+'\',\'subtarea_real\',this.value)" style="min-width:130px;font-size:11.5px">'+optSubN(f.estacion_real,f.subtarea_real)+'</select>')+'</td>'
+          + '<td><select '+dis+' onchange="editarDetNqnCampo(\''+f.id+'\',\'persona_real\',this.value)" style="min-width:120px;font-size:12px">'+optPersN(f.persona_real)+'</select></td>'
           + '<td style="width:70px"><input type="number" min="0" value="'+(f.horas_normales!=null?f.horas_normales:'')+'" '+dis+' onchange="editarDetNqn(\''+f.id+'\',\'horas_normales\',this.value)" style="width:60px"></td>'
           + '<td style="width:70px"><input type="number" min="0" value="'+(f.horas_extra!=null?f.horas_extra:0)+'" '+dis+' onchange="editarDetNqn(\''+f.id+'\',\'horas_extra\',this.value)" style="width:60px"></td>'
           + '<td style="width:40px;text-align:center"><input type="checkbox" '+(f.ausente?'checked':'')+' '+dis+' onchange="toggleAusenteNqn(\''+f.id+'\',this.checked)"></td>'
@@ -2277,6 +2435,22 @@
       const { error } = await sb.from("detalle_diario").update({ [c]: val }).eq("id", id);
       if (error) return setEstado("Error: "+error.message,"err");
       const f = detalle.find(x=>x.id===id); if(f) f[c]=val; setEstado("\u2713 Guardado.","ok"); renderDetalleNqn();
+    }
+    // Editar un campo de texto/id del detalle de Neuquén (trailer, subtarea, persona).
+    async function editarDetNqnCampo(id, c, v){
+      const u = {}; u[c] = (v===""?null:v);
+      const { error } = await sb.from("detalle_diario").update(u).eq("id", id);
+      if (error) return setEstado("Error: "+error.message,"err");
+      const f = detalle.find(x=>x.id===id); if(f) f[c]=u[c]; setEstado("\u2713 Guardado.","ok"); renderDetalleNqn();
+    }
+    // Cambiar la Tarea (categoría) del detalle de Neuquén: al cambiar, se resetea la subtarea a la primera de la categoría.
+    async function cambiarTareaDetNqn(id, cat){
+      const cc = tareasDeMant();
+      const primeraSub = (cat && cc[cat] && cc[cat].length) ? (cc[cat][0].subtarea||"") : "";
+      const { error } = await sb.from("detalle_diario").update({ estacion_real: cat||null, subtarea_real: primeraSub||null }).eq("id", id);
+      if (error) return setEstado("Error: "+error.message,"err");
+      const f = detalle.find(x=>x.id===id); if(f){ f.estacion_real=cat||null; f.subtarea_real=primeraSub||null; }
+      setEstado("\u2713 Guardado.","ok"); renderDetalleNqn();
     }
     // Marcar ausente en el detalle de Neuquén, con la misma opción de correr tareas.
     async function toggleAusenteNqn(id, aus){
@@ -2725,7 +2899,7 @@
       pre = pre || {};
       const fechaDefault = pre.fecha || fechaStr(new Date());
       const sel = (v,val)=> (String(v)===String(val)?' selected':'');
-      const optTrailer = trailers.map(tr=>'<option value="'+tr.id+'"'+sel(tr.id, pre.trailer_id)+'>'+((tr.codigo||'(sin código)')).replace(/"/g,'&quot;')+'</option>').join('');
+      const optTrailer = trailers.map(tr=>'<option value="'+tr.id+'"'+sel(tr.id, pre.trailer_id)+'>'+trailerIfTipo(tr).replace(/"/g,'&quot;')+'</option>').join('');
       const optPers = personasDe("neuquen").map(p=>'<option value="'+p.id+'"'+sel(p.id, pre.persona)+'>'+p.nombre+'</option>').join('');
       const cats = Object.keys(tareasDeMant()).sort((a,b)=>a.localeCompare(b,"es"));
       const optTarea = cats.map(c=>'<option value="'+c.replace(/"/g,'&quot;')+'"'+sel(c, pre.tarea)+'>'+c+'</option>').join('');
@@ -3105,7 +3279,7 @@
       const todas=[]; Object.values(porTr).forEach(e=>{ Object.keys(e.planByDay).forEach(d=>todas.push(d)); Object.keys(e.realByDay).forEach(d=>todas.push(d)); });
       const fechas=[...new Set(todas)].sort();
       const trConDatos = trailers.filter(tr=>porTr[tr.id]);
-      const filtro = '<label style="font-size:12px;color:#888780">Trailer <select onchange="setGanttProy(this.value)" style="width:auto"><option value="">Todos</option>'+trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===ganttProy?'selected':'')+'>'+(tr.codigo||'(sin código)')+'</option>').join('')+'</select></label>';
+      const filtro = '<label style="font-size:12px;color:#888780">Trailer <select onchange="setGanttProy(this.value)" style="width:auto"><option value="">Todos</option>'+trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===ganttProy?'selected':'')+'>'+trailerIfTipo(tr).replace(/"/g,'&quot;')+'</option>').join('')+'</select></label>';
       if(!fechas.length){ contenido.innerHTML='<div class="no-print" style="margin-bottom:12px">'+filtro+'</div><p style="font-size:13px;color:#888780">Las tareas no tienen fechas cargadas.</p>'; return; }
       let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0"><span style="display:inline-block;width:14px;height:11px;background:#AEB6C2;border:1px solid #8C95A3;border-radius:2px;vertical-align:middle"></span> planificado &nbsp; <span style="display:inline-block;width:14px;height:11px;background:#185FA5;border-radius:2px;vertical-align:middle"></span> real (hasta ayer). Cada barra muestra la tarea.</p><div style="display:flex;gap:8px;align-items:center">'+filtro+botonesExport("ganttn-print","gantt_neuquen")+'</div></div>';
       h+='<div id="ganttn-print"><div style="overflow-x:auto"><table style="min-width:'+(200+fechas.length*58)+'px;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8;z-index:6">Trailer</th>';
@@ -3115,7 +3289,7 @@
       const title = (set)=>[...set].join(", ");
       trConDatos.forEach(tr=>{
         const e=porTr[tr.id];
-        h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+(tr.codigo||'(sin código)')+'</td>';
+        h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+trailerIfTipo(tr)+'</td>';
         fechas.forEach(d=>{
           const pSet=e.planByDay[d], rSet=e.realByDay[d];
           let cell='';
@@ -3133,22 +3307,25 @@
     function renderHistoNqn(){
       if(!detalle.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">No hay detalle generado. Generalo desde Mantenimiento.</p>'; return; }
       const detH = histoProy ? detalle.filter(f=>f.trailer_id===histoProy) : detalle;
-      const filtro = '<label style="font-size:12px;color:#888780">Trailer <select onchange="setHistoProy(this.value)" style="width:auto"><option value="">Todos</option>'+trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===histoProy?'selected':'')+'>'+(tr.codigo||'(sin código)')+'</option>').join('')+'</select></label>';
+      const filtro = '<label style="font-size:12px;color:#888780">Trailer <select onchange="setHistoProy(this.value)" style="width:auto"><option value="">Todos</option>'+trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===histoProy?'selected':'')+'>'+trailerIfTipo(tr).replace(/"/g,'&quot;')+'</option>').join('')+'</select></label>';
       if(!detH.length){ contenido.innerHTML='<div class="no-print" style="margin-bottom:12px">'+filtro+'</div><p style="font-size:13px;color:#888780">Este trailer no tiene detalle cargado.</p>'; return; }
+      const soloTodos = !histoProy; // cuando el filtro es "Todos", mostramos también el IF del trailer en cada celda
+      const ifDe = (id)=>{ const t=trailers.find(x=>x.id===id); return t ? (t.if_codigo||'(sin IF)') : ''; };
       const fechas=[...new Set(detH.map(f=>f.fecha))].sort();
       const pers=[...new Set(detH.map(f=>f.persona_real))];
-      const cell={}; detH.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?"__aus":(f.estacion_real||"—"); });
+      // Celda: guardamos tarea + IF del trailer (para poder mostrar ambos cuando el filtro es "Todos").
+      const cell={}; detH.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?{aus:true}:{tarea:(f.estacion_real||"—"), iff:ifDe(f.trailer_id)}; });
       // Paleta simple por tarea (categoría).
       const cats=[...new Set(detH.map(f=>f.estacion_real||"—"))];
       const palette=["#E6F1FB|#185FA5","#E8F3DE|#3B6D11","#FAEEDA|#854F0B","#FBEAF0|#993556","#EFE7FB|#6B3FA0","#F2E8D8|#7A5C00","#E1F5EE|#0F6E56"];
       const colorDe={}; cats.forEach((c,i)=>{ colorDe[c]=palette[i%palette.length].split("|"); });
-      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por tarea.</p><div style="display:flex;gap:8px;align-items:center">'+filtro+botonesExport("histon-print","histograma_neuquen")+'</div></div><div id="histon-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
-      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:50px">'+dm(d)+'</th>');
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por tarea.'+(soloTodos?' Con el filtro en «Todos», cada celda muestra la tarea y el IF del trailer.':'')+'</p><div style="display:flex;gap:8px;align-items:center">'+filtro+botonesExport("histon-print","histograma_neuquen")+'</div></div><div id="histon-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*(soloTodos?64:52))+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
+      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:'+(soloTodos?62:50)+'px">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
       pers.forEach(pid=>{ h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+nombrePersona(pid)+'</td>';
         fechas.forEach(d=>{ const t=cell[pid+"|"+d]; let c='<span style="color:#D3D1C7">—</span>';
-          if(t==="__aus")c='<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>';
-          else if(t){ const col=colorDe[t]||["#EEE","#555"]; c='<span style="display:inline-block;width:100%;background:'+col[0]+';color:'+col[1]+';border-radius:5px;padding:3px 1px;font-size:8.5px" title="'+t+'">'+t.slice(0,8)+'</span>'; }
+          if(t && t.aus)c='<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>';
+          else if(t){ const col=colorDe[t.tarea]||["#EEE","#555"]; const iffLine = soloTodos ? '<div style="font-size:8px;font-weight:700;opacity:.85;line-height:1.1">'+String(t.iff).replace(/</g,'&lt;')+'</div>' : ''; c='<span style="display:inline-block;width:100%;background:'+col[0]+';color:'+col[1]+';border-radius:5px;padding:3px 1px;font-size:8.5px" title="'+String(t.tarea).replace(/"/g,'&quot;')+(soloTodos?(' · IF '+String(t.iff).replace(/"/g,'&quot;')):'')+'">'+iffLine+String(t.tarea).slice(0,8)+'</span>'; }
           h+='<td style="padding:4px;text-align:center">'+c+'</td>'; });
         h+='</tr>';
       });
