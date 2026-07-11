@@ -233,6 +233,9 @@
     let planiVerTodo = false;
     let planiProy = "";        // filtro por proyecto en Planificación General ("" = todos)
     let planiOrdenFecha = false; // toggle: ordenar estaciones por fecha de inicio
+    let planiLente = "estacion"; // lente de agrupación: "estacion" | "persona" | "proyecto" | "semana"
+    let planiGridEje = "estacion"; // en lente "semana": filas por "estacion" o "persona"
+    let planiAbiertos = new Set(); // ids de bloques expandidos (filas colapsables)
     let planiResaltar = null;  // {persona, fecha, bloques:[ids]} para resaltar tras saltar a un conflicto
     let impactoProy = "";      // filtro de proyecto del panel de impacto ("" = todos)
     let ganttProy = "", histoProy = "";  // filtros de Gantt e Histograma (compartidos; se resetean al cambiar de sede)
@@ -243,6 +246,8 @@
     let trailerEstadoFiltro = "";   // filtro de estado activo en la pestaña Trailers (click en indicador)
     let mantTrailerFiltro = "";     // filtro por trailer en Planificación (mantenimiento)
     let mantDesdeFiltro = "";       // filtro "desde tal fecha" en Planificación (oculta tareas que terminan antes)
+    let mantLente = "trailer";      // lente de agrupación: "trailer" | "tarea"
+    let mantAbiertos = new Set();   // ids de tareas de mantenimiento expandidas (filas colapsables)
     let mantTareas = [], mantPers = {}, mantTipicas = [];
     let mantParte = {};            // clave "tareaId|fecha" -> avance (texto)
     let nqnParteFecha = "";        // día seleccionado en el parte de Neuquén
@@ -1104,6 +1109,15 @@
       const hoyF = fechaStr(new Date());
       if (mantDesdeFiltro === "") mantDesdeFiltro = hoyF;
       h += '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;background:#FAFAF8;border:1px solid #EEECE4;border-radius:10px;padding:8px 12px">';
+      // ---- Selector de LENTE (agrupación): trailer / tarea ----
+      h += '<span style="font-size:12px;color:#888780">Ver por:</span>';
+      h += '<span style="display:inline-flex;background:#F1F0EC;border-radius:9px;padding:3px;gap:2px">'
+        + [['trailer','Trailer'],['tarea','Tarea'],['semana','Semana']].map(([k,lab])=>{
+            const on = mantLente===k;
+            return '<button class="btn" onclick="mantLente=\''+k+'\';renderMantenimiento()" style="border:0;background:'+(on?'#fff':'transparent')+';color:'+(on?'#2C2C2A':'#888780')+';font-size:12px;font-weight:550;padding:5px 12px;border-radius:7px;'+(on?'box-shadow:0 1px 3px rgba(0,0,0,.09)':'')+'">'+lab+'</button>';
+          }).join('')
+        + '</span>';
+      h += '<span style="width:1px;height:22px;background:#E6E4DC;margin:0 2px"></span>';
       h += '<label style="font-size:12px;color:#888780">Trailer <select onchange="mantTrailerFiltro=this.value;renderMantenimiento()" style="width:auto"><option value="">Todos</option>'
         + trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===mantTrailerFiltro?'selected':'')+'>'+trailerIfTipo(tr).replace(/"/g,'&quot;')+'</option>').join('') + '</select></label>';
       h += '<label style="font-size:12px;color:#888780">Desde <input type="date" value="'+mantDesdeFiltro+'" onchange="mantDesdeFiltro=this.value;renderMantenimiento()" style="width:auto"></label>';
@@ -1117,25 +1131,30 @@
       const ocultasMant = mantTareas.length - mantVisibles.length;
       if (ocultasMant > 0) h += '<p style="font-size:11.5px;color:#A8A69E;margin:0 0 10px">'+ocultasMant+' tarea(s) ocultas por los filtros.</p>';
 
-      // Lista de tareas de mantenimiento
-      if (!mantVisibles.length) h += '<p style="color:#A8A69E;font-size:13px">'+(mantTareas.length?'Ninguna tarea coincide con los filtros.':'Sin tareas de mantenimiento. Agregá la primera abajo.')+'</p>';
-      mantVisibles.forEach(t=>{
+      // ---- Controles de expandir/colapsar todo (no en vista grilla) ----
+      if (mantVisibles.length && mantLente!=='semana') {
+        h += '<div class="no-print" style="display:flex;gap:8px;align-items:center;margin-bottom:10px">'
+          + '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:4px 10px;font-size:11.5px" onclick="mantExpandTodo()">Expandir todo</button>'
+          + '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:4px 10px;font-size:11.5px" onclick="mantAbiertos.clear();renderMantenimiento()">Colapsar todo</button>'
+          + '<span style="font-size:11.5px;color:#A8A69E">Tocá una fila para expandirla y editarla.</span>'
+          + '</div>';
+      }
+
+      // Cuerpo expandido de una tarea: idéntico a la vista anterior (mismos onchange/onclick).
+      function cuerpoMt(t){
         const gente = mantPers[t.id] || [];
         const selTrailer = '<select onchange="editarMt(\''+t.id+'\',\'trailer_id\',this.value)" style="min-width:180px">'
           + '<option value="">(elegir trailer)</option>'
           + trailers.map(tr=>'<option value="'+tr.id+'" '+(tr.id===t.trailer_id?'selected':'')+'>'+trailerIfTipo(tr).replace(/"/g,'&quot;')+'</option>').join('') + '</select>';
-        // Datos del trailer seleccionado (IF, tipo, medida) — informativos, no editables.
         const trSel = trailers.find(x=>x.id===t.trailer_id);
         const infoTrailer = trSel
           ? '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:#5F5E5A;background:#F4F7FB;border-radius:8px;padding:6px 10px;margin:6px 0"><span><b>IF:</b> '+(trSel.if_codigo||'—')+'</span><span><b>Tipo:</b> '+(trSel.tipo||'—')+'</span><span><b>Medida:</b> '+(trSel.medida||'—')+'</span></div>'
           : '';
-        // Selector de Tarea (categoría) → subtareas MÚLTIPLES (chips toggleables).
         const tareasCatT = tareasDeMant();
         const catsT = Object.keys(tareasCatT).sort((a,b)=>a.localeCompare(b,"es"));
         const selTarea = '<select onchange="editarMt(\''+t.id+'\',\'tarea\',this.value)" style="min-width:170px">'
           + '<option value="">(elegir tarea)</option>'
           + catsT.map(c=>'<option value="'+c.replace(/"/g,'&quot;')+'" '+(c===t.tarea?'selected':'')+'>'+c+'</option>').join('') + '</select>';
-        // Subtareas elegidas (guardadas como texto separado por coma).
         const subsElegidas = (t.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
         const subsDeCat = (t.tarea && tareasCatT[t.tarea]) ? tareasCatT[t.tarea] : [];
         let subChips;
@@ -1144,16 +1163,14 @@
         else {
           subChips = '<div class="chips">'+subsDeCat.map(s=>{ const on=subsElegidas.includes(s.subtarea); return '<button class="chip'+(on?' on':'')+'" onclick="toggleMtSubtarea(\''+t.id+'\',\''+(s.subtarea||'').replace(/'/g,"\\'").replace(/"/g,'&quot;')+'\')">'+(s.subtarea||'').replace(/</g,'&lt;')+'</button>'; }).join('')+'</div>';
         }
-        // Horas POR TAREA (no por subtarea).
         const inputHoras = '<div class="pl-row" style="margin-top:6px;align-items:center"><span style="font-size:12px;color:#5F5E5A">Horas de la tarea:</span><input type="number" min="0" value="'+(t.horas!=null?t.horas:'')+'" placeholder="ej. 8" onchange="editarMt(\''+t.id+'\',\'horas\',this.value)" style="width:90px"></div>';
         const notaLibre = (!t.tarea && t.descripcion)
           ? '<div style="margin-top:6px"><input value="'+(t.descripcion||'').replace(/"/g,'&quot;')+'" placeholder="Descripción libre (registro anterior)" onchange="editarMt(\''+t.id+'\',\'descripcion\',this.value)" style="width:100%"></div>'
           : '';
-
-        h += '<div class="card">'
-          + '<div class="pl-row" style="align-items:center">'+selTrailer+'<button class="btn-del" style="margin-left:auto" onclick="eliminarMt(\''+t.id+'\')">×</button></div>'
+        return '<div style="padding:14px;border-top:1px solid #EEECE4">'
+          + '<div class="pl-row" style="align-items:center"><span style="font-size:11px;color:#A8A69E;margin-right:4px">Trailer:</span>'+selTrailer+'</div>'
           + infoTrailer
-          + '<div class="pl-row" style="margin:8px 0;flex-wrap:wrap">'+selTarea+'</div>'
+          + '<div class="pl-row" style="margin:8px 0;flex-wrap:wrap"><span style="font-size:11px;color:#A8A69E;margin-right:4px">Tarea:</span>'+selTarea+'</div>'
           + '<div style="font-size:11px;color:#A8A69E;margin:2px 0 4px">Subtareas (tildá una o varias):</div>'
           + subChips
           + inputHoras
@@ -1162,9 +1179,128 @@
           + '<div style="font-size:11px;color:#A8A69E;margin:6px 0 4px">Personas asignadas (tildá una o varias):</div>'
           + '<div class="chips">'+personasDe("neuquen").map(p=>{ const on=gente.includes(p.id); return '<button class="chip'+(on?' on':'')+'" onclick="toggleMtPersona(\''+t.id+'\',\''+p.id+'\','+(on?'true':'false')+')">'+p.nombre+'</button>'; }).join('')+'</div>'
           + '</div>';
-      });
+      }
+      // Fila colapsable de una tarea. showTrailer/showTarea según la lente.
+      function filaMt(t, showTrailer, showTarea){
+        const gente = mantPers[t.id] || [];
+        const abierto = mantAbiertos.has(t.id);
+        const trSel = trailers.find(x=>x.id===t.trailer_id);
+        const trNombre = trSel ? trailerIfTipo(trSel) : '<span style="color:#C99">sin trailer</span>';
+        const subsElegidas = (t.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
+        const tareaTxt = t.tarea ? (t.tarea + (subsElegidas.length?(' · '+subsElegidas.join(', ')):'')) : (t.descripcion || '<span style="color:#A8A69E">sin tarea</span>');
+        const dias = diasHabiles(t.fecha_desde,t.fecha_hasta);
+        const fechaTxt = (t.fecha_desde&&t.fecha_hasta) ? dm(t.fecha_desde)+'–'+dm(t.fecha_hasta)+' · '+dias.length+' d.háb.' : '<span style="color:#C99">sin fechas</span>';
+        const ava = gente.slice(0,5).map(pid=>{ const p=personas.find(x=>x.id===pid); const ini=p?p.nombre.split(' ').map(x=>x[0]).join('').slice(0,2).toUpperCase():'?'; return '<span style="display:inline-flex;width:22px;height:22px;border-radius:50%;background:#DCD9CF;color:#5F5E5A;font-size:9.5px;font-weight:650;align-items:center;justify-content:center;border:2px solid #fff;margin-left:-6px">'+ini+'</span>'; }).join('');
+        const avaWrap = gente.length ? '<span style="display:inline-flex;margin-left:6px">'+ava+'</span><span style="font-size:11.5px;color:#A8A69E;margin-left:8px">'+gente.length+' pers.</span>' : '<span style="font-size:11.5px;color:#C4C2BA;margin-left:6px">sin gente</span>';
+        // color de estado del trabajo (pendiente / en curso / hecho), fallback gris
+        const estColor = t.estado==='hecho' ? '#3B6D11' : t.estado==='en_curso' ? '#B5651D' : '#8A8780';
+        let head = '<div class="pl-row" style="margin:0;padding:11px 13px;cursor:pointer;align-items:center" onclick="mantToggle(\''+t.id+'\')">';
+        head += '<span style="color:#A8A69E;font-size:11px;transition:.15s;display:inline-block;'+(abierto?'transform:rotate(90deg)':'')+'">▶</span>';
+        if(showTrailer) head += '<span class="estpill" style="background:#3E6DA0;color:#fff;min-width:150px;display:inline-block;text-align:center;font-weight:600;font-size:11.5px">'+trNombre+'</span>';
+        if(showTarea) head += '<span style="font-weight:600;color:#2C2C2A;font-size:12.5px">'+tareaTxt+'</span>';
+        if(showTrailer && !showTarea) head += '<span style="font-size:12.5px;color:#888780">'+tareaTxt+'</span>';
+        head += '<span style="font-size:12px;color:#A8A69E;margin-left:8px">'+fechaTxt+'</span>';
+        if(t.estado) head += '<span style="background:'+estColor+'22;color:'+estColor+';font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:5px;margin-left:6px">'+t.estado.replace('_',' ')+'</span>';
+        head += '<span style="margin-left:auto;display:flex;align-items:center">'+avaWrap
+          + '<button class="btn-del" style="margin-left:10px" onclick="event.stopPropagation();eliminarMt(\''+t.id+'\')">×</button></span>';
+        head += '</div>';
+        return '<div class="card" style="border:1px solid #E6E4DC;border-left:5px solid #3E6DA0;border-radius:11px;margin-bottom:7px;padding:0;overflow:hidden">'
+          + head + (abierto ? cuerpoMt(t) : '') + '</div>';
+      }
+
+      if (!mantVisibles.length) {
+        h += '<p style="color:#A8A69E;font-size:13px">'+(mantTareas.length?'Ninguna tarea coincide con los filtros.':'Sin tareas de mantenimiento. Agregá la primera abajo.')+'</p>';
+      } else if (mantLente==='semana') {
+        // ---- VISTA PANORÁMICA: grilla día × trailer ----
+        h += '<p style="font-size:11.5px;color:#A8A69E;margin:0 0 10px">Tocá un bloque para abrirlo y editarlo.</p>';
+        // Rango de días: unión de los rangos visibles, acotado a 42 días.
+        let fMin=null, fMax=null;
+        mantVisibles.forEach(t=>{ if(t.fecha_desde){ if(!fMin||t.fecha_desde<fMin)fMin=t.fecha_desde; } if(t.fecha_hasta){ if(!fMax||t.fecha_hasta>fMax)fMax=t.fecha_hasta; } });
+        if(!fMin) fMin = fechaStr(new Date());
+        if(!fMax){ const d=new Date(fMin+'T12:00:00'); d.setDate(d.getDate()+13); fMax=fechaStr(d); }
+        const dIni=new Date(fMin+'T12:00:00'), dFin=new Date(fMax+'T12:00:00');
+        const dias=[]; let cur=new Date(dIni);
+        while(cur<=dFin && dias.length<42){ dias.push(fechaStr(cur)); cur.setDate(cur.getDate()+1); }
+        const tareasEnDia = (fecha, trId) => mantVisibles.filter(t => t.trailer_id===trId && diasHabiles(t.fecha_desde,t.fecha_hasta).includes(fecha));
+        // filas = trailers con tareas visibles
+        const filasTr = trailers.filter(tr=>mantVisibles.some(t=>t.trailer_id===tr.id));
+        const haySinTrailer = mantVisibles.some(t=>!t.trailer_id);
+
+        if(!filasTr.length && !haySinTrailer){
+          h += '<p style="font-size:13px;color:#A8A69E;padding:8px 2px">No hay tareas con fechas para mostrar en la grilla.</p>';
+        } else {
+          h += '<div style="overflow:auto;border:1px solid #E6E4DC;border-radius:12px;background:#fff">';
+          h += '<table style="border-collapse:collapse;width:100%;font-size:11.5px;min-width:'+(150+dias.length*66)+'px">';
+          h += '<thead><tr><th style="position:sticky;left:0;background:#F6F5F1;border:1px solid #EEECE4;padding:8px 10px;text-align:left;min-width:150px;z-index:2">Trailer</th>';
+          dias.forEach(f=>{
+            const wd=new Date(f+'T12:00:00').getDay(); const finde=(wd===0||wd===6); const fer=esFeriado(f);
+            h += '<th style="border:1px solid #EEECE4;padding:6px 4px;background:'+(fer?'#FBF0F0':finde?'#F1F0EC':'#F6F5F1')+';color:'+(fer?'#A32D2D':finde?'#C4C2BA':'#888780')+';font-weight:600;min-width:62px">'+['D','L','M','M','J','V','S'][wd]+'<br>'+f.slice(8,10)+'</th>';
+          });
+          h += '</tr></thead><tbody>';
+          const pintarFila = (label, trId) => {
+            let row = '<tr><td style="position:sticky;left:0;background:#FAFAF8;border:1px solid #EEECE4;padding:7px 10px;font-weight:600;white-space:nowrap;z-index:1"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#3E6DA0;margin-right:6px;vertical-align:0"></span>'+label+'</td>';
+            dias.forEach(f=>{
+              const wd=new Date(f+'T12:00:00').getDay(); const finde=(wd===0||wd===6);
+              const aqui = tareasEnDia(f, trId);
+              let cell='';
+              aqui.forEach(t=>{
+                const estColor = t.estado==='hecho' ? '#3B6D11' : t.estado==='en_curso' ? '#B5651D' : '#3E6DA0';
+                const etiqueta = t.tarea || t.descripcion || 'tarea';
+                cell += '<div onclick="mantAbrirDesdeGrilla(\''+t.id+'\')" title="'+etiqueta.replace(/"/g,'&quot;')+' — tocá para editar" '
+                  + 'style="background:'+estColor+';color:#fff;border-radius:5px;padding:3px 6px;margin:2px 0;font-size:10px;font-weight:600;cursor:pointer;line-height:1.25">'
+                  + etiqueta.replace(/</g,'&lt;') + '</div>';
+              });
+              row += '<td style="border:1px solid #EEECE4;padding:3px;vertical-align:top;background:'+(finde?'#FBFAF8':'#fff')+';min-width:62px">'+(cell||'<span style="color:#E0DED6;font-size:13px;display:block;text-align:center">·</span>')+'</td>';
+            });
+            return row + '</tr>';
+          };
+          filasTr.forEach(tr=>{ h += pintarFila(trailerIfTipo(tr).replace(/</g,'&lt;'), tr.id); });
+          if(haySinTrailer) h += pintarFila('<span style="color:#A32D2D">Sin trailer</span>', null);
+          h += '</tbody></table></div>';
+          h += '<p style="font-size:11px;color:#A8A69E;margin-top:8px">Cada celda es un día. Color del bloque según estado (azul pendiente, ámbar en curso, verde hecho). Fines de semana y feriados sombreados. Tocá un bloque para abrirlo en la lista y editarlo.</p>';
+        }
+      } else if (mantLente==='trailer') {
+        // Agrupar por trailer (según orden del parque), tareas sin trailer al final.
+        const conTrailer = trailers.filter(tr=>mantVisibles.some(t=>t.trailer_id===tr.id));
+        conTrailer.forEach(tr=>{
+          const grp = mantVisibles.filter(t=>t.trailer_id===tr.id).sort((a,b)=>(a.fecha_desde||'9999')<(b.fecha_desde||'9999')?-1:1);
+          if(!grp.length) return;
+          h += '<div style="font-size:11px;color:#A8A69E;text-transform:uppercase;letter-spacing:.05em;font-weight:650;margin:14px 2px 5px">'+trailerIfTipo(tr).replace(/</g,'&lt;')+' <span style="color:#C4C2BA;font-weight:500">· '+grp.length+'</span></div>';
+          grp.forEach(t=>{ h += filaMt(t, false, true); });
+        });
+        const sinTrailer = mantVisibles.filter(t=>!t.trailer_id);
+        if(sinTrailer.length){ h += '<div style="font-size:11px;color:#A32D2D;text-transform:uppercase;letter-spacing:.05em;font-weight:650;margin:14px 2px 5px">Sin trailer</div>'; sinTrailer.forEach(t=>{ h += filaMt(t, false, true); }); }
+      } else { // tarea (categoría)
+        const cats = [...new Set(mantVisibles.map(t=>t.tarea).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"es"));
+        cats.forEach(cat=>{
+          const grp = mantVisibles.filter(t=>t.tarea===cat).sort((a,b)=>(a.fecha_desde||'9999')<(b.fecha_desde||'9999')?-1:1);
+          if(!grp.length) return;
+          h += '<div style="font-size:11px;color:#A8A69E;text-transform:uppercase;letter-spacing:.05em;font-weight:650;margin:14px 2px 5px">'+cat.replace(/</g,'&lt;')+' <span style="color:#C4C2BA;font-weight:500">· '+grp.length+'</span></div>';
+          grp.forEach(t=>{ h += filaMt(t, true, false); });
+        });
+        const sinTarea = mantVisibles.filter(t=>!t.tarea);
+        if(sinTarea.length){ h += '<div style="font-size:11px;color:#A8A69E;text-transform:uppercase;letter-spacing:.05em;font-weight:650;margin:14px 2px 5px">Sin tarea</div>'; sinTarea.forEach(t=>{ h += filaMt(t, true, false); }); }
+      }
+      // expone la lista visible para "Expandir todo"
+      window.__mantVisiblesIds = mantVisibles.map(t=>t.id);
       h += '<div class="row-actions"><button class="btn-add" onclick="agregarMt()">+ Agregar tarea</button><button class="btn btn-primary" style="background:#3B6D11" onclick="generarDetalleNqn()">Generar detalle diario →</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
       contenido.innerHTML = h;
+    }
+    // Expandir / colapsar una fila de tarea de mantenimiento.
+    function mantToggle(id){
+      if(mantAbiertos.has(id)) mantAbiertos.delete(id); else mantAbiertos.add(id);
+      renderMantenimiento();
+    }
+    // Expandir todas las tareas visibles.
+    function mantExpandTodo(){
+      (window.__mantVisiblesIds||[]).forEach(id=>mantAbiertos.add(id));
+      renderMantenimiento();
+    }
+    // Desde la grilla semanal: abrir una tarea y llevar a la lista para editarla.
+    function mantAbrirDesdeGrilla(id){
+      mantAbiertos.add(id);
+      mantLente = "trailer"; // volver a la lista, donde la tarea aparece expandida
+      renderMantenimiento();
     }
     // Texto legible de una tarea de mantenimiento: "TAREA · Subtarea", con fallback a descripción libre.
     function descMant(t){
@@ -1731,6 +1867,9 @@
       planiResaltar = { persona: personaId, fecha: fechaISO, bloques };
       if (!planiVerTodo && planiDesde && fechaISO < planiDesde) planiDesde = fechaISO;
       planiProy = "";
+      // Expandir los bloques del conflicto para que sean visibles (filas colapsables).
+      if(bloques.length){ bloques.forEach(id=>planiAbiertos.add(id)); }
+      else { plani.filter(b=>diasHabiles(b.fecha_desde,b.fecha_hasta).includes(fechaISO)).forEach(b=>planiAbiertos.add(b.id)); }
       cambiarTab("plani");
     }
     // Aplica el resaltado visual tras renderizar Planificación General (scroll + highlight temporal).
@@ -1800,29 +1939,44 @@
       const planiOcultas = plani.length - planiVisibles.length;
       const proyEnPlan = [...new Set(plani.map(b=>b.proyecto_id).filter(Boolean))];
       h += '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;background:#FAFAF8;border:1px solid #EEECE4;border-radius:10px;padding:8px 12px">';
+      // ---- Selector de LENTE (agrupación): estación / persona / proyecto ----
+      h += '<span style="font-size:12px;color:#888780">Ver por:</span>';
+      h += '<span style="display:inline-flex;background:#F1F0EC;border-radius:9px;padding:3px;gap:2px">'
+        + [['estacion','Estación'],['persona','Persona'],['proyecto','Proyecto'],['semana','Semana']].map(([k,lab])=>{
+            const on = planiLente===k;
+            return '<button class="btn" onclick="planiLente=\''+k+'\';renderPlani()" style="border:0;background:'+(on?'#fff':'transparent')+';color:'+(on?'#2C2C2A':'#888780')+';font-size:12px;font-weight:550;padding:5px 12px;border-radius:7px;'+(on?'box-shadow:0 1px 3px rgba(0,0,0,.09)':'')+'">'+lab+'</button>';
+          }).join('')
+        + '</span>';
+      h += '<span style="width:1px;height:22px;background:#E6E4DC;margin:0 2px"></span>';
       h += '<span style="font-size:12px;color:#888780">Proyecto:</span>';
       h += '<select onchange="planiProy=this.value;renderPlani()" style="width:auto"><option value="">Todos</option>'+proyectos.filter(p=>proyEnPlan.includes(p.id)).map(p=>'<option value="'+p.id+'" '+(p.id===planiProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>';
       h += '<span style="font-size:12px;color:#888780;margin-left:6px">Ver desde:</span>';
       h += '<input type="date" value="'+planiDesde+'" '+(planiVerTodo?'disabled':'')+' onchange="planiDesde=this.value;planiVerTodo=false;renderPlani()" style="width:auto">';
       h += '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:5px 10px;font-size:12px" onclick="planiDesde=\''+ayerPl+'\';planiVerTodo=false;renderPlani()">Ayer + en adelante</button>';
-      h += '<button class="btn" style="background:'+(planiOrdenFecha?'#185FA5':'#fff')+';border:1px solid '+(planiOrdenFecha?'#185FA5':'#E6E4DC')+';color:'+(planiOrdenFecha?'#fff':'#5F5E5A')+';padding:5px 10px;font-size:12px" onclick="planiOrdenFecha='+(!planiOrdenFecha)+';renderPlani()" title="Ordenar las estaciones por fecha de inicio">↕ Orden por fecha'+(planiOrdenFecha?' ✓':'')+'</button>';
       h += '<label style="font-size:12px;color:#888780;display:flex;align-items:center;gap:5px;margin-left:auto"><input type="checkbox" '+(planiVerTodo?'checked':'')+' onchange="planiVerTodo=this.checked;renderPlani()" style="width:auto">Ver todo</label>';
       if (planiOcultas > 0 && !planiVerTodo) h += '<span style="font-size:11.5px;color:#A8A69E;width:100%">'+planiOcultas+' estación(es) fuera del filtro (fecha o proyecto). Cambiá los filtros o tildá "Ver todo" para consultarlas.</span>';
       h += '</div>';
 
+      // ---- Controles de expandir/colapsar todo (no en vista grilla) ----
+      if (planiVisibles.length && planiLente!=='semana') {
+        h += '<div class="no-print" style="display:flex;gap:8px;align-items:center;margin-bottom:10px">'
+          + '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:4px 10px;font-size:11.5px" onclick="planiVisibles_expandTodo()">Expandir todo</button>'
+          + '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:4px 10px;font-size:11.5px" onclick="planiAbiertos.clear();renderPlani()">Colapsar todo</button>'
+          + '<span style="font-size:11.5px;color:#A8A69E">Tocá una fila para expandirla y editarla.</span>'
+          + '</div>';
+      }
+
       // ---- Supervisores primero (es lo primero que se establece) ----
       h += renderPanelSupervision(planiProy);
 
-      // ---- Estaciones (filtradas por fecha) ----
-      planiVisibles.forEach(b => {
-        const st = STATIONS[b.estacion]; if (!st) return;
+      // ---- Filas colapsables, agrupadas según la LENTE ----
+      // Cuerpo expandido: idéntico a la vista anterior (mismos onclick a las mismas funciones).
+      function cuerpoBloque(b){
+        const st = STATIONS[b.estacion]; if(!st) return '';
         const gente = planiPers[b.id] || [];
         const subsSel = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
-        h += '<div class="card" id="plibloque-'+b.id+'" style="border:1px solid #E6E4DC;border-left:6px solid '+st.color+';border-radius:12px;margin-bottom:16px;padding:0;overflow:hidden;box-shadow:0 1px 4px rgba(44,44,42,0.05)">'
-          + '<div class="pl-row" style="background:'+st.bg+';margin:0;padding:12px 14px;border-bottom:1px solid '+st.color+'22"><span class="estpill" style="background:'+st.color+';color:#fff;min-width:130px;display:inline-block;text-align:center;font-weight:600">'+st.label+'</span>'
-          + '<select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px">'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>'
-          + '<button class="btn-del" style="margin-left:auto" onclick="eliminarPl(\''+b.id+'\')">×</button></div>'
-          + '<div style="padding:14px">'
+        return '<div style="padding:14px;border-top:1px solid #EEECE4">'
+          + '<div class="pl-row" style="margin-bottom:8px"><span style="font-size:11px;color:#A8A69E;margin-right:4px">Proyecto:</span><select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px">'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></div>'
           + '<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Tareas (tildá una o varias):</div><div class="chips">'+st.subs.map(s=>{const on=subsSel.includes(s);return '<button class="chip'+(on?' on':'')+'" onclick="toggleSub(\''+b.id+'\',\''+s.replace(/'/g,"\\\\'")+'\','+(on?'true':'false')+')">'+s+'</button>';}).join('')+'</div></div>'
           + (function(){ const mods=modulosDeProy(b.proyecto_id); const sel=(b.modulos||"").split(",").map(s=>s.trim()).filter(Boolean); let m='<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Módulos (opcional, tildá uno o varios):</div><div class="chips">'; if(!mods.length){ m+='<span style="font-size:11px;color:#A8A69E">El proyecto no tiene módulos definidos (cargalos en Proyectos).</span>'; } else { m+=mods.map(md=>{const on=sel.includes(md);return '<button class="chip'+(on?' on':'')+'" onclick="toggleModuloPl(\''+b.id+'\',\''+md.replace(/'/g,"\\\\'")+'\','+(on?'true':'false')+')">'+md+'</button>';}).join(''); } return m+'</div></div>'; })()
           + '<div class="pl-row"><input type="date" value="'+(b.fecha_desde||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(b.fecha_hasta||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+diasHabiles(b.fecha_desde,b.fecha_hasta).length+' días háb.</span></div>'
@@ -1838,8 +1992,153 @@
               if(!on) return chipBtn;
               return '<span style="display:inline-flex;align-items:center;gap:3px">'+chipBtn+'<input type="number" value="'+horas+'" min="0" max="8" onchange="editarHoras(\''+b.id+'\',\''+p.id+'\',Number(this.value))" title="Horas en esta estación" style="width:42px;padding:2px 4px;font-size:11px;text-align:center">h</span>';
             }).join('')+'</div>'
-          + '</div></div>';
-      });
+          + '</div>';
+      }
+      // ¿el bloque tiene algún día con una persona sobre 8h? (para marca visual de conflicto)
+      function bloqueEnConflicto(b){
+        const gente = planiPers[b.id] || [];
+        const dias = diasHabiles(b.fecha_desde, b.fecha_hasta);
+        for(const pid of gente){
+          const p = personas.find(x=>x.id===pid);
+          if(p && p.tipo==="Contratista") continue; // contratistas no cuentan
+          for(const d of dias){ if(horasPersonaDia(pid, d, null) > 8) return true; }
+        }
+        return false;
+      }
+      // Fila colapsable de un bloque. showEst/showProy controlan qué mostrar según la lente.
+      function filaBloque(b, showEst, showProy){
+        const st = STATIONS[b.estacion]; if(!st) return '';
+        const gente = planiPers[b.id] || [];
+        const subsSel = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
+        const pr = proyectos.find(p=>p.id===b.proyecto_id);
+        const abierto = planiAbiertos.has(b.id);
+        const conf = bloqueEnConflicto(b);
+        const dias = diasHabiles(b.fecha_desde,b.fecha_hasta);
+        const fechaTxt = (b.fecha_desde&&b.fecha_hasta) ? dm(b.fecha_desde)+'–'+dm(b.fecha_hasta)+' · '+dias.length+' d.háb.' : '<span style="color:#C99">sin fechas</span>';
+        const tareaTxt = subsSel.length ? subsSel.join(', ') : '<span style="color:#A8A69E">sin tarea</span>';
+        // avatares (iniciales) de la gente asignada
+        const ava = gente.slice(0,5).map(pid=>{ const p=personas.find(x=>x.id===pid); const ini=p?p.nombre.split(' ').map(x=>x[0]).join('').slice(0,2).toUpperCase():'?'; return '<span style="display:inline-flex;width:22px;height:22px;border-radius:50%;background:#DCD9CF;color:#5F5E5A;font-size:9.5px;font-weight:650;align-items:center;justify-content:center;border:2px solid #fff;margin-left:-6px">'+ini+'</span>'; }).join('');
+        const avaWrap = gente.length ? '<span style="display:inline-flex;margin-left:6px">'+ava+'</span><span style="font-size:11.5px;color:#A8A69E;margin-left:8px">'+gente.length+(gente.length===1?' pers.':' pers.')+'</span>' : '<span style="font-size:11.5px;color:#C4C2BA;margin-left:6px">sin gente</span>';
+        let head = '<div class="pl-row" style="margin:0;padding:11px 13px;cursor:pointer;align-items:center" onclick="planiToggleBloque(\''+b.id+'\')">';
+        head += '<span style="color:#A8A69E;font-size:11px;transition:.15s;display:inline-block;'+(abierto?'transform:rotate(90deg)':'')+'">▶</span>';
+        if(showEst) head += '<span class="estpill" style="background:'+st.color+';color:#fff;min-width:118px;display:inline-block;text-align:center;font-weight:600">'+st.label+'</span>';
+        if(showProy) head += '<span style="font-weight:600;color:#2C2C2A;font-size:13px">'+(pr?pr.nombre:'—')+'</span>';
+        head += '<span style="font-size:12.5px;color:#888780">'+tareaTxt+'</span>';
+        head += '<span style="font-size:12px;color:#A8A69E;margin-left:8px">'+fechaTxt+'</span>';
+        if(conf) head += '<span style="background:#FCEBEB;color:#A32D2D;font-size:10.5px;font-weight:650;padding:2px 7px;border-radius:5px;margin-left:6px">+8h</span>';
+        head += '<span style="margin-left:auto;display:flex;align-items:center">'+avaWrap
+          + '<button class="btn-del" style="margin-left:10px" onclick="event.stopPropagation();eliminarPl(\''+b.id+'\')">×</button></span>';
+        head += '</div>';
+        return '<div class="card" id="plibloque-'+b.id+'" style="border:1px solid '+(conf?'#E7B0B0':'#E6E4DC')+';border-left:5px solid '+(conf?'#A32D2D':st.color)+';border-radius:11px;margin-bottom:7px;padding:0;overflow:hidden">'
+          + head + (abierto ? cuerpoBloque(b) : '') + '</div>';
+      }
+
+      if(!planiVisibles.length){
+        h += '<p style="font-size:13px;color:#A8A69E;padding:8px 2px">No hay estaciones para mostrar con los filtros actuales.</p>';
+      } else if(planiLente==='semana'){
+        // ---- VISTA PANORÁMICA: grilla día × (estación|persona) ----
+        // Sub-toggle de eje de filas.
+        h += '<div class="no-print" style="display:flex;gap:8px;align-items:center;margin:0 0 10px">'
+          + '<span style="font-size:12px;color:#888780">Filas por:</span>'
+          + '<span style="display:inline-flex;background:#F1F0EC;border-radius:9px;padding:3px;gap:2px">'
+          + [['estacion','Estación'],['persona','Persona']].map(([k,lab])=>{
+              const on=planiGridEje===k;
+              return '<button class="btn" onclick="planiGridEje=\''+k+'\';renderPlani()" style="border:0;background:'+(on?'#fff':'transparent')+';color:'+(on?'#2C2C2A':'#888780')+';font-size:12px;font-weight:550;padding:4px 11px;border-radius:7px;'+(on?'box-shadow:0 1px 3px rgba(0,0,0,.09)':'')+'">'+lab+'</button>';
+            }).join('')
+          + '</span>'
+          + '<span style="font-size:11.5px;color:#A8A69E;margin-left:6px">Tocá un bloque para abrirlo y editarlo.</span></div>';
+
+        // Rango de días: unión de los rangos visibles (o ventana desde el filtro), acotado para no explotar.
+        let fMin=null, fMax=null;
+        planiVisibles.forEach(b=>{ if(b.fecha_desde){ if(!fMin||b.fecha_desde<fMin)fMin=b.fecha_desde; } if(b.fecha_hasta){ if(!fMax||b.fecha_hasta>fMax)fMax=b.fecha_hasta; } });
+        if(!fMin) fMin = planiDesde;
+        if(!fMax){ const d=new Date(fMin+'T12:00:00'); d.setDate(d.getDate()+13); fMax=fechaStr(d); }
+        // limitar a 42 días para no generar una tabla gigante
+        const dIni=new Date(fMin+'T12:00:00'), dFin=new Date(fMax+'T12:00:00');
+        const dias=[]; let cur=new Date(dIni);
+        while(cur<=dFin && dias.length<42){ dias.push(fechaStr(cur)); cur.setDate(cur.getDate()+1); }
+        // función: bloques que caen en un día (usando días hábiles del bloque)
+        const bloquesEnDia = (fecha, filtroFn) => planiVisibles.filter(b => filtroFn(b) && diasHabiles(b.fecha_desde,b.fecha_hasta).includes(fecha));
+
+        // definir las filas según el eje
+        let filas; // [{label, color, filtroFn}]
+        if(planiGridEje==='estacion'){
+          filas = STKEYS.filter(k=>planiVisibles.some(b=>b.estacion===k)).map(k=>({
+            label: STATIONS[k].label, color: STATIONS[k].color, filtroFn: b=>b.estacion===k
+          }));
+        } else {
+          filas = personasHuella().filter(p=>planiVisibles.some(b=>(planiPers[b.id]||[]).includes(p.id))).map(p=>({
+            label: p.nombre, color:'#4A3F7A', filtroFn: b=>(planiPers[b.id]||[]).includes(p.id)
+          }));
+        }
+
+        if(!filas.length){
+          h += '<p style="font-size:13px;color:#A8A69E;padding:8px 2px">No hay bloques con fechas para mostrar en la grilla.</p>';
+        } else {
+          h += '<div style="overflow:auto;border:1px solid #E6E4DC;border-radius:12px;background:#fff">';
+          h += '<table style="border-collapse:collapse;width:100%;font-size:11.5px;min-width:'+(120+dias.length*66)+'px">';
+          // encabezado de días
+          h += '<thead><tr><th style="position:sticky;left:0;background:#F6F5F1;border:1px solid #EEECE4;padding:8px 10px;text-align:left;min-width:120px;z-index:2">'+(planiGridEje==='estacion'?'Estación':'Persona')+'</th>';
+          dias.forEach(f=>{
+            const wd=new Date(f+'T12:00:00').getDay(); const finde=(wd===0||wd===6); const fer=esFeriado(f);
+            const dd=f.slice(8,10);
+            h += '<th style="border:1px solid #EEECE4;padding:6px 4px;background:'+(fer?'#FBF0F0':finde?'#F1F0EC':'#F6F5F1')+';color:'+(fer?'#A32D2D':finde?'#C4C2BA':'#888780')+';font-weight:600;min-width:62px">'+['D','L','M','M','J','V','S'][wd]+'<br>'+dd+'</th>';
+          });
+          h += '</tr></thead><tbody>';
+          filas.forEach(fila=>{
+            h += '<tr><td style="position:sticky;left:0;background:#FAFAF8;border:1px solid #EEECE4;padding:7px 10px;font-weight:600;white-space:nowrap;z-index:1"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+fila.color+';margin-right:6px;vertical-align:0"></span>'+fila.label+'</td>';
+            dias.forEach(f=>{
+              const wd=new Date(f+'T12:00:00').getDay(); const finde=(wd===0||wd===6);
+              const aqui = bloquesEnDia(f, fila.filtroFn);
+              let cell='';
+              aqui.forEach(b=>{
+                const st=STATIONS[b.estacion]; const pr=proyectos.find(p=>p.id===b.proyecto_id);
+                const conf=bloqueEnConflicto(b);
+                const etiqueta = planiGridEje==='estacion' ? (pr?pr.nombre:'—') : (st?st.label:'—');
+                cell += '<div onclick="planiAbrirDesdeGrilla(\''+b.id+'\')" title="'+(pr?pr.nombre:'—')+' · '+(st?st.label:'')+' — tocá para editar" '
+                  + 'style="background:'+(st?st.color:'#999')+';color:#fff;border-radius:5px;padding:3px 6px;margin:2px 0;font-size:10px;font-weight:600;cursor:pointer;line-height:1.25;'+(conf?'outline:2px solid #A32D2D;outline-offset:-2px':'')+'">'
+                  + etiqueta + (conf?' ⚠':'') + '</div>';
+              });
+              h += '<td style="border:1px solid #EEECE4;padding:3px;vertical-align:top;background:'+(finde?'#FBFAF8':'#fff')+';min-width:62px">'+(cell||'<span style="color:#E0DED6;font-size:13px;display:block;text-align:center">·</span>')+'</td>';
+            });
+            h += '</tr>';
+          });
+          h += '</tbody></table></div>';
+          h += '<p style="font-size:11px;color:#A8A69E;margin-top:8px">Cada celda es un día. <span style="color:#A32D2D">⚠ borde rojo</span> = ese bloque deja a alguien sobre 8h ese día. Los fines de semana y feriados van sombreados. Tocá un bloque para abrirlo en la lista y editarlo.</p>';
+        }
+      } else if(planiLente==='estacion'){
+        // Orden por estación (según catálogo), luego por fecha dentro del grupo.
+        STKEYS.forEach(k=>{
+          const grp = planiVisibles.filter(b=>b.estacion===k).sort((a,b)=>(a.fecha_desde||'9999')<(b.fecha_desde||'9999')?-1:1);
+          if(!grp.length) return;
+          h += '<div style="font-size:11px;color:#A8A69E;text-transform:uppercase;letter-spacing:.05em;font-weight:650;margin:14px 2px 5px">'+STATIONS[k].label+' <span style="color:#C4C2BA;font-weight:500">· '+grp.length+'</span></div>';
+          grp.forEach(b=>{ h += filaBloque(b, false, true); });
+        });
+      } else if(planiLente==='proyecto'){
+        const proyIds = proyectos.map(p=>p.id).filter(id=>planiVisibles.some(b=>b.proyecto_id===id));
+        proyIds.forEach(pid=>{
+          const pr = proyectos.find(p=>p.id===pid);
+          const grp = planiVisibles.filter(b=>b.proyecto_id===pid).sort((a,b)=>(a.fecha_desde||'9999')<(b.fecha_desde||'9999')?-1:1);
+          if(!grp.length) return;
+          h += '<div style="font-size:11px;color:#A8A69E;text-transform:uppercase;letter-spacing:.05em;font-weight:650;margin:14px 2px 5px">'+(pr?pr.nombre:'—')+' <span style="color:#C4C2BA;font-weight:500">· '+grp.length+'</span></div>';
+          grp.forEach(b=>{ h += filaBloque(b, true, false); });
+        });
+        // bloques sin proyecto asignado
+        const huerf = planiVisibles.filter(b=>!b.proyecto_id);
+        if(huerf.length){ h += '<div style="font-size:11px;color:#A32D2D;text-transform:uppercase;letter-spacing:.05em;font-weight:650;margin:14px 2px 5px">Sin proyecto</div>'; huerf.forEach(b=>{ h += filaBloque(b, true, false); }); }
+      } else { // persona
+        personasHuella().forEach(p=>{
+          const grp = planiVisibles.filter(b=>(planiPers[b.id]||[]).includes(p.id)).sort((a,b)=>(a.fecha_desde||'9999')<(b.fecha_desde||'9999')?-1:1);
+          if(!grp.length) return;
+          h += '<div style="font-size:11px;color:#A8A69E;text-transform:uppercase;letter-spacing:.05em;font-weight:650;margin:14px 2px 5px">'+p.nombre+' <span style="color:#C4C2BA;font-weight:500">· '+grp.length+'</span></div>';
+          grp.forEach(b=>{ h += filaBloque(b, true, true); });
+        });
+        // estaciones sin nadie asignado (para que no desaparezcan de la vista por persona)
+        const vacios = planiVisibles.filter(b=>!(planiPers[b.id]||[]).length);
+        if(vacios.length){ h += '<div style="font-size:11px;color:#A8A69E;text-transform:uppercase;letter-spacing:.05em;font-weight:650;margin:14px 2px 5px">Sin personal asignado</div>'; vacios.forEach(b=>{ h += filaBloque(b, true, true); }); }
+      }
+      // expone la lista visible para el botón "Expandir todo"
+      window.__planiVisiblesIds = planiVisibles.map(b=>b.id);
       h += bloqueLineaBase();
       h += '<div class="row-actions"><select id="selAgregar" style="width:auto;color:#185FA5"><option value="">+ Agregar estación…</option>'+STKEYS.map(k=>'<option value="'+k+'">'+STATIONS[k].label+'</option>').join('')+'</select>';
       h += '<button class="btn btn-add" onclick="agregarEstacionDefault()">Cargar las 20 estaciones</button>';
@@ -1850,6 +2149,23 @@
       contenido.innerHTML = h;
       document.getElementById("selAgregar").onchange = function(){ if(this.value){ agregarEstacion(this.value); } };
       aplicarResaltadoPlani();
+    }
+    // Expandir / colapsar una fila de bloque en Planificación General.
+    function planiToggleBloque(id){
+      if(planiAbiertos.has(id)) planiAbiertos.delete(id); else planiAbiertos.add(id);
+      renderPlani();
+    }
+    // Expandir todas las filas actualmente visibles.
+    function planiVisibles_expandTodo(){
+      (window.__planiVisiblesIds||[]).forEach(id=>planiAbiertos.add(id));
+      renderPlani();
+    }
+    // Desde la grilla semanal: abrir un bloque y llevar a la lista para editarlo.
+    function planiAbrirDesdeGrilla(id){
+      planiAbiertos.add(id);
+      planiLente = "estacion"; // volver a la lista, donde el bloque aparece expandido
+      renderPlani();
+      setTimeout(()=>{ const el=document.getElementById("plibloque-"+id); if(el) el.scrollIntoView({behavior:"smooth",block:"center"}); }, 100);
     }
     // Panel de línea base: por cada proyecto con planificación, muestra estado y acción.
     function bloqueLineaBase(){
