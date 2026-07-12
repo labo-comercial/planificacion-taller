@@ -3567,13 +3567,18 @@
 
     /* ---- HISTOGRAMA ---- */
     function renderHisto() {
-      if(!detalle.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">No hay detalle generado.</p>'; return; }
+      if(!detalle.length && !personasHuella().length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">No hay detalle generado.</p>'; return; }
       const proyOperH = new Set(proyectosOperativos().map(p=>p.id));
       const detHisto = detalle.filter(f=>proyOperH.has(f.proyecto_id) && (!histoProy || f.proyecto_id===histoProy));
       const filtroHistoHTML = '<label style="font-size:12px;color:#888780">Proyecto <select onchange="setHistoProy(this.value)" style="width:auto"><option value="">Todos</option>'+proyectosOperativos().map(p=>'<option value="'+p.id+'" '+(p.id===histoProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
-      if(!detHisto.length){ contenido.innerHTML='<div class="no-print" style="margin-bottom:12px">'+filtroHistoHTML+'</div><p style="font-size:13px;color:#888780">'+(histoProy?'Este proyecto no tiene detalle cargado.':'No hay detalle de proyectos en operación (las cotizaciones y archivados no se muestran acá).')+'</p>'; return; }
+      if(!detHisto.length && !personasHuella().length){ contenido.innerHTML='<div class="no-print" style="margin-bottom:12px">'+filtroHistoHTML+'</div><p style="font-size:13px;color:#888780">'+(histoProy?'Este proyecto no tiene detalle cargado.':'No hay detalle de proyectos en operación (las cotizaciones y archivados no se muestran acá).')+'</p>'; return; }
       const fechas=[...new Set(detHisto.map(f=>f.fecha))].sort();
-      const pers=[...new Set(detHisto.map(f=>f.persona_real))];
+      // Filas: TODO el personal de La Huella (aunque no tenga jornadas), orden alfabético.
+      // Se agregan también personas que aparezcan en el detalle pero ya no estén en el plantel actual (ex-empleados con historia).
+      const idsPlantel = personasHuella().map(p=>p.id);
+      const idsEnDetalle = [...new Set(detHisto.map(f=>f.persona_real))];
+      const pers=[...new Set([...idsPlantel, ...idsEnDetalle])]
+        .sort((a,b)=> nombrePersona(a).localeCompare(nombrePersona(b),"es"));
       const cell={}; detHisto.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?"__aus":f.estacion_real; });
       let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por estación.</p><div style="display:flex;gap:8px;align-items:center">'+filtroHistoHTML+botonesExport("histo-print","histograma")+'</div></div><div id="histo-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
       fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:50px">'+dm(d)+'</th>');
