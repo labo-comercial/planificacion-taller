@@ -4125,6 +4125,29 @@
     // ¿Es personal Directo? (tablero de fábrica: solo directos)
     function esDirecto(pid){ const p=personas.find(x=>x.id===pid); return !!(p && p.tipo==="Directo"); }
 
+    // Calcula los agregados de costo de un conjunto de filas de detalle. Fórmula ÚNICA,
+    // reutilizada por los KPIs, el gráfico de evolución y (luego) la descomposición.
+    function tabCostoDeFilas(filas){
+      let costoReal=0, costoPlan=0, jornales=0, jornalesPlan=0, hsExtra=0, extraCosto=0, ausencias=0;
+      filas.forEach(f=>{
+        const hn=Number(f.horas_normales)||0, he=Number(f.horas_extra)||0;
+        if(f.ausente){ ausencias++; }
+        else {
+          const vhReal = costoHora(f.persona_real, f.fecha);
+          costoReal += hn*vhReal + he*vhReal*multExtra(f.fecha);
+          extraCosto += he*vhReal*multExtra(f.fecha);
+          jornales += hn/8;
+          hsExtra += he;
+        }
+        const hp=(f.horas_plan!=null?Number(f.horas_plan):hn);
+        const vhPlan=(f.valor_hora_plan!=null?Number(f.valor_hora_plan):costoHora(f.persona_real,f.fecha));
+        costoPlan += hp*vhPlan;
+        if(!f.ausente) jornalesPlan += hp/8;
+      });
+      return { costoReal, costoPlan, jornales, jornalesPlan, hsExtra, extraCosto, ausencias,
+               desvPlan: costoReal-costoPlan };
+    }
+
     function renderTablero(){
       // Universo: detalle de proyectos operativos, solo personal Directo, solo ejecución real (hasta ayer).
       const proyOper = proyectosOperativos();
@@ -4139,26 +4162,13 @@
       // Filas del período elegido.
       const filas = base.filter(f => tabClavePeriodo(f.fecha, tabCorte) === tabPeriodo);
 
-      // KPIs del período (solo directos, real).
-      let costoReal=0, costoPlan=0, jornales=0, hsExtra=0, extraCosto=0, ausencias=0, filasNoAus=0;
-      filas.forEach(f=>{
-        const hn=Number(f.horas_normales)||0, he=Number(f.horas_extra)||0;
-        if(f.ausente){ ausencias++; }
-        else {
-          const vhReal = costoHora(f.persona_real, f.fecha);
-          costoReal += hn*vhReal + he*vhReal*multExtra(f.fecha);
-          extraCosto += he*vhReal*multExtra(f.fecha);
-          jornales += hn/8;
-          hsExtra += he;
-          filasNoAus++;
-        }
-        const hp=(f.horas_plan!=null?Number(f.horas_plan):hn);
-        const vhPlan=(f.valor_hora_plan!=null?Number(f.valor_hora_plan):costoHora(f.persona_real,f.fecha));
-        costoPlan += hp*vhPlan;
-      });
-      const desvPlan = costoReal - costoPlan;
+      // KPIs del período (solo directos, real) — vía helper de fórmula única.
+      const agg = tabCostoDeFilas(filas);
+      const costoReal=agg.costoReal, costoPlan=agg.costoPlan, jornales=agg.jornales,
+            hsExtra=agg.hsExtra, extraCosto=agg.extraCosto, ausencias=agg.ausencias,
+            jornalesPlan=agg.jornalesPlan;
+      const desvPlan = agg.desvPlan;
       const desvPct = costoPlan>0 ? (desvPlan/costoPlan*100) : 0;
-      const jornalesPlan = (()=>{ let j=0; filas.forEach(f=>{ if(!f.ausente){ const hp=(f.horas_plan!=null?Number(f.horas_plan):(Number(f.horas_normales)||0)); j+=hp/8; } }); return j; })();
       const totalJornProg = jornales + ausencias; // jornadas que debían trabajarse (aprox: presentes + ausentes)
       const ausentismo = totalJornProg>0 ? (ausencias/totalJornProg*100) : 0;
       const pctExtra = costoReal>0 ? (extraCosto/costoReal*100) : 0;
@@ -4206,7 +4216,41 @@
       h += kpi('% horas extra', pctExtra.toFixed(1).replace('.',',')+'%', hsExtra.toFixed(0)+' h · '+fmtM(extraCosto), (pctExtra>5?'#A32D2D':'#2C2C2A'), 'Costo de horas extra ÷ costo real total. Señala sobrecarga o desvío de planificación.');
       h += '</div>';
 
-      h += '<p style="font-size:11.5px;color:#A8A69E">Próximamente en este tablero: evolución del costo real vs plan, descomposición explicada del desvío, y desglose por operario.</p>';
+      // ---- EVOLUCIÓN: costo real vs plan por período (últimos ~8) ----
+      const periodosAsc = periodos.slice().reverse(); // de más antiguo a más reciente
+      const ultimos = periodosAsc.slice(-8);
+      const serie = ultimos.map(clave=>{
+        const fp = base.filter(f=>tabClavePeriodo(f.fecha,tabCorte)===clave);
+        const a = tabCostoDeFilas(fp);
+        return { clave, real:a.costoReal, plan:a.costoPlan };
+      });
+      const maxVal = Math.max(1, ...serie.map(s=>Math.max(s.real,s.plan)));
+      const alto = 150, hb = 120;
+      h += '<div class="card" style="margin-bottom:14px"><h3 style="font-size:14px;margin:0 0 3px;font-weight:650">Evolución del costo — real vs plan</h3>'
+        + '<p style="font-size:11.5px;color:#A8A69E;margin:0 0 14px">Por '+({dia:'día',semana:'semana',quincena:'quincena',mes:'mes'}[tabCorte])+'. Barra clara = plan, barra llena = real (roja si hay sobrecosto). El período elegido va marcado.</p>';
+      h += '<div style="display:flex;gap:16px;align-items:flex-end;height:'+alto+'px;padding:0 4px;border-bottom:1px solid #EEECE4">';
+      serie.forEach(s=>{
+        const sel = s.clave===tabPeriodo;
+        const hReal = Math.round(hb*s.real/maxVal), hPlan = Math.round(hb*s.plan/maxVal);
+        const sobre = s.real>s.plan;
+        const colReal = sobre ? '#A32D2D' : '#185FA5';
+        h += '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;justify-content:flex-end;height:100%;'+(sel?'background:#F3F0FA;border-radius:8px;padding-top:6px':'')+'">'
+          + '<div style="display:flex;gap:4px;align-items:flex-end;height:'+hb+'px">'
+          + '<div style="width:18px;height:'+Math.max(2,hPlan)+'px;background:#C9D4E0;border-radius:4px 4px 0 0" title="Plan: '+fmtM(s.plan)+'"></div>'
+          + '<div style="width:18px;height:'+Math.max(2,hReal)+'px;background:'+colReal+';border-radius:4px 4px 0 0" title="Real: '+fmtM(s.real)+'"></div>'
+          + '</div>'
+          + '<span style="font-size:10px;color:'+(sel?'#4A3F7A':'#888780')+';font-weight:'+(sel?'700':'400')+';text-align:center;line-height:1.15">'+tabEtiquetaPeriodo(s.clave,tabCorte)+'</span>'
+          + '</div>';
+      });
+      h += '</div>';
+      h += '<div style="display:flex;gap:16px;font-size:11.5px;color:#888780;margin-top:10px;align-items:center">'
+        + '<span><span style="width:11px;height:11px;border-radius:3px;display:inline-block;background:#C9D4E0;margin-right:5px;vertical-align:-1px"></span>Planificado</span>'
+        + '<span><span style="width:11px;height:11px;border-radius:3px;display:inline-block;background:#185FA5;margin-right:5px;vertical-align:-1px"></span>Real (en plan)</span>'
+        + '<span><span style="width:11px;height:11px;border-radius:3px;display:inline-block;background:#A32D2D;margin-right:5px;vertical-align:-1px"></span>Real (sobrecosto)</span></div>';
+      h += '<div style="font-size:10px;color:#BDBBB2;margin-top:8px;border-top:1px solid #F4F2EC;padding-top:6px">Cómo se calcula: cada barra suma el costo real (u horas_plan × valor congelado, para el plan) de todas las jornadas de personal Directo del período. Mismo criterio que los KPIs.</div>';
+      h += '</div>';
+
+      h += '<p style="font-size:11.5px;color:#A8A69E">Próximamente en este tablero: descomposición explicada del desvío, y desglose por operario.</p>';
       h += '</div>'; // costos-print
       contenido.innerHTML = h;
     }
