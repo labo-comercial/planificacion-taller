@@ -238,6 +238,7 @@
     let planiGridEje = "estacion"; // en lente "semana": filas por "estacion" o "persona"
     let supExpandido = false; // panel de supervisores colapsado por defecto para ganar espacio
     let planiAbiertos = new Set(); // ids de bloques expandidos (filas colapsables)
+    let planiScrollA = null; // id de bloque al que hacer scroll tras el próximo render (estación recién creada)
     let planiResaltar = null;  // {persona, fecha, bloques:[ids]} para resaltar tras saltar a un conflicto
     let impactoProy = "";      // filtro de proyecto del panel de impacto ("" = todos)
     let ganttProy = "", histoProy = "";  // filtros de Gantt e Histograma (compartidos; se resetean al cambiar de sede)
@@ -2152,6 +2153,11 @@
       contenido.innerHTML = h;
       document.getElementById("selAgregar").onchange = function(){ if(this.value){ agregarEstacion(this.value); } };
       aplicarResaltadoPlani();
+      // Si se acaba de crear una estación, hacer scroll hacia ella (queda ya expandida).
+      if(planiScrollA){
+        const objetivo = planiScrollA; planiScrollA = null;
+        setTimeout(()=>{ const el=document.getElementById("plibloque-"+objetivo); if(el){ el.scrollIntoView({behavior:"smooth",block:"center"}); el.style.transition="box-shadow .3s"; el.style.boxShadow="0 0 0 3px #B7A3E0"; setTimeout(()=>{ el.style.boxShadow=""; }, 1600); } }, 120);
+      }
     }
     // Expandir / colapsar una fila de bloque en Planificación General.
     function planiToggleBloque(id){
@@ -2204,8 +2210,11 @@
     async function agregarEstacion(estKey) {
       if (!proyectos.length) { setEstado("Creá un proyecto primero.", "err"); return; }
       const st = STATIONS[estKey];
-      const { error } = await sb.from("planificacion").insert({ estacion: estKey, subtarea: st.subs[0], proyecto_id: proyectos[0].id, modo: "nombre", fecha_desde: null, fecha_hasta: null });
-      if (error) return setEstado("Error: " + error.message, "err"); cargar();
+      const { data, error } = await sb.from("planificacion").insert({ estacion: estKey, subtarea: st.subs[0], proyecto_id: proyectos[0].id, modo: "nombre", fecha_desde: null, fecha_hasta: null }).select();
+      if (error) return setEstado("Error: " + error.message, "err");
+      // Dejar la estación recién creada expandida y marcada para hacer scroll hacia ella tras recargar.
+      if (data && data[0]) { planiAbiertos.add(data[0].id); planiScrollA = data[0].id; }
+      cargar();
     }
     async function agregarEstacionDefault() {
       if (!proyectos.length) { setEstado("Creá un proyecto primero.", "err"); return; }
