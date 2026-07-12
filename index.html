@@ -235,6 +235,7 @@
     let planiOrdenFecha = false; // toggle: ordenar estaciones por fecha de inicio
     let planiLente = "estacion"; // lente de agrupación: "estacion" | "persona" | "proyecto" | "semana"
     let planiGridEje = "estacion"; // en lente "semana": filas por "estacion" o "persona"
+    let supExpandido = false; // panel de supervisores colapsado por defecto para ganar espacio
     let planiAbiertos = new Set(); // ids de bloques expandidos (filas colapsables)
     let planiResaltar = null;  // {persona, fecha, bloques:[ids]} para resaltar tras saltar a un conflicto
     let impactoProy = "";      // filtro de proyecto del panel de impacto ("" = todos)
@@ -2273,16 +2274,25 @@
     /* ---- PANEL DE SUPERVISIÓN (rol jerárquico, separado de las estaciones) ---- */
     function renderPanelSupervision(filtroProy) {
       const sups = personas.filter(esSupervisor);
-      let h = '<div class="card" style="border-left:3px solid '+SUP_COLOR+';background:#FBFDFC">';
-      h += '<div class="pl-row" style="align-items:center"><span class="estpill" style="background:'+SUP_BG+';color:'+SUP_COLOR+';min-width:130px;display:inline-block;text-align:center">'+SUP_LABEL+'</span>';
-      h += '<span style="font-size:12px;color:#888780">Rol jerárquico: asigná un supervisor a uno o varios proyectos. Cubre sus 8h diarias y corre en paralelo a cualquier trabajo en estación.</span></div>';
-      if (!sups.length) {
-        h += '<div style="font-size:12px;color:#A8A69E;margin-top:8px">No hay personas con especialidad «Supervisor de proyecto». Cargalas en Personal.</div></div>';
-        return h;
-      }
       const supsFiltradas = filtroProy
         ? supervisiones.filter(s => (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean).includes(filtroProy))
         : supervisiones;
+      const cuenta = supsFiltradas.length;
+      let h = '<div class="card" style="border-left:3px solid '+SUP_COLOR+';background:#FBFDFC;padding:0;overflow:hidden">';
+      // Encabezado colapsable
+      h += '<div class="pl-row" style="align-items:center;margin:0;padding:12px 14px;cursor:pointer" onclick="supExpandido=!supExpandido;renderPlani()">'
+        + '<span style="color:'+SUP_COLOR+';font-size:11px;transition:.15s;display:inline-block;'+(supExpandido?'transform:rotate(90deg)':'')+'">▶</span>'
+        + '<span class="estpill" style="background:'+SUP_BG+';color:'+SUP_COLOR+';min-width:130px;display:inline-block;text-align:center">'+SUP_LABEL+'</span>'
+        + '<span style="font-size:12px;color:#888780">'+(cuenta? cuenta+' asignación'+(cuenta===1?'':'es')+' de supervisión' : 'Sin asignaciones')+(supExpandido?'':' · tocá para ver')+'</span>'
+        + '</div>';
+      if (!supExpandido) { h += '</div>'; return h; }
+      // ---- Cuerpo (expandido) ----
+      h += '<div style="padding:0 14px 14px">';
+      h += '<div style="font-size:12px;color:#888780;margin-bottom:4px">Rol jerárquico: asigná un supervisor a uno o varios proyectos. Cubre sus 8h diarias y corre en paralelo a cualquier trabajo en estación.</div>';
+      if (!sups.length) {
+        h += '<div style="font-size:12px;color:#A8A69E;margin-top:8px">No hay personas con especialidad «Supervisor de proyecto». Cargalas en Personal.</div></div></div>';
+        return h;
+      }
       if (!supsFiltradas.length) {
         h += '<div style="font-size:12px;color:#A8A69E;margin:8px 0">'+(filtroProy ? 'Ningún supervisor asignado a este proyecto.' : 'Sin asignaciones de supervisión.')+'</div>';
       }
@@ -2300,7 +2310,7 @@
           + '</div>';
       });
       h += '<button class="btn btn-add" style="margin-top:10px" onclick="agregarSup()">+ Agregar supervisión</button>';
-      h += '</div>';
+      h += '</div></div>';
       return h;
     }
     async function agregarSup() {
