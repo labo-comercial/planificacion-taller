@@ -4126,26 +4126,38 @@
     function esDirecto(pid){ const p=personas.find(x=>x.id===pid); return !!(p && p.tipo==="Directo"); }
 
     // Calcula los agregados de costo de un conjunto de filas de detalle. Fórmula ÚNICA,
-    // reutilizada por los KPIs, el gráfico de evolución y (luego) la descomposición.
+    // reutilizada por los KPIs, el gráfico de evolución y la descomposición del desvío.
     function tabCostoDeFilas(filas){
       let costoReal=0, costoPlan=0, jornales=0, jornalesPlan=0, hsExtra=0, extraCosto=0, ausencias=0;
+      // efectos de la descomposición del desvío (suman exactamente desvPlan)
+      let efTarifa=0, efHoras=0, efExtra=0, efAusencia=0;
       filas.forEach(f=>{
         const hn=Number(f.horas_normales)||0, he=Number(f.horas_extra)||0;
+        const hp=(f.horas_plan!=null?Number(f.horas_plan):hn);
+        const vhReal = costoHora(f.persona_real, f.fecha);
+        const vhPlan = (f.valor_hora_plan!=null?Number(f.valor_hora_plan):vhReal);
+        const mult = multExtra(f.fecha);
         if(f.ausente){ ausencias++; }
         else {
-          const vhReal = costoHora(f.persona_real, f.fecha);
-          costoReal += hn*vhReal + he*vhReal*multExtra(f.fecha);
-          extraCosto += he*vhReal*multExtra(f.fecha);
+          costoReal += hn*vhReal + he*vhReal*mult;
+          extraCosto += he*vhReal*mult;
           jornales += hn/8;
           hsExtra += he;
+          jornalesPlan += hp/8;
         }
-        const hp=(f.horas_plan!=null?Number(f.horas_plan):hn);
-        const vhPlan=(f.valor_hora_plan!=null?Number(f.valor_hora_plan):costoHora(f.persona_real,f.fecha));
         costoPlan += hp*vhPlan;
-        if(!f.ausente) jornalesPlan += hp/8;
+        // --- descomposición (misma fórmula validada) ---
+        // efecto tarifa: mismas horas plan, diferencia de valor-hora
+        efTarifa += hp*(vhReal - vhPlan);
+        // efecto horas normales / ausencia: (horas reales - plan) a valor real
+        const efH = (hn - hp)*vhReal;
+        if(f.ausente) efAusencia += efH; else efHoras += efH;
+        // efecto extra: las horas extra (no estaban en el plan)
+        efExtra += he*vhReal*mult;
       });
       return { costoReal, costoPlan, jornales, jornalesPlan, hsExtra, extraCosto, ausencias,
-               desvPlan: costoReal-costoPlan };
+               desvPlan: costoReal-costoPlan,
+               efTarifa, efHoras, efExtra, efAusencia };
     }
 
     function renderTablero(){
@@ -4250,7 +4262,87 @@
       h += '<div style="font-size:10px;color:#BDBBB2;margin-top:8px;border-top:1px solid #F4F2EC;padding-top:6px">Cómo se calcula: cada barra suma el costo real (u horas_plan × valor congelado, para el plan) de todas las jornadas de personal Directo del período. Mismo criterio que los KPIs.</div>';
       h += '</div>';
 
-      h += '<p style="font-size:11.5px;color:#A8A69E">Próximamente en este tablero: descomposición explicada del desvío, y desglose por operario.</p>';
+      // ---- DESCOMPOSICIÓN DEL DESVÍO (vs plan) ----
+      const efectos = [
+        { k:'extra',    lab:'Horas extra',        val:agg.efExtra },
+        { k:'tarifa',   lab:'Suba/baja de tarifa', val:agg.efTarifa },
+        { k:'horas',    lab:'Horas normales',      val:agg.efHoras },
+        { k:'ausencia', lab:'Ausencias',           val:agg.efAusencia },
+      ].sort((a,b)=>Math.abs(b.val)-Math.abs(a.val));
+      const sumaEf = agg.efTarifa+agg.efHoras+agg.efExtra+agg.efAusencia;
+      const cierra = Math.abs(sumaEf - agg.desvPlan) < 0.5; // tolerancia por redondeo
+      const maxEf = Math.max(1, ...efectos.map(e=>Math.abs(e.val)));
+      h += '<div class="card" style="margin-bottom:14px"><h3 style="font-size:14px;margin:0 0 3px;font-weight:650">¿A qué se debe el desvío vs plan? <span style="color:'+colDesv+'">'+fmtSigno(desvPlan)+'</span></h3>'
+        + '<p style="font-size:11.5px;color:#A8A69E;margin:0 0 14px">Los cuatro efectos suman exactamente el desvío. Positivo = suma al costo, negativo = ahorro.</p>';
+      h += '<div style="display:flex;flex-direction:column;gap:8px">';
+      efectos.forEach(e=>{
+        const pos = e.val>=0;
+        const w = Math.round(Math.abs(e.val)/maxEf*100);
+        h += '<div style="display:grid;grid-template-columns:150px 1fr 96px;gap:10px;align-items:center;font-size:12.5px">'
+          + '<span>'+e.lab+'</span>'
+          + '<div style="height:19px;border-radius:4px;background:#F1F0EC"><div style="height:100%;width:'+w+'%;border-radius:4px;background:'+(pos?'#A32D2D':'#3B6D11')+'"></div></div>'
+          + '<span style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:'+(pos?'#A32D2D':'#3B6D11')+'">'+fmtSigno(e.val)+'</span>'
+          + '</div>';
+      });
+      h += '<div style="display:grid;grid-template-columns:150px 1fr 96px;gap:10px;align-items:center;font-size:12.5px;border-top:1px solid #EEECE4;padding-top:8px;font-weight:700">'
+        + '<span>Desvío total</span><div></div>'
+        + '<span style="text-align:right;font-variant-numeric:tabular-nums;color:'+colDesv+'">'+fmtSigno(desvPlan)+'</span></div>';
+      h += '</div>';
+      // control de que cierra
+      if(cierra){
+        h += '<div style="background:#E7F1E7;border:1px solid #BFD9BF;border-radius:9px;padding:9px 13px;font-size:11.5px;color:#2C5010;margin-top:10px"><b>✓ Control:</b> los efectos suman '+fmtSigno(sumaEf)+', igual al desvío real. La descomposición cierra.</div>';
+      } else {
+        h += '<div style="background:#FCEBEB;border:1px solid #E7B0B0;border-radius:9px;padding:9px 13px;font-size:11.5px;color:#A32D2D;margin-top:10px"><b>⚠ Atención:</b> los efectos suman '+fmtSigno(sumaEf)+' pero el desvío real es '+fmtSigno(desvPlan)+' (diferencia '+fmtSigno(sumaEf-desvPlan)+'). Puede haber filas con datos incompletos; revisá el Detalle diario del período.</div>';
+      }
+      // narrativa explicada
+      const mayor = efectos[0];
+      const narr = (()=>{
+        if(Math.abs(desvPlan)<0.5) return 'En este período el costo real coincide con lo planificado: no hay desvío relevante.';
+        const signo = desvPlan>0 ? 'sobrecosto' : 'ahorro';
+        const mapExpl = {
+          extra: 'horas extra por encima de lo previsto',
+          tarifa: 'la diferencia entre el valor-hora actual y el congelado al planificar',
+          horas: 'haber trabajado una cantidad de horas normales distinta a la planificada',
+          ausencia: 'ausencias que no consumieron el costo previsto'
+        };
+        let t = 'El período cerró con un <b>'+signo+' de '+fmtSigno(desvPlan).replace('+','').replace('−','−')+'</b>'
+          + ' ('+(desvPct>=0?'+':'')+desvPct.toFixed(1)+'% sobre el plan). '
+          + 'La causa dominante es <b>'+mayor.lab.toLowerCase()+'</b> ('+fmtSigno(mayor.val)+'): '+mapExpl[mayor.k]+'.';
+        const otros = efectos.slice(1).filter(e=>Math.abs(e.val)>=0.5);
+        if(otros.length){ t += ' También influyen: '+otros.map(e=>e.lab.toLowerCase()+' ('+fmtSigno(e.val)+')').join(', ')+'.'; }
+        return t;
+      })();
+      h += '<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:10px;padding:13px 15px;font-size:12.5px;line-height:1.55;color:#33475B;margin-top:12px">'+narr+'</div>';
+      h += '<div style="font-size:10px;color:#BDBBB2;margin-top:8px;border-top:1px solid #F4F2EC;padding-top:6px">Cómo se calcula: <b>Tarifa</b> = horas_plan × (valor-hora actual − congelado). <b>Horas normales</b> = (horas reales − plan) × valor-hora actual. <b>Extra</b> = horas extra × valor-hora × multiplicador. <b>Ausencias</b> = jornadas ausentes × horas_plan × valor-hora (en negativo). La suma da el desvío total.</div>';
+      h += '</div>';
+
+      // ---- DESGLOSE POR OPERARIO ----
+      const porOp = {};
+      filas.forEach(f=>{ const k=f.persona_real; if(!porOp[k]) porOp[k]=[]; porOp[k].push(f); });
+      const opArr = Object.entries(porOp).map(([pid,fs])=>{
+        const a = tabCostoDeFilas(fs);
+        return { pid, nombre:nombrePersona(pid), a };
+      }).sort((x,y)=> y.a.costoReal - x.a.costoReal);
+      h += '<div class="card"><h3 style="font-size:14px;margin:0 0 3px;font-weight:650">Por operario</h3>'
+        + '<p style="font-size:11.5px;color:#A8A69E;margin:0 0 10px">Quién acumula jornales, extras y ausencias en el período. Solo personal Directo.</p>';
+      h += '<table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr>'
+        + ['Operario','Jornales','H. norm.','H. extra','Ausencias','Costo real','Desvío vs plan'].map((c,i)=>'<th style="text-align:'+(i===0?'left':'right')+';padding:8px 10px;border-bottom:1px solid #EEECE4;font-size:10.5px;color:#A8A69E;text-transform:uppercase;font-weight:600">'+c+'</th>').join('')
+        + '</tr></thead><tbody>';
+      opArr.forEach(o=>{
+        const dcol = o.a.desvPlan>0?'#A32D2D':(o.a.desvPlan<0?'#3B6D11':'#888780');
+        h += '<tr style="border-bottom:1px solid #F4F2EC">'
+          + '<td style="text-align:left;padding:8px 10px">'+o.nombre+'</td>'
+          + '<td style="text-align:right;padding:8px 10px;font-variant-numeric:tabular-nums">'+o.a.jornales.toFixed(1).replace('.',',')+'</td>'
+          + '<td style="text-align:right;padding:8px 10px;font-variant-numeric:tabular-nums">'+(o.a.jornales*8+0).toFixed(0)+' h</td>'
+          + '<td style="text-align:right;padding:8px 10px;font-variant-numeric:tabular-nums">'+o.a.hsExtra.toFixed(0)+' h</td>'
+          + '<td style="text-align:right;padding:8px 10px;font-variant-numeric:tabular-nums">'+o.a.ausencias+'</td>'
+          + '<td style="text-align:right;padding:8px 10px;font-variant-numeric:tabular-nums">'+fmtM(o.a.costoReal)+'</td>'
+          + '<td style="text-align:right;padding:8px 10px;font-variant-numeric:tabular-nums;font-weight:600;color:'+dcol+'">'+fmtSigno(o.a.desvPlan)+'</td>'
+          + '</tr>';
+      });
+      h += '</tbody></table>';
+      h += '<div style="font-size:10px;color:#BDBBB2;margin-top:8px;border-top:1px solid #F4F2EC;padding-top:6px">Cómo se calcula: mismos criterios que los KPIs, aplicados a las jornadas de cada persona. H. norm. = jornales × 8.</div>';
+      h += '</div>';
       h += '</div>'; // costos-print
       contenido.innerHTML = h;
     }
