@@ -3577,13 +3577,19 @@
       // Se agregan también personas que aparezcan en el detalle pero ya no estén en el plantel actual (ex-empleados con historia).
       const idsPlantel = personasHuella().map(p=>p.id);
       const idsEnDetalle = [...new Set(detHisto.map(f=>f.persona_real))];
+      // Orden: primero personal Directo, luego el resto (contratistas). Alfabético dentro de cada grupo.
+      const esDirectoH = (id)=>{ const p=personas.find(x=>x.id===id); return p && p.tipo==="Directo" ? 0 : 1; };
       const pers=[...new Set([...idsPlantel, ...idsEnDetalle])]
-        .sort((a,b)=> nombrePersona(a).localeCompare(nombrePersona(b),"es"));
+        .sort((a,b)=>{
+          const ga=esDirectoH(a), gb=esDirectoH(b);
+          if(ga!==gb) return ga-gb;
+          return nombrePersona(a).localeCompare(nombrePersona(b),"es");
+        });
       const cell={}; detHisto.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?"__aus":f.estacion_real; });
       let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por estación.</p><div style="display:flex;gap:8px;align-items:center">'+filtroHistoHTML+botonesExport("histo-print","histograma")+'</div></div><div id="histo-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
       fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:50px">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
-      pers.forEach(pid=>{ h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+nombrePersona(pid)+'</td>';
+      pers.forEach(pid=>{ const esContr=esDirectoH(pid)===1; h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+nombrePersona(pid)+(esContr?' <span style="color:#A8A69E;font-weight:400" title="Contratista">◇</span>':'')+'</td>';
         fechas.forEach(d=>{ const t=cell[pid+"|"+d]; let c='<span style="color:#D3D1C7">—</span>'; if(t==="__aus")c='<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>'; else if(t===SUP_MARK)c='<span style="display:inline-block;width:100%;background:'+SUP_BG+';color:'+SUP_COLOR+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+SUP_LABEL.slice(0,8)+'</span>'; else if(t&&STATIONS[t])c='<span style="display:inline-block;width:100%;background:'+STATIONS[t].bg+';color:'+STATIONS[t].color+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+STATIONS[t].label.slice(0,8)+'</span>'; h+='<td style="padding:4px;text-align:center">'+c+'</td>'; });
         h+='</tr>';
       });
