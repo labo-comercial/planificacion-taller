@@ -166,6 +166,7 @@
           { id:"histo", label:"Histograma", c:"#F2E8D8" },
           { id:"parte", label:"Parte diario", c:"#D9F0E6" },
           { id:"informe", label:"Informe de cierre", c:"#F7ECDA" },
+          { id:"costos", label:"Tablero", c:"#EDE9F6" },
           { id:"hue_actividad", label:"Actividad", c:"#EDEBE4", esAdmin:true }
         ]
       },
@@ -477,6 +478,7 @@
         else if (tab === "histo") renderHisto();
         else if (tab === "parte") renderParte();
         else if (tab === "informe") renderInforme();
+        else if (tab === "costos") renderTablero();
       }
     }
 
@@ -4092,6 +4094,122 @@
       contenido.innerHTML=h;
     }
     function setInformeProy(v){ informeProy=v; renderInforme(); }
+
+    /* ================= TABLERO DE FÁBRICA (La Huella) ================= */
+    // Estado del tablero. Corte temporal + período seleccionado + proyecto.
+    let tabCorte = "mes";      // "dia" | "semana" | "quincena" | "mes"
+    let tabPeriodo = "";       // clave del período elegido (depende del corte); "" = el más reciente
+    let tabProy = "";          // "" = todos los proyectos operativos
+
+    // Devuelve la CLAVE de período de una fecha ISO, según el corte.
+    function tabClavePeriodo(fISO, corte){
+      if(!fISO) return "";
+      if(corte==="dia") return fISO;
+      if(corte==="mes") return fISO.slice(0,7);
+      const d = new Date(fISO+"T12:00:00");
+      if(corte==="quincena"){ const q = d.getDate()<=15 ? "Q1" : "Q2"; return fISO.slice(0,7)+"-"+q; }
+      // semana: lunes de la semana ISO como clave
+      const w = d.getDay(); const offset = (w===0? -6 : 1-w); const lun = new Date(d); lun.setDate(d.getDate()+offset);
+      return fechaStr(lun);
+    }
+    // Etiqueta legible de un período.
+    function tabEtiquetaPeriodo(clave, corte){
+      if(!clave) return "—";
+      if(corte==="dia") return dmy(clave);
+      if(corte==="mes") return nombreMes(clave);
+      if(corte==="quincena"){ const [y,m,q]=clave.split("-"); return (q==="Q1"?"1ª quinc. ":"2ª quinc. ")+nombreMes(y+"-"+m); }
+      // semana
+      const lun=new Date(clave+"T12:00:00"); const dom=new Date(lun); dom.setDate(lun.getDate()+6);
+      return "Sem. "+dm(clave)+"–"+dm(fechaStr(dom));
+    }
+    // ¿Es personal Directo? (tablero de fábrica: solo directos)
+    function esDirecto(pid){ const p=personas.find(x=>x.id===pid); return !!(p && p.tipo==="Directo"); }
+
+    function renderTablero(){
+      // Universo: detalle de proyectos operativos, solo personal Directo, solo ejecución real (hasta ayer).
+      const proyOper = proyectosOperativos();
+      const operSet = new Set(proyOper.map(p=>p.id));
+      let base = detalle.filter(f => operSet.has(f.proyecto_id) && esDirecto(f.persona_real) && esFechaReal(f.fecha));
+      if (tabProy) base = base.filter(f => f.proyecto_id === tabProy);
+
+      // Períodos disponibles según el corte, de más reciente a más antiguo.
+      const periodos = [...new Set(base.map(f => tabClavePeriodo(f.fecha, tabCorte)))].sort().reverse();
+      if (!tabPeriodo || !periodos.includes(tabPeriodo)) tabPeriodo = periodos[0] || "";
+
+      // Filas del período elegido.
+      const filas = base.filter(f => tabClavePeriodo(f.fecha, tabCorte) === tabPeriodo);
+
+      // KPIs del período (solo directos, real).
+      let costoReal=0, costoPlan=0, jornales=0, hsExtra=0, extraCosto=0, ausencias=0, filasNoAus=0;
+      filas.forEach(f=>{
+        const hn=Number(f.horas_normales)||0, he=Number(f.horas_extra)||0;
+        if(f.ausente){ ausencias++; }
+        else {
+          const vhReal = costoHora(f.persona_real, f.fecha);
+          costoReal += hn*vhReal + he*vhReal*multExtra(f.fecha);
+          extraCosto += he*vhReal*multExtra(f.fecha);
+          jornales += hn/8;
+          hsExtra += he;
+          filasNoAus++;
+        }
+        const hp=(f.horas_plan!=null?Number(f.horas_plan):hn);
+        const vhPlan=(f.valor_hora_plan!=null?Number(f.valor_hora_plan):costoHora(f.persona_real,f.fecha));
+        costoPlan += hp*vhPlan;
+      });
+      const desvPlan = costoReal - costoPlan;
+      const desvPct = costoPlan>0 ? (desvPlan/costoPlan*100) : 0;
+      const jornalesPlan = (()=>{ let j=0; filas.forEach(f=>{ if(!f.ausente){ const hp=(f.horas_plan!=null?Number(f.horas_plan):(Number(f.horas_normales)||0)); j+=hp/8; } }); return j; })();
+      const totalJornProg = jornales + ausencias; // jornadas que debían trabajarse (aprox: presentes + ausentes)
+      const ausentismo = totalJornProg>0 ? (ausencias/totalJornProg*100) : 0;
+      const pctExtra = costoReal>0 ? (extraCosto/costoReal*100) : 0;
+
+      const fmtM = (n)=>{ const a=Math.abs(n); if(a>=1e6) return "$"+(n/1e6).toFixed(2).replace(".",",")+" M"; if(a>=1e3) return "$"+Math.round(n/1e3)+" K"; return "$"+Math.round(n); };
+      const fmtSigno = (n)=> (n>=0?"+":"−")+fmtM(Math.abs(n)).replace("$","$");
+
+      // ---- barra de filtros compacta ----
+      let h = '<div class="no-print" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:#FAFAF8;border:1px solid #EEECE4;border-radius:10px;padding:8px 12px;margin-bottom:14px">';
+      h += '<span style="font-size:11px;color:#A8A69E;text-transform:uppercase;letter-spacing:.04em;font-weight:600">Corte</span>';
+      h += '<span style="display:inline-flex;background:#F1F0EC;border-radius:9px;padding:3px;gap:2px">'
+        + [['dia','Día'],['semana','Semana'],['quincena','Quincena'],['mes','Mes']].map(([k,lab])=>{
+            const on=tabCorte===k;
+            return '<button class="btn" onclick="tabCorte=\''+k+'\';tabPeriodo=\'\';renderTablero()" style="border:0;background:'+(on?'#fff':'transparent')+';color:'+(on?'#2C2C2A':'#888780')+';font-size:12.5px;font-weight:550;padding:6px 13px;border-radius:7px;'+(on?'box-shadow:0 1px 3px rgba(0,0,0,.09)':'')+'">'+lab+'</button>';
+          }).join('') + '</span>';
+      h += '<select onchange="tabPeriodo=this.value;renderTablero()" style="width:auto">'
+        + (periodos.length? periodos.map(p=>'<option value="'+p+'" '+(p===tabPeriodo?'selected':'')+'>'+tabEtiquetaPeriodo(p,tabCorte)+'</option>').join('') : '<option>—</option>')
+        + '</select>';
+      h += '<span style="width:1px;height:22px;background:#E6E4DC"></span>';
+      h += '<span style="font-size:11px;color:#A8A69E;text-transform:uppercase;letter-spacing:.04em;font-weight:600">Proyecto</span>';
+      h += '<select onchange="tabProy=this.value;renderTablero()" style="width:auto"><option value="">Todos</option>'
+        + proyOper.map(p=>'<option value="'+p.id+'" '+(p.id===tabProy?'selected':'')+'>'+p.nombre+'</option>').join('') + '</select>';
+      h += botonesExport("costos-print","tablero");
+      h += '</div>';
+
+      h += '<div id="costos-print">';
+      if(!filas.length){
+        h += '<p style="font-size:13px;color:#A8A69E;padding:10px 2px">No hay ejecución real de personal directo en este período. Probá con otro corte o período, o esperá a que se registren jornadas.</p></div>';
+        contenido.innerHTML = h; return;
+      }
+
+      // ---- KPIs ----
+      const kpi = (lab,val,sub,col,calc)=> '<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:12px;padding:13px 15px">'
+        + '<div style="font-size:10.5px;color:#A8A69E;text-transform:uppercase;letter-spacing:.04em;font-weight:600">'+lab+'</div>'
+        + '<div style="font-size:21px;font-weight:680;color:'+(col||'#2C2C2A')+';margin-top:4px">'+val+'</div>'
+        + (sub?'<div style="font-size:11px;color:#A8A69E;margin-top:3px">'+sub+'</div>':'')
+        + (calc?'<div style="font-size:10px;color:#BDBBB2;margin-top:6px;line-height:1.4;border-top:1px solid #F4F2EC;padding-top:5px">Cómo se calcula: '+calc+'</div>':'')
+        + '</div>';
+      const colDesv = desvPlan>0 ? '#A32D2D' : (desvPlan<0 ? '#3B6D11' : '#2C2C2A');
+      h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">';
+      h += kpi('Costo real', fmtM(costoReal), 'directos · '+tabEtiquetaPeriodo(tabPeriodo,tabCorte), '#2C2C2A', 'Horas normales × valor-hora actual + extras × valor-hora × multiplicador (1,5 o 2×). Solo personal Directo, jornadas ya ejecutadas.');
+      h += kpi('Desvío vs plan', fmtSigno(desvPlan), (desvPct>=0?'+':'')+desvPct.toFixed(1)+'% sobre plan', colDesv, 'Costo real − costo plan. El plan es horas_plan × valor-hora congelado de cada jornada. Positivo = sobrecosto.');
+      h += kpi('Jornales', jornales.toFixed(1).replace('.',','), 'plan: '+jornalesPlan.toFixed(1).replace('.',','), '#2C2C2A', 'Suma de horas normales trabajadas ÷ 8. Una jornada de 8 h = 1; media jornada = 0,5. Solo directos.');
+      h += kpi('Ausentismo', ausentismo.toFixed(1).replace('.',',')+'%', ausencias+' ausencia'+(ausencias===1?'':'s'), (ausentismo>0?'#BA7517':'#2C2C2A'), 'Jornadas marcadas ausentes ÷ jornadas programadas (presentes + ausentes) del período.');
+      h += kpi('% horas extra', pctExtra.toFixed(1).replace('.',',')+'%', hsExtra.toFixed(0)+' h · '+fmtM(extraCosto), (pctExtra>5?'#A32D2D':'#2C2C2A'), 'Costo de horas extra ÷ costo real total. Señala sobrecarga o desvío de planificación.');
+      h += '</div>';
+
+      h += '<p style="font-size:11.5px;color:#A8A69E">Próximamente en este tablero: evolución del costo real vs plan, descomposición explicada del desvío, y desglose por operario.</p>';
+      h += '</div>'; // costos-print
+      contenido.innerHTML = h;
+    }
     async function toggleGente(planiId, personaId, estaba) {
       if (estaba) { const { error } = await sb.from("planificacion_personal").delete().eq("planificacion_id", planiId).eq("persona_id", personaId); if (error) return setEstado("Error: " + error.message, "err"); }
       else { const { error } = await sb.from("planificacion_personal").insert({ planificacion_id: planiId, persona_id: personaId, horas: 8 }); if (error) return setEstado("Error: " + error.message, "err"); }
