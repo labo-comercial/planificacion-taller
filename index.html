@@ -3483,7 +3483,8 @@
       const diaMan = idx>=0 && idx+1<fechasDet.length ? fechasDet[idx+1] : null;
       const tareasDe = (fch)=>{ if(!fch)return[]; const s={}; det.filter(f=>f.fecha===fch&&!f.ausente).forEach(f=>{const k=f.estacion_real+"|"+f.subtarea_real; if(!s[k])s[k]={est:f.estacion_real,sub:f.subtarea_real,g:[]}; s[k].g.push(nombrePersona(f.persona_real));}); return Object.values(s); };
 
-      const card=(l,v,s,col,calc)=>'<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 16px"><div style="font-size:12px;color:#888780">'+l+'</div><div style="font-size:22px;font-weight:600;color:'+(col||'#2C2C2A')+';margin-top:2px">'+v+'</div>'+(s?'<div style="font-size:11.5px;color:#A8A69E;margin-top:2px">'+s+'</div>':'')+(calc?'<div style="font-size:10.5px;color:#BDBBB2;margin-top:5px;line-height:1.4;border-top:1px solid #F4F2EC;padding-top:5px">Cómo se calcula: '+calc+'</div>':'')+'</div>';
+      const dashCalcs = []; // recolecta fórmulas de las tarjetas para el colapsable único
+      const card=(l,v,s,col,calc)=>{ if(calc) dashCalcs.push('<b>'+l+':</b> '+calc); return '<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 16px"><div style="font-size:12px;color:#888780">'+l+'</div><div style="font-size:22px;font-weight:600;color:'+(col||'#2C2C2A')+';margin-top:2px">'+v+'</div>'+(s?'<div style="font-size:11.5px;color:#A8A69E;margin-top:2px">'+s+'</div>':'')+'</div>'; };
       let h='<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">';
       h+='<div style="display:flex;border:1px solid #E6E4DC;border-radius:8px;overflow:hidden"><button onclick="setVista(\'pm\')" style="border:none;padding:7px 16px;font-size:13px;cursor:pointer;background:'+(vistaDash==='pm'?'#185FA5':'transparent')+';color:'+(vistaDash==='pm'?'#fff':'#888780')+'">Vista PM</button><button onclick="setVista(\'coord\')" style="border:none;padding:7px 16px;font-size:13px;cursor:pointer;background:'+(vistaDash==='coord'?'#185FA5':'transparent')+';color:'+(vistaDash==='coord'?'#fff':'#888780')+'">Vista Coordinador</button></div>';
       h+='<select onchange="setDashProy(this.value)" style="width:auto"><option value="">Todos los vigentes</option>'+proyVig.map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+'</option>').join('')+(proyOperD.filter(p=>p.estado==='Cerrado').length?('<optgroup label="Cerrados">'+proyOperD.filter(p=>p.estado==='Cerrado').map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+' (cerrado)</option>').join('')+'</optgroup>'):'')+'</select>';
@@ -3537,6 +3538,7 @@
           + card("Horas extra", pctExtra.toFixed(0)+"%", hsExtra+" h · "+fmtAR(extra)+" del costo", pctExtra>15?'#A32D2D':pctExtra>5?'#BA7517':'#3B6D11', "Costo de horas extra (valorizadas 1.5x lun-sáb, 2x dom/feriado) ÷ costo real total. Verde <5%, ámbar 5–15%, rojo >15%.")
           + card("Ausencias", ausencias, "jornadas no trabajadas", ausencias>0?'#A32D2D':'#3B6D11', "Cantidad de jornadas del detalle marcadas como ausente en el período visible.")
           + '</div>';
+        h+=bloqueComoSeCalcula('dash-pm-kpis', dashCalcs.join('<br>'));
         // Origen del desvío (torta de barras) — por qué te estás desviando
         h+=bloqueOrigenDesvio(det);
       } else {
@@ -3547,6 +3549,7 @@
           + card("Ausencias", ausencias, "jornadas no trabajadas", ausencias>0?'#A32D2D':'#3B6D11', "Cantidad de jornadas del detalle marcadas como ausente en el período visible.")
           + card("Personal directo ocupado hoy", (function(){ const s=new Set(); det.forEach(f=>{ if(f.fecha!==hoy||f.ausente)return; const pp=personas.find(x=>x.id===f.persona_real); if(pp&&pp.tipo!=="Contratista") s.add(f.persona_real); }); return s.size; })()+"/"+personasHuella().filter(p=>p.tipo!=='Contratista').length, "con tarea hoy / plantel directo", null, "Personas directas (no contratistas) con al menos una jornada no ausente con fecha de hoy, sobre el total de personas directas cargadas.")
           + '</div>';
+        h+=bloqueComoSeCalcula('dash-coord-kpis', dashCalcs.join('<br>'));
         if(sinCubrir>0){
           h+='<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:9px;padding:10px 13px;margin:-4px 0 16px;font-size:12px;color:#33475B;line-height:1.5">Hay <b>'+sinCubrir+' día(s)-estación sin cubrir</b> en los próximos 5 días hábiles: combinaciones estación-proyecto-día planificadas que todavía no tienen gente asignada en el detalle. <button class="btn btn-plan btn-sm no-print" onclick="dashSaltarAPlan()" style="margin-left:6px">Ir a Planificación →</button></div>';
         }
@@ -3566,7 +3569,8 @@
         }
       }
       // gráfico de barras costo por estación (común a ambas vistas)
-      h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Costo real por estación</div><div style="font-size:11px;color:#BDBBB2;margin-bottom:12px">Cómo se calcula: para cada estación, suma de (horas normales + horas extra×1.5 lun-sáb ó ×2 dom/feriado) × valor-hora del mes, sobre las jornadas trabajadas del período visible.</div>';
+      h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Costo real por estación</div>';
+      h+=bloqueComoSeCalcula('dash-costo-est','Para cada estación, suma de (horas normales + horas extra×1,5 lun-sáb ó ×2 dom/feriado) × valor-hora del mes, sobre las jornadas trabajadas del período visible.');
       if(!estArr.length) h+='<div style="font-size:12.5px;color:#A8A69E">Sin datos.</div>';
       estArr.forEach(([k,v])=>{ const pct=v.real/maxEst*100; h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px"><span style="width:150px;color:#5F5E5A">'+nombreEstacion(k)+'</span><div style="flex:1;background:#F1EFE8;border-radius:4px;height:18px;position:relative"><div style="width:'+pct+'%;background:'+estColor(k)+';height:100%;border-radius:4px"></div></div><span style="width:90px;text-align:right">$'+Math.round(v.real).toLocaleString("es-AR")+'</span></div>'; });
       if(estArr.length) h+='<button class="btn btn-primary btn-sm no-print" onclick="dashSaltarADetalle()" style="margin-top:10px">Ver el detalle diario →</button>';
@@ -3785,7 +3789,14 @@
       s += '</div>';
       return s;
     }
-    function infoToggleExplica(id){ if(infoExplica.has(id)) infoExplica.delete(id); else infoExplica.add(id); renderInforme(); }
+    function infoToggleExplica(id){
+      if(infoExplica.has(id)) infoExplica.delete(id); else infoExplica.add(id);
+      // Re-renderizar la pantalla ACTUAL (el colapsable se usa en Informe, Tablero, etc.).
+      if(tab==="costos") renderTablero();
+      else if(tab==="dash") renderDash();
+      else if(tab==="informe") renderInforme();
+      else renderInforme();
+    }
 
     // Saltos del informe: tiempo → Planificación General; costo → Detalle diario. Posicionados en el proyecto.
     function infoSaltarAPlan(proyId){
@@ -4375,20 +4386,24 @@
       }
 
       // ---- KPIs ----
-      const kpi = (lab,val,sub,col,calc)=> '<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:12px;padding:13px 15px">'
+      const kpiCalcs = []; // recolecta (label, fórmula) para el colapsable único
+      const kpi = (lab,val,sub,col,calc)=> {
+        if(calc) kpiCalcs.push('<b>'+lab+':</b> '+calc);
+        return '<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:12px;padding:13px 15px">'
         + '<div style="font-size:10.5px;color:#A8A69E;text-transform:uppercase;letter-spacing:.04em;font-weight:600">'+lab+'</div>'
         + '<div style="font-size:21px;font-weight:680;color:'+(col||'#2C2C2A')+';margin-top:4px">'+val+'</div>'
         + (sub?'<div style="font-size:11px;color:#A8A69E;margin-top:3px">'+sub+'</div>':'')
-        + (calc?'<div style="font-size:10px;color:#BDBBB2;margin-top:6px;line-height:1.4;border-top:1px solid #F4F2EC;padding-top:5px">Cómo se calcula: '+calc+'</div>':'')
         + '</div>';
+      };
       const colDesv = desvPlan>0 ? '#A32D2D' : (desvPlan<0 ? '#3B6D11' : '#2C2C2A');
-      h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">';
+      h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
       h += kpi('Costo real', fmtM(costoReal), 'directos · '+tabEtiquetaPeriodo(tabPeriodo,tabCorte), '#2C2C2A', 'Horas normales × valor-hora actual + extras × valor-hora × multiplicador (1,5 o 2×). Solo personal Directo, jornadas ya ejecutadas.');
       h += kpi('Desvío vs plan', fmtSigno(desvPlan), (desvPct>=0?'+':'')+desvPct.toFixed(1)+'% sobre plan', colDesv, 'Costo real − costo plan. El plan es horas_plan × valor-hora congelado de cada jornada. Positivo = sobrecosto.');
       h += kpi('Jornales', jornales.toFixed(1).replace('.',','), 'plan: '+jornalesPlan.toFixed(1).replace('.',','), '#2C2C2A', 'Suma de horas normales trabajadas ÷ 8. Una jornada de 8 h = 1; media jornada = 0,5. Solo directos.');
       h += kpi('Ausentismo', ausentismo.toFixed(1).replace('.',',')+'%', ausencias+' ausencia'+(ausencias===1?'':'s'), (ausentismo>0?'#BA7517':'#2C2C2A'), 'Jornadas marcadas ausentes ÷ jornadas programadas (presentes + ausentes) del período.');
       h += kpi('% horas extra', pctExtra.toFixed(1).replace('.',',')+'%', hsExtra.toFixed(0)+' h · '+fmtM(extraCosto), (pctExtra>5?'#A32D2D':'#2C2C2A'), 'Costo de horas extra ÷ costo real total. Señala sobrecarga o desvío de planificación.');
       h += '</div>';
+      h += bloqueComoSeCalcula('tablero-kpis', kpiCalcs.join('<br>'));
 
       // ---- EVOLUCIÓN: costo real vs plan por período (últimos ~8) ----
       const periodosAsc = periodos.slice().reverse(); // de más antiguo a más reciente
@@ -4421,7 +4436,7 @@
         + '<span><span style="width:11px;height:11px;border-radius:3px;display:inline-block;background:#C9D4E0;margin-right:5px;vertical-align:-1px"></span>Planificado</span>'
         + '<span><span style="width:11px;height:11px;border-radius:3px;display:inline-block;background:#185FA5;margin-right:5px;vertical-align:-1px"></span>Real (en plan)</span>'
         + '<span><span style="width:11px;height:11px;border-radius:3px;display:inline-block;background:#A32D2D;margin-right:5px;vertical-align:-1px"></span>Real (sobrecosto)</span></div>';
-      h += '<div style="font-size:10px;color:#BDBBB2;margin-top:8px;border-top:1px solid #F4F2EC;padding-top:6px">Cómo se calcula: cada barra suma el costo real (u horas_plan × valor congelado, para el plan) de todas las jornadas de personal Directo del período. Mismo criterio que los KPIs.</div>';
+      h += bloqueComoSeCalcula('tablero-evol', 'Cada barra suma el costo real (u horas_plan × valor congelado, para el plan) de todas las jornadas de personal Directo del período. Mismo criterio que los KPIs.');
       h += '</div>';
 
       // ---- DESCOMPOSICIÓN DEL DESVÍO (vs plan) ----
@@ -4477,7 +4492,7 @@
       h += '<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:10px;padding:13px 15px;font-size:12.5px;line-height:1.55;color:#33475B;margin-top:12px">'+narr
         + '<div style="margin-top:10px"><button class="btn btn-primary btn-sm no-print" onclick="tabSaltarADetalle()">Ver el detalle de este período →</button></div>'
         + '</div>';
-      h += '<div style="font-size:10px;color:#BDBBB2;margin-top:8px;border-top:1px solid #F4F2EC;padding-top:6px">Cómo se calcula: <b>Tarifa</b> = horas_plan × (valor-hora actual − congelado). <b>Horas normales</b> = (horas reales − plan) × valor-hora actual. <b>Extra</b> = horas extra × valor-hora × multiplicador. <b>Ausencias</b> = jornadas ausentes × horas_plan × valor-hora (en negativo). La suma da el desvío total.</div>';
+      h += bloqueComoSeCalcula('tablero-desc', '<b>Tarifa</b> = horas_plan × (valor-hora actual − congelado). <b>Horas normales</b> = (horas reales − plan) × valor-hora actual. <b>Extra</b> = horas extra × valor-hora × multiplicador. <b>Ausencias</b> = jornadas ausentes × horas_plan × valor-hora (en negativo). La suma da el desvío total.');
       h += '</div>';
 
       // ---- DESGLOSE POR OPERARIO ----
@@ -4505,7 +4520,7 @@
           + '</tr>';
       });
       h += '</tbody></table>';
-      h += '<div style="font-size:10px;color:#BDBBB2;margin-top:8px;border-top:1px solid #F4F2EC;padding-top:6px">Cómo se calcula: mismos criterios que los KPIs, aplicados a las jornadas de cada persona. H. norm. = jornales × 8.</div>';
+      h += bloqueComoSeCalcula('tablero-oper', 'Mismos criterios que los KPIs, aplicados a las jornadas de cada persona. H. norm. = jornales × 8.');
       h += '</div>';
       h += '</div>'; // costos-print
       contenido.innerHTML = h;
