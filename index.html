@@ -243,6 +243,17 @@
     let impactoProy = "";      // filtro de proyecto del panel de impacto ("" = todos)
     let ganttProy = "", histoProy = "";  // filtros de Gantt e Histograma (compartidos; se resetean al cambiar de sede)
     function setImpactoProy(pid){ impactoProy = (impactoProy===pid ? "" : pid); renderDetalle(); }
+    // Desde el desglose por estación: hacer scroll a la primera fila de esa estación en la tabla del detalle.
+    function detScrollAEstacion(est){
+      setTimeout(()=>{
+        const filas = document.querySelectorAll('tr[data-est="'+est+'"]');
+        if(!filas.length){ setEstado("No hay filas de esa estación en la vista actual (puede estar fuera del filtro de fecha).","ok"); return; }
+        const el = filas[0];
+        el.scrollIntoView({behavior:"smooth",block:"center"});
+        // resaltar brevemente todas las filas de esa estación
+        filas.forEach(f=>{ f.style.transition="background .3s"; const prev=f.style.background; f.style.background="#EDE9F6"; setTimeout(()=>{ f.style.background=prev; }, 1600); });
+      }, 60);
+    }
     let proyVista = "operacion";   // vista de la pestaña Proyectos: "operacion" | "cotizaciones" | "archivados"
     function setProyVista(v){ proyVista = v; renderProyectos(); }
     let trailers = [];
@@ -2913,7 +2924,25 @@
             + '</div>';
         });
         h += '</div>';
-        if(impactoProy) h += '<div style="margin:8px 0 2px"><button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:4px 10px;font-size:11.5px" onclick="setImpactoProy(\''+impactoProy+'\')">✕ Quitar filtro · ver todos</button></div>';
+        if(impactoProy){
+          h += '<div style="margin:8px 0 2px"><button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#5F5E5A;padding:4px 10px;font-size:11.5px" onclick="setImpactoProy(\''+impactoProy+'\')">✕ Quitar filtro · ver todos</button></div>';
+          // línea de "por qué" en lenguaje natural del proyecto filtrado
+          (function(){
+            const p = imp.porProyecto[impactoProy]; if(!p) return;
+            const co = p.costoOrigen||{};
+            const nombreOrigen = {extra:'días extra (trabajo no planificado)', edicion:'ediciones manuales del detalle', jornal:'cambios en el valor-hora respecto del planificado', planreal:'diferencias entre días planificados y trabajados'};
+            const dom = ["extra","edicion","jornal","planreal"].filter(o=>Math.abs(co[o]||0)>0.5).sort((a,b)=>Math.abs(co[b]||0)-Math.abs(co[a]||0))[0];
+            let txt;
+            if(Math.abs(p.costoNetoPlan)<=0.5 && p.atrasoProy===0){ txt = '<b>'+nombreProy(impactoProy)+'</b> no muestra desvíos relevantes: la ejecución viene en línea con el plan.'; }
+            else {
+              const signo = p.costoNetoPlan>0.5?'un sobrecosto de <b>'+fmtPlata(p.costoNetoPlan)+'</b>':(p.costoNetoPlan<-0.5?'un ahorro de <b>'+fmtPlata(Math.abs(p.costoNetoPlan))+'</b>':'costo en línea con el plan');
+              txt = '<b>'+nombreProy(impactoProy)+'</b> acumula '+signo+(dom?', originado principalmente en '+nombreOrigen[dom]+' ('+((co[dom]||0)>0?'+':'')+fmtPlata(co[dom]||0)+')':'')+'.';
+              if(p.atrasoProy>0) txt += ' En tiempo, va con <b>+'+p.atrasoProy+' día(s)</b> de atraso.';
+              else if(p.atrasoProy<0) txt += ' En tiempo, va <b>'+Math.abs(p.atrasoProy)+' día(s)</b> adelantado.';
+            }
+            h += '<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:9px;padding:10px 13px;margin:6px 0 2px;font-size:12px;color:#33475B;line-height:1.5">'+txt+'</div>';
+          })();
+        }
       } else {
         h += '<p style="font-size:12px;color:#A8A69E;margin:0 0 8px">Sin datos de desvío todavía. Generá el detalle o cargá trabajo real.</p>';
       }
@@ -2940,7 +2969,7 @@
           let origenCelda;
           if(e.atrasoDias!==0){ origenCelda = e.atrasoOrigen||"planreal"; }
           else { const co=e.costoOrigen||{}; origenCelda = (["extra","edicion","jornal","planreal"].sort((a,b)=>Math.abs(co[b]||0)-Math.abs(co[a]||0))[0]); if(!co[origenCelda]) origenCelda="planreal"; }
-          h += '<tr style="border-top:1px solid #F1EFE8"><td style="padding:7px 10px"><span style="background:'+estBg(est)+';color:'+estColor(est)+';padding:2px 7px;border-radius:6px">'+nEst+'</span>'+exTag+'</td>'
+          h += '<tr onclick="detScrollAEstacion(\''+est+'\')" style="border-top:1px solid #F1EFE8;cursor:pointer" onmouseover="this.style.background=\'#F3F0FA\'" onmouseout="this.style.background=\'\'" title="Ver las filas de esta estación en la tabla de abajo"><td style="padding:7px 10px"><span style="background:'+estBg(est)+';color:'+estColor(est)+';padding:2px 7px;border-radius:6px">'+nEst+'</span>'+exTag+'</td>'
             + (impactoProy?'':'<td style="padding:7px 10px;font-size:12px;color:#888780">'+nombreProy(proyId)+'</td>')
             + '<td style="text-align:center">'+e.diasPlan+'</td><td style="text-align:center">'+e.diasReal+'</td>'
             + '<td style="text-align:right;color:'+tCol+';font-weight:600">'+tiempoTxt+'</td>'
@@ -2976,7 +3005,7 @@
         const btnSigue = puedeSeguir
           ? ' <button class="btn" title="Esta tarea no se terminó hoy: crear una jornada para mañana sin tocar la planificación" style="background:#fff;border:1px solid #BA7517;color:#BA7517;padding:2px 7px;font-size:10.5px;border-radius:6px;margin-left:4px" onclick="seguirManana(\''+f.id+'\')">↪ sigue mañana</button>'
           : '';
-        h += '<tr style="'+bg+'">'
+        h += '<tr style="'+bg+'" data-est="'+(f.estacion_real||'')+'">'
           + '<td style="white-space:nowrap;color:#888780">'+dm(f.fecha)+(pasado?' 🔒':'')+tagExtra+btnSigue+'</td>'
           + '<td><select '+dis+' onchange="cambiarProyDet(\''+f.id+'\',this.value)" style="min-width:130px">'+opcProy(f.proyecto_id)+'</select></td>'
           + '<td><select '+dis+' onchange="editarDet(\''+f.id+'\',\'persona_real\',this.value)">'+opcPersona(f.persona_real)+'</select></td>'
