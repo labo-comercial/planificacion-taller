@@ -4337,7 +4337,7 @@
       const serie = ultimos.map(clave=>{
         const fp = base.filter(f=>tabClavePeriodo(f.fecha,tabCorte)===clave);
         const a = tabCostoDeFilas(fp);
-        return { clave, real:a.costoReal, plan:a.costoPlan };
+        return { clave, real:a.costoReal, plan:a.costoPlan, desv:a.desvPlan };
       });
       const maxVal = Math.max(1, ...serie.map(s=>Math.max(s.real,s.plan)));
       const alto = 150, hb = 120;
@@ -4347,7 +4347,7 @@
       serie.forEach(s=>{
         const sel = s.clave===tabPeriodo;
         const hReal = Math.round(hb*s.real/maxVal), hPlan = Math.round(hb*s.plan/maxVal);
-        const sobre = s.real>s.plan;
+        const sobre = s.desv > 0.5; // sobrecosto según el MISMO desvío que muestra el KPI
         const colReal = sobre ? '#A32D2D' : '#185FA5';
         h += '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;justify-content:flex-end;height:100%;'+(sel?'background:#F3F0FA;border-radius:8px;padding-top:6px':'')+'">'
           + '<div style="display:flex;gap:4px;align-items:flex-end;height:'+hb+'px">'
