@@ -3286,6 +3286,9 @@
 
     /* ---- DASHBOARD ---- */
     let vistaDash = "pm", dashProy = "";
+    // Saltos del Dashboard: a Planificación (para cubrir/reprogramar) o al Detalle (para revisar costo/ejecución).
+    function dashSaltarAPlan(){ planiProy = dashProy || ""; planiVerTodo = false; planiDesde = hoyISO(); cambiarTab("plani"); }
+    function dashSaltarADetalle(){ detalleVerTodo = false; detalleDesde = hoyISO(); cambiarTab("detalle"); }
     // ---- VALOR-HORA POR MES (con histórico) ----
     function mesDe(fechaISO){ return fechaISO ? fechaISO.slice(0,7) : null; } // 'YYYY-MM'
     // Valor-hora de una persona para un mes dado.
@@ -3461,6 +3464,21 @@
         + idxCard({abrev:"CPI",full:"Cost Performance Index (Índice de Desempeño de Costo)",title:"Cost Performance Index"},"¿Estoy gastando de más?",cpi,"Por cada $1 que planificaste gastar, cuánto trabajo real obtuviste. <b>1,00 = justo lo previsto</b>. Arriba de 1 = rendís más por peso (vas bien); abajo de 1 = cada jornada sale más cara de lo planeado (sobrecosto). Ej.: 0,90 = estás gastando ~10% de más.")
         + idxCard({abrev:"SPI",full:"Schedule Performance Index (Índice de Desempeño de Cronograma)",title:"Schedule Performance Index"},"¿Voy al día con el plazo?",spi,"Cuánto del trabajo que debías tener hecho hasta ayer efectivamente hiciste (el día en curso no se cuenta porque aún no cerró). <b>1,00 = al día</b>. Arriba de 1 = adelantado; abajo de 1 = atrasado. Ej.: 0,80 = llevás hecho el 80% de lo que debías a esta altura.")
         + '</div>';
+      // --- POR QUÉ dan esos índices (dinámico) ---
+      (function(){
+        const partes=[];
+        if(cpi!=null){
+          if(cpi>=0.98 && cpi<=1.02) partes.push('El <b>CPI</b> ('+cpi.toFixed(2)+') indica que estás gastando prácticamente lo previsto.');
+          else if(cpi<0.98) partes.push('El <b>CPI</b> ('+cpi.toFixed(2)+') está por debajo de 1: cada jornada real cuesta más que lo planificado (costo real acumulado '+ '$'+Math.round(costoRealEV).toLocaleString("es-AR")+' vs plan $'+Math.round(costoPlanEV).toLocaleString("es-AR")+').');
+          else partes.push('El <b>CPI</b> ('+cpi.toFixed(2)+') supera 1: rendís más trabajo por peso que lo planificado.');
+        }
+        if(spi!=null){
+          if(spi>=0.98 && spi<=1.02) partes.push('El <b>SPI</b> ('+spi.toFixed(2)+') muestra que vas al día con el cronograma.');
+          else if(spi<0.98) partes.push('El <b>SPI</b> ('+spi.toFixed(2)+') está por debajo de 1: hiciste '+diasRealSet.size+' de los '+diasPlanHastaHoy.size+' días-estación que debías tener hechos a esta altura.');
+          else partes.push('El <b>SPI</b> ('+spi.toFixed(2)+') supera 1: vas adelantado respecto del cronograma.');
+        }
+        if(partes.length) h+='<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:9px;padding:10px 13px;margin:-4px 0 16px;font-size:12px;color:#33475B;line-height:1.5">'+partes.join(' ')+'</div>';
+      })();
       // Banner de completitud del detalle (contextualiza CPI/SPI/PPC)
       if(completPct!=null){
         const bCol = completPct>=99?'#3B6D11': completPct>=90?'#BA7517':'#A32D2D';
@@ -3493,6 +3511,9 @@
           + card("Ausencias", ausencias, "jornadas no trabajadas", ausencias>0?'#A32D2D':'#3B6D11', "Cantidad de jornadas del detalle marcadas como ausente en el período visible.")
           + card("Personal directo ocupado hoy", (function(){ const s=new Set(); det.forEach(f=>{ if(f.fecha!==hoy||f.ausente)return; const pp=personas.find(x=>x.id===f.persona_real); if(pp&&pp.tipo!=="Contratista") s.add(f.persona_real); }); return s.size; })()+"/"+personasHuella().filter(p=>p.tipo!=='Contratista').length, "con tarea hoy / plantel directo", null, "Personas directas (no contratistas) con al menos una jornada no ausente con fecha de hoy, sobre el total de personas directas cargadas.")
           + '</div>';
+        if(sinCubrir>0){
+          h+='<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:9px;padding:10px 13px;margin:-4px 0 16px;font-size:12px;color:#33475B;line-height:1.5">Hay <b>'+sinCubrir+' día(s)-estación sin cubrir</b> en los próximos 5 días hábiles: combinaciones estación-proyecto-día planificadas que todavía no tienen gente asignada en el detalle. <button class="btn no-print" onclick="dashSaltarAPlan()" style="background:#4A3F7A;color:#fff;border:0;padding:4px 11px;font-size:11px;border-radius:7px;font-weight:550;margin-left:6px">Ir a Planificación →</button></div>';
+        }
         // agenda
         const ag=(titulo,fch,lista)=>{ let x='<div style="flex:1;min-width:260px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">'+titulo+(fch?' ('+dm(fch)+')':'')+'</div>'; if(!lista.length)x+='<div style="font-size:12.5px;color:#A8A69E">Sin tareas.</div>'; lista.forEach((t,i)=>{x+='<div style="padding:6px 0;border-top:'+(i?'1px solid #F1EFE8':'none')+';font-size:12.5px"><span style="background:'+estBg(t.est)+';color:'+estColor(t.est)+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(t.est)+'</span> <span style="color:#888780">'+t.sub+'</span><div style="font-size:11px;color:#A8A69E;margin-top:2px">'+t.g.join(", ")+'</div></div>';}); return x+'</div>'; };
         h+='<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">'+ag("📋 Tareas de hoy",diaHoy,tareasDe(diaHoy))+ag("⏭️ Preparar para mañana",diaMan,tareasDe(diaMan))+'</div>';
@@ -3504,6 +3525,7 @@
         if(atrArr.length){
           h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px;margin-bottom:16px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Estaciones que van atrasadas</div><div style="font-size:11.5px;color:#A8A69E;margin-bottom:12px">Días planificados hasta ayer que todavía no se registraron como trabajados. Son las que conviene reforzar.</div>';
           atrArr.forEach(([k,d])=>{ h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12.5px"><span style="width:170px"><span style="background:'+estBg(k)+';color:'+estColor(k)+';padding:2px 7px;border-radius:6px">'+nombreEstacion(k)+'</span></span><span style="color:#A32D2D;font-weight:600">'+d+' día(s) pendiente(s)</span></div>'; });
+          h+='<button class="btn no-print" onclick="dashSaltarAPlan()" style="background:#4A3F7A;color:#fff;border:0;padding:5px 12px;font-size:11.5px;border-radius:8px;font-weight:550;margin-top:8px">Ir a Planificación para reforzar →</button>';
           h+='</div>';
         }
       }
@@ -3511,6 +3533,7 @@
       h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Costo real por estación</div><div style="font-size:11px;color:#BDBBB2;margin-bottom:12px">Cómo se calcula: para cada estación, suma de (horas normales + horas extra×1.5 lun-sáb ó ×2 dom/feriado) × valor-hora del mes, sobre las jornadas trabajadas del período visible.</div>';
       if(!estArr.length) h+='<div style="font-size:12.5px;color:#A8A69E">Sin datos.</div>';
       estArr.forEach(([k,v])=>{ const pct=v.real/maxEst*100; h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px"><span style="width:150px;color:#5F5E5A">'+nombreEstacion(k)+'</span><div style="flex:1;background:#F1EFE8;border-radius:4px;height:18px;position:relative"><div style="width:'+pct+'%;background:'+estColor(k)+';height:100%;border-radius:4px"></div></div><span style="width:90px;text-align:right">$'+Math.round(v.real).toLocaleString("es-AR")+'</span></div>'; });
+      if(estArr.length) h+='<button class="btn no-print" onclick="dashSaltarADetalle()" style="background:#185FA5;color:#fff;border:0;padding:5px 12px;font-size:11.5px;border-radius:8px;font-weight:550;margin-top:10px">Ver el detalle diario →</button>';
       h+='</div>';
       h+='</div>';
       contenido.innerHTML=h;
