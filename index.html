@@ -44,6 +44,13 @@
     input, select { border: 1px solid #E6E4DC; border-radius: 6px; padding: 5px 7px; font-size: 12.5px; width: 100%; }
     .btn { border: none; border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
     .btn-primary { background: #185FA5; color: #fff; }
+    /* --- Sistema de botones homogéneo (variantes semánticas) --- */
+    .btn-sec { background: #fff; border: 1px solid #E6E4DC; color: #5F5E5A; }
+    .btn-sec:hover { border-color: #C4C2BA; }
+    .btn-plan { background: #4A3F7A; color: #fff; }      /* ir a Planificación */
+    .btn-ok { background: #3B6D11; color: #fff; }        /* generar / confirmar */
+    .btn-wsp { background: #25D366; color: #fff; }       /* WhatsApp */
+    .btn-sm { padding: 5px 12px; font-size: 11.5px; border-radius: 7px; font-weight: 550; }
     .btn-add { background: transparent; border: 1px dashed #E6E4DC; color: #185FA5; padding: 8px 14px; border-radius: 10px; font-size: 13px; cursor: pointer; }
     .btn-del { border: none; background: transparent; color: #A8A69E; cursor: pointer; font-size: 16px; }
     .row-actions { display: flex; gap: 8px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
@@ -1298,7 +1305,7 @@
       }
       // expone la lista visible para "Expandir todo"
       window.__mantVisiblesIds = mantVisibles.map(t=>t.id);
-      h += '<div class="row-actions"><button class="btn-add" onclick="agregarMt()">+ Agregar tarea</button><button class="btn btn-primary" style="background:#3B6D11" onclick="generarDetalleNqn()">Generar detalle diario →</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
+      h += '<div class="row-actions"><button class="btn-add" onclick="agregarMt()">+ Agregar tarea</button><button class="btn btn-ok" onclick="generarDetalleNqn()">Generar detalle diario →</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
       contenido.innerHTML = h;
     }
     // Expandir / colapsar una fila de tarea de mantenimiento.
@@ -1397,7 +1404,7 @@
 
       let h = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">';
       h += '<label style="font-size:11.5px;color:#888780">Fecha<br><input type="date" value="'+fSel+'" onchange="setNqnParte(this.value)" style="margin-top:3px"></label>';
-      h += '<button class="btn" style="background:#25D366;color:#fff" onclick="copiarNqnParte()">Copiar para WhatsApp</button>';
+      h += '<button class="btn btn-wsp" onclick="copiarNqnParte()">Copiar para WhatsApp</button>';
       h += botonesExport("nqnParteBox","parte_neuquen");
       h += '</div>';
 
@@ -3541,7 +3548,7 @@
           + card("Personal directo ocupado hoy", (function(){ const s=new Set(); det.forEach(f=>{ if(f.fecha!==hoy||f.ausente)return; const pp=personas.find(x=>x.id===f.persona_real); if(pp&&pp.tipo!=="Contratista") s.add(f.persona_real); }); return s.size; })()+"/"+personasHuella().filter(p=>p.tipo!=='Contratista').length, "con tarea hoy / plantel directo", null, "Personas directas (no contratistas) con al menos una jornada no ausente con fecha de hoy, sobre el total de personas directas cargadas.")
           + '</div>';
         if(sinCubrir>0){
-          h+='<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:9px;padding:10px 13px;margin:-4px 0 16px;font-size:12px;color:#33475B;line-height:1.5">Hay <b>'+sinCubrir+' día(s)-estación sin cubrir</b> en los próximos 5 días hábiles: combinaciones estación-proyecto-día planificadas que todavía no tienen gente asignada en el detalle. <button class="btn no-print" onclick="dashSaltarAPlan()" style="background:#4A3F7A;color:#fff;border:0;padding:4px 11px;font-size:11px;border-radius:7px;font-weight:550;margin-left:6px">Ir a Planificación →</button></div>';
+          h+='<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:9px;padding:10px 13px;margin:-4px 0 16px;font-size:12px;color:#33475B;line-height:1.5">Hay <b>'+sinCubrir+' día(s)-estación sin cubrir</b> en los próximos 5 días hábiles: combinaciones estación-proyecto-día planificadas que todavía no tienen gente asignada en el detalle. <button class="btn btn-plan btn-sm no-print" onclick="dashSaltarAPlan()" style="margin-left:6px">Ir a Planificación →</button></div>';
         }
         // agenda
         const ag=(titulo,fch,lista)=>{ let x='<div style="flex:1;min-width:260px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:8px">'+titulo+(fch?' ('+dm(fch)+')':'')+'</div>'; if(!lista.length)x+='<div style="font-size:12.5px;color:#A8A69E">Sin tareas.</div>'; lista.forEach((t,i)=>{x+='<div style="padding:6px 0;border-top:'+(i?'1px solid #F1EFE8':'none')+';font-size:12.5px"><span style="background:'+estBg(t.est)+';color:'+estColor(t.est)+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(t.est)+'</span> <span style="color:#888780">'+t.sub+'</span><div style="font-size:11px;color:#A8A69E;margin-top:2px">'+t.g.join(", ")+'</div></div>';}); return x+'</div>'; };
@@ -3554,7 +3561,7 @@
         if(atrArr.length){
           h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px;margin-bottom:16px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Estaciones que van atrasadas</div><div style="font-size:11.5px;color:#A8A69E;margin-bottom:12px">Días planificados hasta ayer que todavía no se registraron como trabajados. Son las que conviene reforzar.</div>';
           atrArr.forEach(([k,d])=>{ h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12.5px"><span style="width:170px"><span style="background:'+estBg(k)+';color:'+estColor(k)+';padding:2px 7px;border-radius:6px">'+nombreEstacion(k)+'</span></span><span style="color:#A32D2D;font-weight:600">'+d+' día(s) pendiente(s)</span></div>'; });
-          h+='<button class="btn no-print" onclick="dashSaltarAPlan()" style="background:#4A3F7A;color:#fff;border:0;padding:5px 12px;font-size:11.5px;border-radius:8px;font-weight:550;margin-top:8px">Ir a Planificación para reforzar →</button>';
+          h+='<button class="btn btn-plan btn-sm no-print" onclick="dashSaltarAPlan()" style="margin-top:8px">Ir a Planificación para reforzar →</button>';
           h+='</div>';
         }
       }
@@ -3562,7 +3569,7 @@
       h+='<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Costo real por estación</div><div style="font-size:11px;color:#BDBBB2;margin-bottom:12px">Cómo se calcula: para cada estación, suma de (horas normales + horas extra×1.5 lun-sáb ó ×2 dom/feriado) × valor-hora del mes, sobre las jornadas trabajadas del período visible.</div>';
       if(!estArr.length) h+='<div style="font-size:12.5px;color:#A8A69E">Sin datos.</div>';
       estArr.forEach(([k,v])=>{ const pct=v.real/maxEst*100; h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px"><span style="width:150px;color:#5F5E5A">'+nombreEstacion(k)+'</span><div style="flex:1;background:#F1EFE8;border-radius:4px;height:18px;position:relative"><div style="width:'+pct+'%;background:'+estColor(k)+';height:100%;border-radius:4px"></div></div><span style="width:90px;text-align:right">$'+Math.round(v.real).toLocaleString("es-AR")+'</span></div>'; });
-      if(estArr.length) h+='<button class="btn no-print" onclick="dashSaltarADetalle()" style="background:#185FA5;color:#fff;border:0;padding:5px 12px;font-size:11.5px;border-radius:8px;font-weight:550;margin-top:10px">Ver el detalle diario →</button>';
+      if(estArr.length) h+='<button class="btn btn-primary btn-sm no-print" onclick="dashSaltarADetalle()" style="margin-top:10px">Ver el detalle diario →</button>';
       h+='</div>';
       h+='</div>';
       contenido.innerHTML=h;
@@ -3749,7 +3756,7 @@
       h+='<label style="font-size:11.5px;color:#888780">Proyecto<br><select onchange="setParte(\'proy\',this.value)" style="margin-top:3px"><option value="">Todos</option>'+proyectosOperativos().map(p=>'<option value="'+p.id+'" '+(p.id===parteProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Estación<br><select onchange="setParte(\'est\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+STKEYS.map(k=>'<option value="'+k+'" '+(k===parteEst?'selected':'')+'>'+STATIONS[k].label+'</option>').join('')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Persona<br><select onchange="setParte(\'pers\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+personasHuella().map(p=>'<option value="'+p.id+'" '+(p.id===partePersona?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
-      h+='<button class="btn" style="background:#25D366;color:#fff" onclick="copiarParte()">Copiar para WhatsApp</button>';
+      h+='<button class="btn btn-wsp" onclick="copiarParte()">Copiar para WhatsApp</button>';
       h+=botonesExport("parteBox","parte_diario");
       h+='</div>';
       h+='<div id="parteBox" style="border:1px solid #E6E4DC;border-radius:12px;padding:18px 20px;max-width:480px"><div style="font-size:16px;font-weight:600">Parte diario '+(fSel?dmy(fSel):"")+'</div><div style="font-size:12.5px;color:#888780;margin-bottom:6px">'+proyNom+(parteEst?' · '+STATIONS[parteEst].label:'')+(partePersona?' · '+nombrePersona(partePersona):'')+'</div><div style="border-top:1px solid #F1EFE8;margin-top:6px;padding-top:6px">';
@@ -4051,7 +4058,7 @@
           }
           h+='<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:9px;padding:10px 13px;margin:2px 0 6px;font-size:12px;color:#33475B;line-height:1.5">'+porque+'</div>';
         }
-        h+='<button class="btn no-print" onclick="infoSaltarAPlan(\''+proySel+'\')" style="background:#4A3F7A;color:#fff;border:0;padding:5px 12px;font-size:11.5px;border-radius:8px;font-weight:550;margin-bottom:4px">Ver el plan de este proyecto →</button>';
+        h+='<button class="btn btn-plan btn-sm no-print" onclick="infoSaltarAPlan(\''+proySel+'\')" style="margin-bottom:4px">Ver el plan de este proyecto →</button>';
         h+=bloqueComoSeCalcula('tiempos',
           'El <b>Desvío</b> compara la cantidad de días hábiles trabajados vs planificados. '
           + 'Lo planificado sale de la '+(usandoBase?'línea base (primer plan fijado)':'planificación vigente')+'; lo real, de los días con jornadas efectivas en el Detalle diario (hasta ayer'+(cerradoInf?', o todo el detalle si el proyecto está cerrado':'')+'). '
@@ -4117,7 +4124,7 @@
         if(ausencias>0){ porque += ' Se registraron '+ausencias+' jornada'+(ausencias===1?'':'s')+' de ausencia (no suman costo al no trabajarse).'; }
         h+='<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:9px;padding:10px 13px;margin:2px 0 6px;font-size:12px;color:#33475B;line-height:1.5">'+porque+'</div>';
       })();
-      h+='<button class="btn no-print" onclick="infoSaltarADetalle(\''+proySel+'\')" style="background:#185FA5;color:#fff;border:0;padding:5px 12px;font-size:11.5px;border-radius:8px;font-weight:550;margin-bottom:4px">Ver el detalle diario de este proyecto →</button>';
+      h+='<button class="btn btn-primary btn-sm no-print" onclick="infoSaltarADetalle(\''+proySel+'\')" style="margin-bottom:4px">Ver el detalle diario de este proyecto →</button>';
       h+=bloqueComoSeCalcula('costos',
         'El <b>costo real</b> suma, por cada jornada ejecutada: horas normales × valor-hora + horas extra × valor-hora × multiplicador (1,5× lun-sáb, 2× domingos y feriados). El valor-hora es el vigente en el mes de cada jornada. '
         + '<b>Plan vs Ppto</b> = costo planificado − presupuesto. <b>Real vs Plan</b> = costo real − costo planificado. <b>Real vs Ppto</b> = costo real − presupuesto (el desvío final). '
@@ -4468,7 +4475,7 @@
         return t;
       })();
       h += '<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:10px;padding:13px 15px;font-size:12.5px;line-height:1.55;color:#33475B;margin-top:12px">'+narr
-        + '<div style="margin-top:10px"><button class="btn no-print" onclick="tabSaltarADetalle()" style="background:#185FA5;color:#fff;border:0;padding:6px 13px;font-size:12px;border-radius:8px;font-weight:550">Ver el detalle de este período →</button></div>'
+        + '<div style="margin-top:10px"><button class="btn btn-primary btn-sm no-print" onclick="tabSaltarADetalle()">Ver el detalle de este período →</button></div>'
         + '</div>';
       h += '<div style="font-size:10px;color:#BDBBB2;margin-top:8px;border-top:1px solid #F4F2EC;padding-top:6px">Cómo se calcula: <b>Tarifa</b> = horas_plan × (valor-hora actual − congelado). <b>Horas normales</b> = (horas reales − plan) × valor-hora actual. <b>Extra</b> = horas extra × valor-hora × multiplicador. <b>Ausencias</b> = jornadas ausentes × horas_plan × valor-hora (en negativo). La suma da el desvío total.</div>';
       h += '</div>';
