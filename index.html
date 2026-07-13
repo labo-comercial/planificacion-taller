@@ -3712,6 +3712,32 @@
 
     /* ---- INFORME DE CIERRE ---- */
     let informeProy = "";
+    let infoExplica = new Set(); // ids de secciones con "cómo se calcula" abierto
+
+    // Bloque colapsable reutilizable "Cómo se calcula". id único por sección; html = contenido de la fórmula.
+    function bloqueComoSeCalcula(id, htmlContenido){
+      const abierto = infoExplica.has(id);
+      let s = '<div class="no-print" style="margin:2px 0 16px">'
+        + '<button class="btn" onclick="infoToggleExplica(\''+id+'\')" style="background:none;border:0;color:#185FA5;font-size:11.5px;cursor:pointer;padding:2px 0;font-weight:550">'
+        + (abierto?'▾':'▸')+' Cómo se calcula</button>';
+      if(abierto){
+        s += '<div style="background:#F8F7F4;border:1px solid #EEECE4;border-radius:9px;padding:11px 14px;margin-top:5px;font-size:11.5px;color:#5F5E5A;line-height:1.55">'+htmlContenido+'</div>';
+      }
+      s += '</div>';
+      return s;
+    }
+    function infoToggleExplica(id){ if(infoExplica.has(id)) infoExplica.delete(id); else infoExplica.add(id); renderInforme(); }
+
+    // Saltos del informe: tiempo → Planificación General; costo → Detalle diario. Posicionados en el proyecto.
+    function infoSaltarAPlan(proyId){
+      planiProy = proyId || ""; planiVerTodo = true; // ver todo el plan del proyecto
+      cambiarTab("plani");
+    }
+    function infoSaltarADetalle(proyId){
+      detalleVerTodo = true; // el informe es del proyecto completo: mostrar todo el historial
+      cambiarTab("detalle");
+    }
+
     function renderInforme() {
       const proySel = informeProy || (proyectos[0] && proyectos[0].id) || "";
       let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px">';
@@ -3936,6 +3962,10 @@
           });
           h+='</tbody></table>';
         }
+        h+=bloqueComoSeCalcula('jornales',
+          'Un <b>jornal</b> = 8 horas reales trabajadas (horas normales + extra, incluye días extra). '
+          + 'Solo cuenta <b>personal Directo</b> — los contratistas se pagan por otra vía y no consumen jornal de mano de obra directa. Las ausencias no suman (no se trabajaron). '
+          + 'La apertura por especialidad usa la especialidad vigente de cada persona en el mes de cada jornada.');
         h+='</div>';
       })();
 
@@ -3957,7 +3987,23 @@
           h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 10px;font-weight:500;color:#888780">Corrimiento de fecha de fin <span style="font-size:10.5px;font-weight:400;color:#BDBBB2">(informativo)</span></td><td></td><td style="text-align:center;color:'+(desvFin>0?'#A32D2D':desvFin<0?'#3B6D11':'#888780')+'">'+fdate(realFin)+' vs '+fdate(planFin)+'</td><td style="text-align:center;font-weight:600;color:'+(desvFin>0?'#A32D2D':desvFin<0?'#3B6D11':'#888780')+'">'+(desvFin>0?"+":"")+desvFin+' días</td></tr>';
         }
         h+='</tbody></table>';
-        h+='<div style="font-size:11px;color:#A8A69E;margin:-2px 0 18px">El <b>Desvío</b> compara la cantidad de días hábiles trabajados vs planificados. El <b>corrimiento de fecha de fin</b> es solo informativo: mide si el proyecto terminó antes o después de la fecha planificada de cierre (fin real vs fin planificado, en días hábiles), sin importar cuántos días se trabajó en el medio.</div>';
+        // --- POR QUÉ da este desvío (dinámico) ---
+        if(desvDias!==0){
+          const signoTxt = desvDias>0 ? 'atraso' : 'adelanto';
+          // estaciones que más contribuyeron al desvío de tiempo
+          const aportes = Object.keys(est).map(k=>({ k, dv:(est[k].realD.size - est[k].planD.size) }))
+            .filter(x=>x.dv!==0).sort((a,b)=>Math.abs(b.dv)-Math.abs(a.dv)).slice(0,3);
+          let porque = 'El '+signoTxt+' de <b>'+(desvDias>=0?'+':'')+desvDias+' días</b> surge de comparar '+realDur+' días hábiles trabajados contra '+planDur+' planificados.';
+          if(aportes.length){
+            porque += ' Principales aportes: '+aportes.map(a=>nombreEstacion(a.k)+' ('+(a.dv>=0?'+':'')+a.dv+'d)').join(', ')+'.';
+          }
+          h+='<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:9px;padding:10px 13px;margin:2px 0 6px;font-size:12px;color:#33475B;line-height:1.5">'+porque+'</div>';
+        }
+        h+='<button class="btn no-print" onclick="infoSaltarAPlan(\''+proySel+'\')" style="background:#4A3F7A;color:#fff;border:0;padding:5px 12px;font-size:11.5px;border-radius:8px;font-weight:550;margin-bottom:4px">Ver el plan de este proyecto →</button>';
+        h+=bloqueComoSeCalcula('tiempos',
+          'El <b>Desvío</b> compara la cantidad de días hábiles trabajados vs planificados. '
+          + 'Lo planificado sale de la '+(usandoBase?'línea base (primer plan fijado)':'planificación vigente')+'; lo real, de los días con jornadas efectivas en el Detalle diario (hasta ayer'+(cerradoInf?', o todo el detalle si el proyecto está cerrado':'')+'). '
+          + 'El <b>corrimiento de fecha de fin</b> es informativo: mide si el proyecto terminó antes o después de la fecha planificada de cierre (fin real vs fin planificado, en días hábiles), sin importar cuántos días se trabajó en el medio.');
       }
 
       // --- LÍNEA BASE: cuánto cambió el plan vigente respecto del plan original ---
@@ -4003,7 +4049,28 @@
         + dvPctCell(desvCosto,desvPct,presup)
         + '</tr>';
       h+='</tbody></table></div>';
-      h+='<div style="font-size:10.5px;color:#A8A69E;margin:2px 0 8px;line-height:1.6"><b>Plan vs Ppto</b> = costo planificado − presupuesto (si el plan ya proyectaba pasarse). <b>Real vs Plan</b> = costo real − costo planificado (cuánto se desvió la ejecución del plan). <b>Real vs Ppto</b> = costo real − presupuesto (el desvío final). Verde = por debajo, rojo = por encima.'+(hayPlanCosto?'':' <b style="color:#BA7517">Sin costo planificado:</b> este proyecto no tiene línea base fijada ni plan vigente valorizable, así que las columnas con el plan quedan sin dato.')+'</div>';
+      // --- POR QUÉ da este desvío de costo (dinámico) ---
+      (function(){
+        const signoTxt = desvCosto>0 ? 'sobrecosto' : 'ahorro';
+        let porque = '';
+        if(presup){
+          porque = 'El '+signoTxt+' de <b>'+(desvCosto>=0?'+':'')+fmt(desvCosto)+'</b> ('+(desvPct>=0?'+':'')+desvPct.toFixed(0)+'% vs presupuesto) resulta de un costo real de '+fmt(real)+' contra un presupuesto de '+fmt(presup)+'.';
+        } else {
+          porque = 'El costo real acumulado es <b>'+fmt(real)+'</b>. Este proyecto no tiene presupuesto de mano de obra cargado, así que no se puede medir desvío vs presupuesto.';
+        }
+        if(extra>0){
+          const pctExtraInf = real>0 ? (extra/real*100) : 0;
+          porque += ' De ese total, <b>'+fmt(extra)+'</b> ('+pctExtraInf.toFixed(0)+'%) son horas extra ('+hsExtra+'h).';
+        }
+        if(ausencias>0){ porque += ' Se registraron '+ausencias+' jornada'+(ausencias===1?'':'s')+' de ausencia (no suman costo al no trabajarse).'; }
+        h+='<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:9px;padding:10px 13px;margin:2px 0 6px;font-size:12px;color:#33475B;line-height:1.5">'+porque+'</div>';
+      })();
+      h+='<button class="btn no-print" onclick="infoSaltarADetalle(\''+proySel+'\')" style="background:#185FA5;color:#fff;border:0;padding:5px 12px;font-size:11.5px;border-radius:8px;font-weight:550;margin-bottom:4px">Ver el detalle diario de este proyecto →</button>';
+      h+=bloqueComoSeCalcula('costos',
+        'El <b>costo real</b> suma, por cada jornada ejecutada: horas normales × valor-hora + horas extra × valor-hora × multiplicador (1,5× lun-sáb, 2× domingos y feriados). El valor-hora es el vigente en el mes de cada jornada. '
+        + '<b>Plan vs Ppto</b> = costo planificado − presupuesto. <b>Real vs Plan</b> = costo real − costo planificado. <b>Real vs Ppto</b> = costo real − presupuesto (el desvío final). '
+        + 'Se desdobla en La Huella (todas las estaciones menos Montaje) y Montaje, cada una contra su propio presupuesto. Verde = por debajo, rojo = por encima.'
+        + (hayPlanCosto?'':' <b style="color:#BA7517">Sin costo planificado:</b> sin línea base ni plan valorizable, las columnas del plan quedan sin dato.'));
 
       // ====== GRÁFICOS: costo plan vs real por estación + timeline de fechas ======
       (function(){
