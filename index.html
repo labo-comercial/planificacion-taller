@@ -3419,22 +3419,29 @@
       let det = detalle.filter(f => proyOperDset.has(f.proyecto_id));
       if (dashProy) det = det.filter(f => f.proyecto_id === dashProy);
       // KPIs — solo ejecución real (hasta ayer). El día en curso y el futuro son plan, no desvío.
-      let jornal=0, extra=0, ausencias=0, hsExtra=0;
-      det.forEach(f => { if(!esFechaReal(f.fecha)) return; if (f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); hsExtra+=(Number(f.horas_extra)||0); });
-      const real = jornal+extra;
+      let jornal=0, extra=0, ausencias=0, hsExtra=0, costoImprodD=0;
+      det.forEach(f => { if(!esFechaReal(f.fecha)) return; const ch=costoHora(f.persona_real, f.fecha); if (f.ausente){ ausencias++; const hp=(f.horas_plan!=null?Number(f.horas_plan):Number(f.horas_normales)||0); costoImprodD += hp*ch; return; } jornal+=(Number(f.horas_normales)||0)*ch; extra+=(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); hsExtra+=(Number(f.horas_extra)||0); });
+      const real = jornal+extra+costoImprodD;
       const presup = (dashProy ? proyectos.filter(p=>p.id===dashProy) : proyOperD).reduce((s,p)=>s+presupMO(p),0);
       // --- Índices de desempeño (Earned Value) ---
       // CPI = costo planificado del trabajo hecho / costo real. >1 = eficiente (gastás menos de lo previsto).
       // SPI = días reales trabajados / días planificados hasta hoy. >1 = adelantado; <1 = atrasado.
       let costoPlanEV=0, costoRealEV=0;
       det.forEach(f=>{
-        if(f.ausente) return;
         if(!esFechaReal(f.fecha)) return;
         const chReal = costoHora(f.persona_real, f.fecha);
         const chPlan = (f.valor_hora_plan!=null) ? Number(f.valor_hora_plan) : chReal;
         const hReal = Number(f.horas_normales)||0, hExtra=Number(f.horas_extra)||0;
         const hPlan = (f.horas_plan!=null ? Number(f.horas_plan) : hReal);
-        costoRealEV += hReal*chReal + hExtra*chReal*2;
+        if(f.ausente){
+          // Ausencia pagada (mensualizado): suma al costo real como jornada planificada.
+          // El CPI no se mueve (real=plan en costo); la ineficiencia se refleja en el SPI (menos días
+          // producidos) y en el costo improductivo, no en el CPI.
+          costoRealEV += hPlan*chReal;
+          costoPlanEV += hPlan*chPlan;
+          return;
+        }
+        costoRealEV += hReal*chReal + hExtra*chReal*multExtra(f.fecha);
         costoPlanEV += hPlan*chPlan;
       });
       const cpi = costoRealEV>0 ? (costoPlanEV/costoRealEV) : null;
@@ -3542,11 +3549,11 @@
         const usoPct = presup ? (real/presup*100) : 0;
         const fmtAR=(n)=>'$'+Math.round(n).toLocaleString("es-AR");
         h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
-          + card("Costo real acumulado",fmtAR(real),null,null,"Suma de (horas normales × valor-hora del mes) + (horas extra × valor-hora × 2) de todas las jornadas trabajadas del detalle.")
+          + card("Costo real acumulado",fmtAR(real),costoImprodD>0?("incluye "+fmtAR(costoImprodD)+" improductivo"):null,null,"Suma de (horas normales × valor-hora del mes) + (horas extra × valor-hora × 1,5 lun-sáb ó 2 dom/feriado) de las jornadas trabajadas, más las ausencias pagadas (personal mensualizado: se paga la jornada planificada aunque no se trabaje).")
           + card("Uso del presupuesto MO", presup?usoPct.toFixed(0)+"%":"s/presup", fmtAR(real)+" de "+fmtAR(presup), usoPct>100?'#A32D2D':usoPct>85?'#BA7517':'#3B6D11', "Costo real acumulado ÷ presupuesto de mano de obra cargado (La Huella + Montaje). Verde <85%, ámbar 85–100%, rojo >100%.")
           + card("Proyección de costo final", eac!=null?fmtAR(eac):"s/dato", eac!=null?(eacDesv>=0?"+":"")+fmtAR(eacDesv)+" vs presupuesto":"necesita presupuesto y CPI", eac==null?null:(eacDesv>0?'#A32D2D':'#3B6D11'), "Si el proyecto sigue al ritmo de eficiencia actual, cuánto va a costar terminarlo. Se calcula presupuesto ÷ CPI. El número de abajo es cuánto te pasarías (o ahorrarías) contra el presupuesto.")
           + card("Horas extra", pctExtra.toFixed(0)+"%", hsExtra+" h · "+fmtAR(extra)+" del costo", pctExtra>15?'#A32D2D':pctExtra>5?'#BA7517':'#3B6D11', "Costo de horas extra (valorizadas 1.5x lun-sáb, 2x dom/feriado) ÷ costo real total. Verde <5%, ámbar 5–15%, rojo >15%.")
-          + card("Ausencias", ausencias, "jornadas no trabajadas", ausencias>0?'#A32D2D':'#3B6D11', "Cantidad de jornadas del detalle marcadas como ausente en el período visible.")
+          + card("Ausencias", ausencias+(costoImprodD>0?" · "+fmtAR(costoImprodD):""), "jornadas pagadas sin producción", ausencias>0?'#A32D2D':'#3B6D11', "Jornadas marcadas ausentes. El personal directo es mensualizado: se pagan igual (costo improductivo, incluido en el costo real) aunque no produzcan.")
           + '</div>';
         h+=bloqueComoSeCalcula('dash-pm-kpis', dashCalcs.join('<br>'));
         // Origen del desvío (torta de barras) — por qué te estás desviando
@@ -3556,7 +3563,7 @@
           + card("Cumplimiento del plan", ppc!=null?(ppc*100).toFixed(0)+"%":"s/dato", ppc!=null?cumplidas+" de "+planHastaHoy+" jornadas según plan":"sin jornadas hasta ayer", ppc==null?null:(ppc>=0.9?'#3B6D11':ppc>=0.75?'#BA7517':'#A32D2D'), "De las jornadas que estaban planificadas hasta ayer (el día en curso no se cuenta porque aún no cerró), qué porcentaje salió exactamente como estaba previsto (misma persona, misma estación, mismas horas, sin ausencias). Es la mejor señal temprana de que el plan se está cumpliendo o no. Verde ≥90%, ámbar 75–89%, rojo <75%.")
           + card("Cobertura próx. 5 días", sinCubrir===0?"OK":sinCubrir+" sin cubrir", sinCubrir===0?"todo el plan cubierto":"días-estación sin gente", sinCubrir===0?'#3B6D11':'#A32D2D', "Combinaciones estación-proyecto-día planificadas para los próximos 5 días hábiles que todavía no tienen ninguna persona asignada en el detalle.")
           + card("Horas extra", hsExtra+" h", "$"+Math.round(extra).toLocaleString("es-AR")+" en extra", hsExtra>0?'#BA7517':null, "Suma de horas extra de todas las jornadas del período visible. El monto es esas horas valorizadas al doble del valor-hora.")
-          + card("Ausencias", ausencias, "jornadas no trabajadas", ausencias>0?'#A32D2D':'#3B6D11', "Cantidad de jornadas del detalle marcadas como ausente en el período visible.")
+          + card("Ausencias", ausencias+(costoImprodD>0?" · "+fmtAR(costoImprodD):""), "jornadas pagadas sin producción", ausencias>0?'#A32D2D':'#3B6D11', "Jornadas marcadas ausentes. El personal directo es mensualizado: se pagan igual (costo improductivo, incluido en el costo real) aunque no produzcan.")
           + card("Personal directo ocupado hoy", (function(){ const s=new Set(); det.forEach(f=>{ if(f.fecha!==hoy||f.ausente)return; const pp=personas.find(x=>x.id===f.persona_real); if(pp&&pp.tipo!=="Contratista") s.add(f.persona_real); }); return s.size; })()+"/"+personasHuella().filter(p=>p.tipo!=='Contratista').length, "con tarea hoy / plantel directo", null, "Personas directas (no contratistas) con al menos una jornada no ausente con fecha de hoy, sobre el total de personas directas cargadas.")
           + '</div>';
         h+=bloqueComoSeCalcula('dash-coord-kpis', dashCalcs.join('<br>'));
@@ -3865,10 +3872,19 @@
 
       // --- COSTOS (desdoblados: La Huella vs Montaje) ---
       const presupH = presupHuella(pr), presupM = presupMontaje(pr), presup = presupH + presupM;
-      let jornal=0, extra=0, hsExtra=0, ausencias=0;
+      let jornal=0, extra=0, hsExtra=0, ausencias=0, costoImprodInf=0;
       let realH=0, realM=0; // costo real contra cada presupuesto
-      det.forEach(f=>{ if(!esRealInf(f.fecha)) return; if(f.ausente){ausencias++;return;} const ch=costoHora(f.persona_real, f.fecha); const cn=(Number(f.horas_normales)||0)*ch; const ce=(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); jornal+=cn; extra+=ce; hsExtra+=(Number(f.horas_extra)||0); if(esMontaje(f.estacion_real)) realM+=cn+ce; else realH+=cn+ce; });
-      const real=jornal+extra;
+      det.forEach(f=>{ if(!esRealInf(f.fecha)) return; const ch=costoHora(f.persona_real, f.fecha);
+        if(f.ausente){
+          // Ausencia pagada (mensualizado): suma como jornada planificada a valor vigente; se registra como improductivo.
+          ausencias++;
+          const hp=(f.horas_plan!=null?Number(f.horas_plan):Number(f.horas_normales)||0);
+          const pa=hp*ch; costoImprodInf+=pa;
+          if(esMontaje(f.estacion_real)) realM+=pa; else realH+=pa;
+          return;
+        }
+        const cn=(Number(f.horas_normales)||0)*ch; const ce=(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); jornal+=cn; extra+=ce; hsExtra+=(Number(f.horas_extra)||0); if(esMontaje(f.estacion_real)) realM+=cn+ce; else realH+=cn+ce; });
+      const real=jornal+extra+costoImprodInf;
       const desvCosto=real-presup;
       const desvPct=presup?(desvCosto/presup*100):0;
       const desvH=realH-presupH, desvM=realM-presupM;
@@ -3895,7 +3911,7 @@
       // --- POR ESTACIÓN (Supervisión EXCLUIDA: es un rol paralelo, no una estación) ---
       const est={};
       blo.forEach(b=>{ if(b.estacion===SUP_MARK) return; const dP=diasHabiles(b.fecha_desde,b.fecha_hasta).filter(esRealInf); if(!est[b.estacion])est[b.estacion]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; dP.forEach(d=>est[b.estacion].planD.add(d)); (b.modulos||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[b.estacion].modsPlan.add(m)); });
-      det.forEach(f=>{ if(f.estacion_real===SUP_MARK) return; if(!esRealInf(f.fecha)) return; if(!est[f.estacion_real])est[f.estacion_real]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; if(!f.ausente){est[f.estacion_real].realD.add(f.fecha); const ch=costoHora(f.persona_real, f.fecha); est[f.estacion_real].costo+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); est[f.estacion_real].hsExtra+=(Number(f.horas_extra)||0); (f.modulos_real||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[f.estacion_real].modsReal.add(m));} });
+      det.forEach(f=>{ if(f.estacion_real===SUP_MARK) return; if(!esRealInf(f.fecha)) return; if(!est[f.estacion_real])est[f.estacion_real]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; if(!f.ausente){est[f.estacion_real].realD.add(f.fecha); const ch=costoHora(f.persona_real, f.fecha); est[f.estacion_real].costo+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); est[f.estacion_real].hsExtra+=(Number(f.horas_extra)||0); (f.modulos_real||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[f.estacion_real].modsReal.add(m));} else { const ch=costoHora(f.persona_real, f.fecha); const hp=(f.horas_plan!=null?Number(f.horas_plan):Number(f.horas_normales)||0); est[f.estacion_real].costo+=hp*ch; } });
 
       const fmt=(n)=>'$'+Math.round(n).toLocaleString("es-AR");
       const fdate=(d)=>d?dmy(d):"—";
@@ -4142,12 +4158,12 @@
           const pctExtraInf = real>0 ? (extra/real*100) : 0;
           porque += ' De ese total, <b>'+fmt(extra)+'</b> ('+pctExtraInf.toFixed(0)+'%) son horas extra ('+hsExtra+'h).';
         }
-        if(ausencias>0){ porque += ' Se registraron '+ausencias+' jornada'+(ausencias===1?'':'s')+' de ausencia (no suman costo al no trabajarse).'; }
+        if(ausencias>0){ porque += ' Se registraron '+ausencias+' jornada'+(ausencias===1?'':'s')+' de ausencia, pagadas igual (personal mensualizado): '+fmt(costoImprodInf)+' de costo improductivo incluido en el real. Si el trabajo se repuso, ese costo extra ya está reflejado arriba.'; }
         h+='<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:9px;padding:10px 13px;margin:2px 0 6px;font-size:12px;color:#33475B;line-height:1.5">'+porque+'</div>';
       })();
       h+='<button class="btn btn-primary btn-sm no-print" onclick="infoSaltarADetalle(\''+proySel+'\')" style="margin-bottom:4px">Ver el detalle diario de este proyecto →</button>';
       h+=bloqueComoSeCalcula('costos',
-        'El <b>costo real</b> suma, por cada jornada ejecutada: horas normales × valor-hora + horas extra × valor-hora × multiplicador (1,5× lun-sáb, 2× domingos y feriados). El valor-hora es el vigente en el mes de cada jornada. '
+        'El <b>costo real</b> suma, por cada jornada ejecutada: horas normales × valor-hora + horas extra × valor-hora × multiplicador (1,5× lun-sáb, 2× domingos y feriados). El valor-hora es el vigente en el mes de cada jornada. Incluye las <b>ausencias pagadas</b> (personal directo mensualizado: se paga la jornada planificada aunque no se trabaje — costo improductivo). '
         + '<b>Plan vs Ppto</b> = costo planificado − presupuesto. <b>Real vs Plan</b> = costo real − costo planificado. <b>Real vs Ppto</b> = costo real − presupuesto (el desvío final). '
         + 'Se desdobla en La Huella (todas las estaciones menos Montaje) y Montaje, cada una contra su propio presupuesto. Verde = por debajo, rojo = por encima.'
         + (hayPlanCosto?'':' <b style="color:#BA7517">Sin costo planificado:</b> sin línea base ni plan valorizable, las columnas del plan quedan sin dato.'));
