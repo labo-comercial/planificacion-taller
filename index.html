@@ -2568,7 +2568,7 @@
       // Cotizaciones y archivados no entran al panel de desvíos operativos.
       const proyOper = new Set(proyectosOperativos().map(p=>p.id));
       const esProyOper = (pid)=> proyOper.has(pid);
-      const ensureEst = (key)=>{ if(!porEstacion[key]) porEstacion[key] = { diasPlanSet:new Set(), diasRealSet:new Set(), finPlan:null, finReal:null, costoDiasDelta:0, costoReal:0, costoPlan:0, tieneExtra:false, costoOrigen:{extra:0, edicion:0, planreal:0, jornal:0} }; return porEstacion[key]; };
+      const ensureEst = (key)=>{ if(!porEstacion[key]) porEstacion[key] = { diasPlanSet:new Set(), diasRealSet:new Set(), finPlan:null, finReal:null, costoDiasDelta:0, costoReal:0, costoPlan:0, costoImprod:0, tieneExtra:false, costoOrigen:{extra:0, edicion:0, planreal:0, jornal:0} }; return porEstacion[key]; };
       // Clasifica el origen del desvío de una fila: 'extra' | 'edicion' | 'planreal' | 'jornal'
       const norm = (x)=> (x==null ? "" : String(x));
       function origenDesvio(f){
@@ -2598,8 +2598,10 @@
         const hPlan = (f.horas_plan!=null ? Number(f.horas_plan) : Number(f.horas_normales)||0);
         const hReal = f.ausente ? 0 : (Number(f.horas_normales)||0);
         const hExtra = f.ausente ? 0 : (Number(f.horas_extra)||0);
-        // costo real incluye extra a 1.5x/2x según el día (con valor vigente); costo plan usa horas y valor planificados
-        const costoReal = hReal*ch + hExtra*ch*multExtra(f.fecha);
+        // costo real incluye extra a 1.5x/2x según el día (con valor vigente); costo plan usa horas y valor planificados.
+        // Ausencia (directo mensualizado): se pagó igual la jornada planificada, aunque no produjo → suma como costo improductivo.
+        const costoReal = f.ausente ? (hPlan*ch) : (hReal*ch + hExtra*ch*multExtra(f.fecha));
+        const costoImprod = f.ausente ? (hPlan*ch) : 0;
         const costoPlan = hPlan*chPlan;
         const delta = costoReal - costoPlan;  // >0 sobrecosto, <0 ahorro
         let tipo = "neutro";
@@ -2609,7 +2611,7 @@
         // acumular costo en la estación real del proyecto
         const ke = f.estacion_real + "|" + f.proyecto_id;
         const e = ensureEst(ke);
-        e.costoReal += costoReal; e.costoPlan += costoPlan;
+        e.costoReal += costoReal; e.costoPlan += costoPlan; e.costoImprod += costoImprod;
         if(Math.abs(delta) > 0.5) e.costoOrigen[origen] += delta;
         if(f.es_extra) e.tieneExtra = true;
       });
@@ -2660,7 +2662,7 @@
       //   - atrasoProy = fin plan vs fin real del PROYECTO COMPLETO
       //   - atrasoEst  = suma de atrasos/adelantos de las estaciones del proyecto
       const porProyecto = {};
-      const ensureProy = (pid)=>{ if(!porProyecto[pid]) porProyecto[pid] = { sobrecosto:0, ahorro:0, costoNetoPlan:0, costoReal:0, presup:0, costoVsPresup:0, finPlan:null, finReal:null, atrasoProy:0, atrasoEst:0, tieneExtra:false, costoOrigen:{extra:0, edicion:0, planreal:0, jornal:0}, tiempoOrigen:{extra:0, edicion:0, planreal:0, jornal:0} }; return porProyecto[pid]; };
+      const ensureProy = (pid)=>{ if(!porProyecto[pid]) porProyecto[pid] = { sobrecosto:0, ahorro:0, costoNetoPlan:0, costoReal:0, costoImprod:0, presup:0, costoVsPresup:0, finPlan:null, finReal:null, atrasoProy:0, atrasoEst:0, tieneExtra:false, costoOrigen:{extra:0, edicion:0, planreal:0, jornal:0}, tiempoOrigen:{extra:0, edicion:0, planreal:0, jornal:0} }; return porProyecto[pid]; };
       // costo por proyecto (desde las filas): delta vs plan + costo real absoluto — solo ejecutado
       detalle.forEach(f=>{
         if(!esFechaReal(f.fecha)) return;
@@ -2670,7 +2672,14 @@
         const d = fi ? fi.costoDelta : 0;
         if(d>0) pp.sobrecosto += d; else if(d<0) pp.ahorro += (-d);
         if(fi && Math.abs(d)>0.5) pp.costoOrigen[fi.origen] += d;
-        if(!f.ausente){ const ch=costoHora(f.persona_real, f.fecha); pp.costoReal += (Number(f.horas_normales)||0)*ch + (Number(f.horas_extra)||0)*ch*multExtra(f.fecha); }
+        if(f.ausente){
+          // Ausencia pagada (mensualizado): suma al costo real como jornada planificada, y se registra como improductivo.
+          const ch=costoHora(f.persona_real, f.fecha);
+          const hp=(f.horas_plan!=null?Number(f.horas_plan):Number(f.horas_normales)||0);
+          pp.costoReal += hp*ch; pp.costoImprod += hp*ch;
+        } else {
+          const ch=costoHora(f.persona_real, f.fecha); pp.costoReal += (Number(f.horas_normales)||0)*ch + (Number(f.horas_extra)||0)*ch*multExtra(f.fecha);
+        }
         if(f.es_extra) pp.tieneExtra = true;
       });
       // presupuesto MO por proyecto (de la tabla proyectos): total = La Huella + Montaje
@@ -2947,6 +2956,7 @@
               if(p.atrasoProy>0) txt += ' En tiempo, va con <b>+'+p.atrasoProy+' día(s)</b> de atraso.';
               else if(p.atrasoProy<0) txt += ' En tiempo, va <b>'+Math.abs(p.atrasoProy)+' día(s)</b> adelantado.';
             }
+            if(p.costoImprod>0.5){ txt += ' Además, <b>'+fmtPlata(p.costoImprod)+'</b> de costo improductivo (ausencias pagadas sin producción); el costo de reponerlas, si las hubo, ya está en el desvío.'; }
             h += '<div style="background:#F6F8FB;border:1px solid #DDE6F0;border-radius:9px;padding:10px 13px;margin:6px 0 2px;font-size:12px;color:#33475B;line-height:1.5">'+txt+'</div>';
           })();
         }
