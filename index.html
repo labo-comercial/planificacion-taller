@@ -981,6 +981,8 @@
         + '<div style="font-size:12.5px;color:#5F5E5A;margin-top:5px">'+label+'</div>'+(extra?'<div style="font-size:11px;color:#A8A69E;margin-top:2px">'+extra+'</div>':'')+'</div>';
 
       let h = '<p style="font-size:13px;color:#888780;margin-top:0">Panorama de la sede: estado del parque, mantenimientos, stock y qué se trabaja hoy y mañana.</p>';
+      h += '<div class="no-print" style="display:flex;justify-content:flex-end;margin-bottom:10px">'+botonesExport("nqndash-print","dashboard-neuquen")+'</div>';
+      h += '<div id="nqndash-print">';
 
       // Fila 1 — KPIs principales
       h += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">';
@@ -1046,7 +1048,8 @@
       h += '</div>'; // fin columna derecha
       h += '</div>'; // fin dos columnas
 
-      h += '<div class="row-actions"><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
+      h += '</div>'; // cierra nqndash-print
+      h += '<div class="row-actions no-print"><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
       contenido.innerHTML = h;
     }
 
@@ -1074,7 +1077,8 @@
 
       const filtrados = trailerEstadoFiltro ? trailers.filter(t=>t.estado===trailerEstadoFiltro) : trailers;
 
-      let h = resumen + '<table><thead><tr><th>Código (contenedor)</th><th>IF</th><th>Tipo</th><th>Med</th><th>Mod</th><th>Estado</th><th>Ubicación</th><th>Cliente</th><th>Obs.</th><th></th></tr></thead><tbody>';
+      let h = '<div class="no-print" style="display:flex;justify-content:flex-end;margin-bottom:10px">'+botonesExport("trailers-print","trailers")+'</div>';
+      h += '<div id="trailers-print">' + resumen + '<table><thead><tr><th>Código (contenedor)</th><th>IF</th><th>Tipo</th><th>Med</th><th>Mod</th><th>Estado</th><th>Ubicación</th><th>Cliente</th><th>Obs.</th><th></th></tr></thead><tbody>';
       if (!filtrados.length) h += '<tr><td colspan="10" style="color:#A8A69E;padding:14px">'+(trailerEstadoFiltro?'Sin trailers en este estado.':'Sin trailers cargados. Agregá el primero abajo.')+'</td></tr>';
       filtrados.forEach(t=>{
         const e = TRAILER_ESTADOS[t.estado] || { color:"#55544F" };
@@ -1096,7 +1100,7 @@
           + '<td style="width:30px"><button class="btn-del" onclick="eliminarTr(\''+t.id+'\')">×</button></td>'
           + '</tr>';
       });
-      h += '</tbody></table><div class="row-actions"><button class="btn-add" onclick="agregarTr()">+ Agregar trailer</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
+      h += '</tbody></table></div><div class="row-actions no-print"><button class="btn-add" onclick="agregarTr()">+ Agregar trailer</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
       contenido.innerHTML = h;
     }
     async function agregarTr(){ const{error}=await sb.from("trailers").insert({ sede:"neuquen", estado:"disponible", codigo:"", alias:"" }); if(error)return setEstado("Error: "+error.message,"err"); registrarLog("crear","trailer","Nuevo trailer (sin código aún)"); cargar(); }
@@ -1155,6 +1159,8 @@
       if (mantDesdeFiltro) mantVisibles = mantVisibles.filter(t=> !t.fecha_hasta || t.fecha_hasta >= mantDesdeFiltro);
       const ocultasMant = mantTareas.length - mantVisibles.length;
       if (ocultasMant > 0) h += '<p style="font-size:11.5px;color:#A8A69E;margin:0 0 10px">'+ocultasMant+' tarea(s) ocultas por los filtros.</p>';
+      h += '<div class="no-print" style="display:flex;justify-content:flex-end;margin-bottom:10px">'+botonesExport("nqnmant-print","mantenimiento")+'</div>';
+      h += '<div id="nqnmant-print">';
 
       // ---- Controles de expandir/colapsar todo (no en vista grilla) ----
       if (mantVisibles.length && mantLente!=='semana') {
@@ -1308,7 +1314,8 @@
       }
       // expone la lista visible para "Expandir todo"
       window.__mantVisiblesIds = mantVisibles.map(t=>t.id);
-      h += '<div class="row-actions"><button class="btn-add" onclick="agregarMt()">+ Agregar tarea</button><button class="btn btn-ok" onclick="generarDetalleNqn()">Generar detalle diario →</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
+      h += '</div>'; // cierra nqnmant-print
+      h += '<div class="row-actions no-print"><button class="btn-add" onclick="agregarMt()">+ Agregar tarea</button><button class="btn btn-ok" onclick="generarDetalleNqn()">Generar detalle diario →</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
       contenido.innerHTML = h;
     }
     // Expandir / colapsar una fila de tarea de mantenimiento.
@@ -1458,6 +1465,26 @@
     function bajoMinimo(i){ return Number(i.cantidad) <= Number(i.minimo); }
     function fmtNum(n){ if(n==null||n==="") return ""; const x=Number(n); return Number.isInteger(x)? String(x) : x.toFixed(2); }
     function fmtMoneda(n){ if(n==null||n==="") return ""; return "$" + Number(n).toLocaleString("es-AR",{minimumFractionDigits:2,maximumFractionDigits:2}); }
+    // Exporta el catálogo de stock a CSV (abrible en Excel). Respeta el filtro de familia activo.
+    function exportarStockCSV(){
+      let lista = stockItems.slice();
+      if (stockFiltroFam) lista = lista.filter(i=> (i.familia||"")===stockFiltroFam);
+      if (stockSoloBajos) lista = lista.filter(bajoMinimo);
+      const esc = (v)=>{ const s = (v==null?"":String(v)); return '"'+s.replace(/"/g,'""')+'"'; };
+      const cab = ["Familia","Código","Descripción","Unidad","Cantidad","Mínimo","Costo unitario","Valorizado","Bajo mínimo"];
+      const filas = lista.map(i=>{
+        const cant=Number(i.cantidad)||0, costo=Number(i.costo)||0;
+        return [ i.familia||"", i.codigo||"", i.descripcion||"", i.unidad||"", cant, (Number(i.minimo)||0), costo, (cant*costo), (bajoMinimo(i)?"SÍ":"") ].map(esc).join(";");
+      });
+      const csv = "\uFEFF" + cab.map(esc).join(";") + "\r\n" + filas.join("\r\n"); // BOM para acentos en Excel
+      const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "stock_neuquen_"+hoyISO()+".csv";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(()=>URL.revokeObjectURL(url), 1000);
+      setEstado("✓ CSV de stock descargado ("+lista.length+" ítems).","ok");
+    }
     function renderStock(){
       const fams = familiasStock();
       let lista = stockItems.slice();
@@ -1470,6 +1497,8 @@
       let h = subnavStock("items");
       h += '<p style="font-size:13px;color:#888780;margin-top:0">Catálogo de materiales y consumibles. La <b>Familia</b> agrupa los ítems. Se marca en rojo lo que está en o por debajo del mínimo. Las entradas y salidas se cargan en la pestaña <b>Movimientos</b>.</p>';
 
+      h += '<div class="no-print" style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px">'+botonesExport("stock-print","stock")+'<button class="btn btn-sec" style="padding:6px 12px" onclick="exportarStockCSV()">📊 CSV / Excel</button></div>';
+      h += '<div id="stock-print">';
       // Barra de resumen + filtros
       h += '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px">';
       h += '<div style="background:#F1EFE8;border-radius:10px;padding:7px 12px;font-size:12px"><b>'+stockItems.length+'</b> ítems</div>';
@@ -1496,7 +1525,7 @@
           + '<td style="width:30px"><button class="btn-del" onclick="eliminarStk(\''+i.id+'\')">×</button></td>'
           + '</tr>';
       });
-      h += '</tbody></table><div class="row-actions"><button class="btn-add" onclick="agregarStk()">+ Agregar ítem</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
+      h += '</tbody></table></div><div class="row-actions no-print"><button class="btn-add" onclick="agregarStk()">+ Agregar ítem</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
       contenido.innerHTML = h;
     }
     async function agregarStk(){ const{error}=await sb.from("stock_items").insert({ sede:"neuquen", familia:stockFiltroFam||"", codigo:"", descripcion:"", unidad:"", cantidad:0, minimo:0 }); if(error)return setEstado("Error: "+error.message,"err"); registrarLog("crear","stock","Nuevo ítem de stock"); cargar(); }
@@ -2763,6 +2792,8 @@
       h += '<label style="font-size:12px;color:#888780;display:flex;align-items:center;gap:5px;margin-left:auto"><input type="checkbox" '+(detalleVerTodo?'checked':'')+' onchange="detalleVerTodo=this.checked;renderDetalleNqn()" style="width:auto">Ver todo el historial</label>';
       if (ocultas > 0 && !detalleVerTodo) h += '<span style="font-size:11.5px;color:#A8A69E;width:100%">'+ocultas+' registro(s) más antiguos ocultos.</span>';
       h += '</div>';
+      h += '<div class="no-print" style="display:flex;justify-content:flex-end;margin-bottom:10px">'+botonesExport("nqndet-print","detalle-neuquen")+'</div>';
+      h += '<div id="nqndet-print">';
       const conf = Object.entries(horasDia).filter(([,v])=>v>8);
       if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación:</b> '+conf.map(([k,v])=>{const [pid,f]=k.split("|");return nombrePersona(pid)+" ("+dm(f)+"): "+v+"h";}).join(" · ")+'</div>';
 
@@ -2796,7 +2827,8 @@
       });
       h += '</tbody></table>';
       h += '<p style="font-size:12px;color:#A8A69E;margin-top:10px">🔒 = día anterior a hoy (no editable). <b style="color:#BA7517">↪ sigue mañana</b> (en filas de hoy): crea una jornada para mañana sin tocar el plan de mantenimiento. Para cambios grandes, editá la tarea en Mantenimiento y regenerá.</p>';
-      h += '<div class="row-actions"><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
+      h += '</div>'; // cierra nqndet-print
+      h += '<div class="row-actions no-print"><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
       contenido.innerHTML = h;
     }
     // Editar una fila del detalle de Neuquén (horas normales/extra).
