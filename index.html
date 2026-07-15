@@ -646,6 +646,8 @@
          + tabBtn('cotizaciones','Cotizaciones',cotiz.length)
          + tabBtn('archivados','Archivados',arch.length)
          + '</div>';
+      h += '<div class="no-print" style="display:flex;justify-content:flex-end;margin-bottom:10px">'+botonesExport("proy-print","proyectos")+'</div>';
+      h += '<div id="proy-print">';
       const lista = proyVista==='cotizaciones' ? cotiz : proyVista==='archivados' ? arch : enOper;
       if(proyVista==='cotizaciones') h += '<div style="font-size:11.5px;color:#8A86A0;background:#FBFAFE;border:1px solid #E4E0F0;border-radius:9px;padding:9px 12px;margin-bottom:16px">Las <b>cotizaciones</b> se planifican y se les calcula costo como práctica, pero <b>no consumen disponibilidad</b> ni aparecen en dashboard, gantt, histograma, parte diario ni desvíos operativos. Son presupuestos teóricos.</div>';
       if(proyVista==='archivados') h += '<div style="font-size:11.5px;color:#6E6C66;background:#F7F6F2;border:1px solid #E6E4DC;border-radius:9px;padding:9px 12px;margin-bottom:16px">Los proyectos <b>archivados</b> están fuera de la operación pero siguen consultables. Al archivar se congela un <b>snapshot</b> (proyecto + planificación + detalle) que sobrevive incluso si algún día borrás los datos vivos. Se pueden <b>restaurar</b> con un clic.</div>';
@@ -699,7 +701,8 @@
       if(proyVista!=='archivados') h += '<button class="btn-add" onclick="agregarPr()">+ Agregar proyecto</button>';
       // Barra de guardado SIEMPRE visible en la solapa Proyectos.
       const sucio = hayCambiosPr();
-      h += '<div id="pr-savebar" style="display:flex;position:sticky;bottom:0;gap:10px;align-items:center;justify-content:flex-end;background:#FFFDF7;border:1px solid #F0E6CE;border-radius:12px;padding:12px 16px;margin-top:16px;box-shadow:0 -2px 12px rgba(0,0,0,0.06)">'
+      h += '</div>'; // cierra proy-print (la barra de guardado queda fuera del export)
+      h += '<div id="pr-savebar" class="no-print" style="display:flex;position:sticky;bottom:0;gap:10px;align-items:center;justify-content:flex-end;background:#FFFDF7;border:1px solid #F0E6CE;border-radius:12px;padding:12px 16px;margin-top:16px;box-shadow:0 -2px 12px rgba(0,0,0,0.06)">'
         + '<span id="pr-savebar-msg" style="font-size:12.5px;margin-right:auto;color:'+(sucio?'#BA7517':'#A8A69E')+'">'+(sucio?'Tenés cambios sin guardar.':'Editá un campo y después tocá «Guardar cambios».')+'</span>'
         + '<button class="btn btn-sec" onclick="descartarCambiosPr()">Descartar</button>'
         + '<button id="pr-savebtn" class="btn btn-primary" style="background:'+(sucio?'#185FA5':'#A8A69E')+';cursor:'+(sucio?'pointer':'not-allowed')+'" onclick="guardarCambiosPr()">Guardar cambios</button>'
