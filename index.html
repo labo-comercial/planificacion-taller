@@ -4486,9 +4486,11 @@
       // Costo improductivo (ausencias pagadas) — se muestra aparte porque no es un desvío vs plan,
       // pero es plata gastada sin producción que conviene vigilar.
       if(costoImproductivo>0){
-        h += '<div style="background:#FBF0F0;border:1px solid #E7C0C0;border-radius:9px;padding:10px 13px;font-size:12px;color:#7A2E2E;margin-top:10px;line-height:1.5">'
-          + '<b>Costo improductivo: '+fmtM(costoImproductivo)+'</b> — '+ausencias+' jornada'+(ausencias===1?'':'s')+' de ausencia que se pagaron igual (personal mensualizado) pero no produjeron. '
-          + 'No figura como desvío porque se pagó lo planificado, pero es plata sin contraprestación: el trabajo, si se hizo, lo cubrió otro (extra o contratista), pagándose dos veces.'
+        h += '<div style="background:#FBF0F0;border:1px solid #E7C0C0;border-radius:9px;padding:11px 14px;font-size:12px;color:#7A2E2E;margin-top:10px;line-height:1.55">'
+          + '<b>Costo improductivo: '+fmtM(costoImproductivo)+'</b> — '+ausencias+' jornada'+(ausencias===1?'':'s')+' de ausencia. El personal directo es mensualizado, así que se pagaron igual aunque no produjeran.<br><br>'
+          + '<b>¿Por qué no se suma al desvío de arriba?</b> Para no contar la pérdida dos veces. Si el trabajo se repuso (un compañero con horas extra, o un contratista), <b>ese costo de reposición ya está incluido en el desvío</b> de arriba. La ausencia en sí se pagó como estaba planificado, así que no agrega desvío nominal — pero el esfuerzo de reponerla sí aparece. '
+          + 'Si la ausencia <b>no</b> se repuso, no hay sobrecosto en el desvío, pero igual perdiste esta plata: se pagó sin recibir trabajo. '
+          + 'En resumen: mirá el <b>desvío</b> para el impacto de las reposiciones, y este <b>costo improductivo</b> para cuánto se pagó en ausencias.'
           + '</div>';
       }
       // narrativa explicada
