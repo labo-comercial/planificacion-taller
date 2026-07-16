@@ -523,7 +523,64 @@
     function trasladosActivos() { return traslados.filter(t => t.estado !== "revertido"); }
     function totalTrasladado() { return trasladosActivos().reduce((s, t) => s + (Number(t.monto) || 0), 0); }
     function disponibleCompras() { return (presupuestoCompras ? Number(presupuestoCompras.monto) || 0 : 0) - totalTrasladado(); }
+    let solpAbierto = null; // id del traslado cuya SOLP se está mostrando (null = ver la lista)
+    function verSolp(id) { solpAbierto = id; renderTraslados(); }
+    function cerrarSolp() { solpAbierto = null; renderTraslados(); }
+    // Texto plano de la SOLP, para copiar y pegar en WhatsApp/mail. La generación es manual
+    // (no hay envío automático): esto solo prepara el contenido para que alguien lo mande.
+    function textoSolp(t) {
+      const proy = proyectos.find(p => p.id === t.proyecto_id);
+      const est = ESTADO_TRASLADO[t.estado] || { label: t.estado };
+      return "*SOLICITUD DE PEDIDO (SOLP) — Traslado de mano de obra a Compras*\n\n"
+        + "Proyecto: " + (proy ? proy.nombre : "—") + "\n"
+        + "Contratista propuesto: " + nombrePersona(t.persona_contratista_id) + "\n"
+        + "Reemplaza a (directo): " + nombrePersona(t.persona_directo_id) + "\n"
+        + "Período: " + dmy(t.fecha_desde) + " a " + dmy(t.fecha_hasta) + "\n"
+        + "Jornales: " + Number(t.jornales).toFixed(1).replace(".", ",") + "\n"
+        + "Valor-hora congelado: " + fmtMTraslados(t.valor_hora) + "\n"
+        + "Monto total a trasladar: " + fmtMTraslados(t.monto) + "\n\n"
+        + "Estado: " + est.label + "\n"
+        + "Generado: " + dmy(t.creado_en) + (t.creado_por ? " · " + t.creado_por : "") + "\n\n"
+        + "— Documento generado desde Traslados de presupuesto a Compras. No reemplaza la aprobación de Compras.";
+    }
+    function copiarSolp() {
+      const t = document.getElementById("solpTexto"); if (!t) return;
+      t.select();
+      try { navigator.clipboard.writeText(t.value); setEstado("✓ Texto de la SOLP copiado. Pegalo en WhatsApp o mail.", "ok"); }
+      catch (e) { document.execCommand("copy"); setEstado("✓ Texto de la SOLP copiado.", "ok"); }
+    }
+    function renderSolp() {
+      const t = traslados.find(x => x.id === solpAbierto);
+      if (!t) { solpAbierto = null; return renderTraslados(); }
+      const proy = proyectos.find(p => p.id === t.proyecto_id);
+      const est = ESTADO_TRASLADO[t.estado] || { label: t.estado, color: '#888780', bg: '#F1EFE8' };
+      const fila = (l, v) => '<tr><td style="padding:6px 10px;color:#888780;font-size:12px">' + l + '</td><td style="padding:6px 10px;font-size:13px;font-weight:600">' + v + '</td></tr>';
+      let h = '<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+        + '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#2C2C2A;padding:6px 12px" onclick="cerrarSolp()">← Volver a Traslados</button>'
+        + '<div style="display:flex;gap:8px"><button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#2C2C2A;padding:6px 12px" onclick="exportarPDF()">📄 PDF</button>'
+        + '<button class="btn" style="background:#185FA5;color:#fff;padding:6px 12px" onclick="copiarSolp()">📋 Copiar texto</button></div>'
+        + '</div>';
+      h += '<div id="solp-print" style="max-width:520px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:20px 24px">'
+        + '<div style="font-size:15px;font-weight:600;margin-bottom:2px">Solicitud de Pedido (SOLP)</div>'
+        + '<div style="font-size:12px;color:#888780;margin-bottom:14px">Traslado de mano de obra a Compras</div>'
+        + '<table style="width:100%;border-collapse:collapse">'
+        + fila('Proyecto', proy ? proy.nombre : '—')
+        + fila('Contratista propuesto', nombrePersona(t.persona_contratista_id))
+        + fila('Reemplaza a (directo)', nombrePersona(t.persona_directo_id))
+        + fila('Período', dmy(t.fecha_desde) + ' a ' + dmy(t.fecha_hasta))
+        + fila('Jornales', Number(t.jornales).toFixed(1).replace('.', ','))
+        + fila('Valor-hora congelado', fmtMTraslados(t.valor_hora))
+        + fila('Monto total', fmtMTraslados(t.monto))
+        + fila('Estado', '<span style="background:' + est.bg + ';color:' + est.color + ';border-radius:8px;padding:3px 9px;font-size:11px">' + est.label + '</span>')
+        + fila('Generado', dmy(t.creado_en) + (t.creado_por ? ' · ' + t.creado_por : ''))
+        + '</table>'
+        + '<p style="font-size:11px;color:#A8A69E;margin-top:16px;margin-bottom:0">Documento generado desde Traslados de presupuesto a Compras. No reemplaza la aprobación de Compras. No se envía automáticamente.</p>'
+        + '</div>';
+      h += '<textarea id="solpTexto" readonly class="no-print" style="width:100%;max-width:520px;height:170px;margin-top:14px;font-size:12px;font-family:inherit">' + textoSolp(t) + '</textarea>';
+      contenido.innerHTML = h;
+    }
     function renderTraslados() {
+      if (solpAbierto) return renderSolp();
       const card = (l, v, s, col) => '<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 18px"><div style="font-size:12px;color:#888780">' + l + '</div><div style="font-size:22px;font-weight:600;color:' + (col || '#2C2C2A') + ';margin-top:2px">' + v + '</div>' + (s ? '<div style="font-size:11.5px;color:#A8A69E;margin-top:2px">' + s + '</div>' : '') + '</div>';
       let h = '<p style="font-size:13px;color:#888780;margin-top:0">Cuando en Planificación se saca un directo y se agrega un contratista en el mismo bloque, se traslada presupuesto de mano de obra a Compras. No toca línea base ni costo real.</p>';
       if (!presupuestoCompras) {
@@ -547,13 +604,13 @@
       traslados.forEach(t => {
         const est = ESTADO_TRASLADO[t.estado] || { label: t.estado, color: '#888780', bg: '#F1EFE8' };
         const proy = proyectos.find(p => p.id === t.proyecto_id);
-        let acciones = '';
+        let acciones = '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#2C2C2A;padding:3px 9px;font-size:11px;margin-right:4px" onclick="verSolp(\'' + t.id + '\')">Ver SOLP</button>';
         if (t.estado !== 'revertido') {
           const sig = ORDEN_ESTADO_TRASLADO[ORDEN_ESTADO_TRASLADO.indexOf(t.estado) + 1];
           if (sig) acciones += '<button class="btn" style="background:#fff;border:1px solid #185FA5;color:#185FA5;padding:3px 9px;font-size:11px;margin-right:4px" onclick="avanzarEstadoTraslado(\'' + t.id + '\',\'' + sig + '\')">Marcar ' + ESTADO_TRASLADO[sig].label.toLowerCase() + '</button>';
           acciones += '<button class="btn" style="background:#fff;border:1px solid #A32D2D;color:#A32D2D;padding:3px 9px;font-size:11px" onclick="revertirTraslado(\'' + t.id + '\')">Revertir</button>';
         } else {
-          acciones = '<span style="font-size:11px;color:#A8A69E">' + (t.revertido_en ? 'el ' + dmy(t.revertido_en) : '') + '</span>';
+          acciones += '<span style="font-size:11px;color:#A8A69E">' + (t.revertido_en ? 'revertido el ' + dmy(t.revertido_en) : '') + '</span>';
         }
         h += '<tr style="border-bottom:1px solid #F4F2EC">'
           + '<td style="padding:8px 10px">' + dmy(t.creado_en) + '</td>'
