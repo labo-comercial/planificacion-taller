@@ -174,6 +174,7 @@
           { id:"parte", label:"Parte diario", c:"#D9F0E6" },
           { id:"informe", label:"Informe de cierre", c:"#F7ECDA" },
           { id:"costos", label:"Tablero", c:"#EDE9F6" },
+          { id:"traslados", label:"Traslados", c:"#F5E9F7" },
           { id:"hue_actividad", label:"Actividad", c:"#EDEBE4", esAdmin:true }
         ]
       },
@@ -204,7 +205,7 @@
       const verPers = (typeof puedeVerSueldos === "function") ? puedeVerSueldos() : true;
       const admin = (typeof esAdmin === "function") ? esAdmin() : false;
       if (bar) bar.innerHTML = conf.tabs.map(t => {
-        const oculta = (t.id === "personal" && !verPers) || (t.esAdmin && !admin);
+        const oculta = ((t.id === "personal" || t.id === "traslados") && !verPers) || (t.esAdmin && !admin);
         return '<button class="tab'+(t.id===tab?' active':'')+'" id="tab-'+t.id+'" onclick="cambiarTab(\''+t.id+'\')" style="--c:'+t.c+(oculta?';display:none':'')+'">'+t.label+'</button>';
       }).join("");
       const tit = document.getElementById("appTitulo"); if (tit) tit.textContent = conf.titulo;
@@ -224,6 +225,7 @@
       cargar();
     }
     let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, planiHoras = {}, detalle = [], feriados = [], supervisiones = [];
+    let presupuestoCompras = null, traslados = []; // Traslados de presupuesto a Compras + SOLP
     let lineasBase = {}; // proyecto_id -> fila de linea_base (con .contenido, .fijada_at, .fijada_por)
     // Identificador de "tarea padre" de una fila de detalle: proyecto (La Huella) o trailer (Neuquén).
     // Usado por las funciones compartidas (correr días, solapamiento) para agrupar sin importar la sede.
@@ -450,6 +452,13 @@
         personas = (data||[]).sort((a,b)=>{if(a.tipo!==b.tipo)return a.tipo==="Directo"?-1:1;return (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999);});
         await cargarHistoriales();
         setEstado("\u2713 " + personas.length + " persona(s).", "ok"); renderPersonal();
+      } else if (tab === "traslados") {
+        if (!puedeVerSueldos()) { contenido.innerHTML = '<p style="font-size:13px;color:#A8A69E">No ten\u00e9s permiso para ver esta secci\u00f3n.</p>'; setEstado("Acceso restringido.", "cargando"); return; }
+        if (!personas.length) { const { data } = await sb.from("personal").select("*"); personas = data || []; }
+        if (!proyectos.length) { const { data } = await sb.from("proyectos").select("*"); proyectos = data || []; }
+        { const { data, error } = await sb.from("presupuesto_compras").select("*").order("actualizado_en", { ascending: false }).limit(1); if (error) return errLoad(error); presupuestoCompras = (data && data[0]) || null; }
+        { const { data, error } = await sb.from("traslados_compras").select("*").order("creado_en", { ascending: false }); if (error) return errLoad(error); traslados = data || []; }
+        setEstado("\u2713 " + traslados.length + " traslado(s).", "ok"); renderTraslados();
       } else if (tab === "proyectos") {
         const { data, error } = await sb.from("proyectos").select("*"); if (error) return errLoad(error);
         proyectos = data || []; setEstado("\u2713 " + proyectos.length + " proyecto(s).", "ok"); renderProyectos();
@@ -499,6 +508,58 @@
         else if (tab === "informe") renderInforme();
         else if (tab === "costos") renderTablero();
       }
+    }
+
+    /* ---- TRASLADOS DE PRESUPUESTO A COMPRAS ---- */
+    // Fase 2: solo lectura. El disponible = presupuesto base − suma de traslados activos
+    // (todo estado salvo "revertido"). No toca línea base ni costo real.
+    const ESTADO_TRASLADO = {
+      pendiente_aviso: { label: "Pendiente de avisar", color: "#A32D2D", bg: "#FBEAF0" },
+      avisado:         { label: "Avisado",             color: "#BA7517", bg: "#FCF3E3" },
+      contratado:      { label: "Contratado",          color: "#3B6D11", bg: "#E8F3DE" },
+      revertido:       { label: "Revertido",           color: "#888780", bg: "#F1EFE8" }
+    };
+    function fmtMTraslados(n) { return "$" + Math.round(Number(n) || 0).toLocaleString("es-AR"); }
+    function trasladosActivos() { return traslados.filter(t => t.estado !== "revertido"); }
+    function totalTrasladado() { return trasladosActivos().reduce((s, t) => s + (Number(t.monto) || 0), 0); }
+    function disponibleCompras() { return (presupuestoCompras ? Number(presupuestoCompras.monto) || 0 : 0) - totalTrasladado(); }
+    function renderTraslados() {
+      const card = (l, v, s, col) => '<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 18px"><div style="font-size:12px;color:#888780">' + l + '</div><div style="font-size:22px;font-weight:600;color:' + (col || '#2C2C2A') + ';margin-top:2px">' + v + '</div>' + (s ? '<div style="font-size:11.5px;color:#A8A69E;margin-top:2px">' + s + '</div>' : '') + '</div>';
+      let h = '<p style="font-size:13px;color:#888780;margin-top:0">Cuando en Planificación se saca un directo y se agrega un contratista en el mismo bloque, se traslada presupuesto de mano de obra a Compras. No toca línea base ni costo real.</p>';
+      if (!presupuestoCompras) {
+        h += '<div class="estado err" style="margin-bottom:12px">No hay un presupuesto de Compras cargado todavía (tabla <code>presupuesto_compras</code> vacía).</div>';
+      }
+      const base = presupuestoCompras ? Number(presupuestoCompras.monto) || 0 : 0;
+      const trasladado = totalTrasladado();
+      const disponible = disponibleCompras();
+      h += '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:20px">'
+        + card("Presupuesto de Compras", fmtMTraslados(base), presupuestoCompras ? "actualizado " + dmy(presupuestoCompras.actualizado_en) : null)
+        + card("Trasladado", fmtMTraslados(trasladado), trasladosActivos().length + " traslado(s) activo(s)", trasladado > 0 ? '#BA7517' : null)
+        + card("Disponible", fmtMTraslados(disponible), "presupuesto − trasladado", disponible < 0 ? '#A32D2D' : '#3B6D11')
+        + '</div>';
+      if (!traslados.length) {
+        h += '<p style="font-size:13px;color:#A8A69E">Todavía no hay traslados registrados.</p>';
+        contenido.innerHTML = h; return;
+      }
+      h += '<table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr>'
+        + ['Fecha', 'Proyecto', 'Directo', 'Contratista', 'Jornales', 'Valor-hora', 'Monto', 'Estado'].map((c, i) => '<th style="text-align:' + (i >= 4 ? 'right' : 'left') + ';padding:8px 10px;border-bottom:1px solid #EEECE4;font-size:10.5px;color:#A8A69E;text-transform:uppercase;font-weight:600">' + c + '</th>').join('')
+        + '</tr></thead><tbody>';
+      traslados.forEach(t => {
+        const est = ESTADO_TRASLADO[t.estado] || { label: t.estado, color: '#888780', bg: '#F1EFE8' };
+        const proy = proyectos.find(p => p.id === t.proyecto_id);
+        h += '<tr style="border-bottom:1px solid #F4F2EC">'
+          + '<td style="padding:8px 10px">' + dmy(t.creado_en) + '</td>'
+          + '<td style="padding:8px 10px">' + (proy ? proy.nombre : '—') + '</td>'
+          + '<td style="padding:8px 10px">' + nombrePersona(t.persona_directo_id) + '</td>'
+          + '<td style="padding:8px 10px">' + nombrePersona(t.persona_contratista_id) + '</td>'
+          + '<td style="text-align:right;padding:8px 10px;font-variant-numeric:tabular-nums">' + Number(t.jornales).toFixed(1).replace('.', ',') + '</td>'
+          + '<td style="text-align:right;padding:8px 10px;font-variant-numeric:tabular-nums">' + fmtMTraslados(t.valor_hora) + '</td>'
+          + '<td style="text-align:right;padding:8px 10px;font-variant-numeric:tabular-nums;font-weight:600">' + fmtMTraslados(t.monto) + '</td>'
+          + '<td style="text-align:right;padding:8px 10px"><span style="background:' + est.bg + ';color:' + est.color + ';border-radius:8px;padding:3px 9px;font-weight:600;font-size:11px">' + est.label + '</span></td>'
+          + '</tr>';
+      });
+      h += '</tbody></table>';
+      contenido.innerHTML = h;
     }
 
     /* ---- PERSONAL ---- */
