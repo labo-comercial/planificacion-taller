@@ -542,11 +542,19 @@
         contenido.innerHTML = h; return;
       }
       h += '<table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr>'
-        + ['Fecha', 'Proyecto', 'Directo', 'Contratista', 'Jornales', 'Valor-hora', 'Monto', 'Estado'].map((c, i) => '<th style="text-align:' + (i >= 4 ? 'right' : 'left') + ';padding:8px 10px;border-bottom:1px solid #EEECE4;font-size:10.5px;color:#A8A69E;text-transform:uppercase;font-weight:600">' + c + '</th>').join('')
+        + ['Fecha', 'Proyecto', 'Directo', 'Contratista', 'Jornales', 'Valor-hora', 'Monto', 'Estado', ''].map((c, i) => '<th style="text-align:' + (i >= 4 && i <= 6 ? 'right' : 'left') + ';padding:8px 10px;border-bottom:1px solid #EEECE4;font-size:10.5px;color:#A8A69E;text-transform:uppercase;font-weight:600">' + c + '</th>').join('')
         + '</tr></thead><tbody>';
       traslados.forEach(t => {
         const est = ESTADO_TRASLADO[t.estado] || { label: t.estado, color: '#888780', bg: '#F1EFE8' };
         const proy = proyectos.find(p => p.id === t.proyecto_id);
+        let acciones = '';
+        if (t.estado !== 'revertido') {
+          const sig = ORDEN_ESTADO_TRASLADO[ORDEN_ESTADO_TRASLADO.indexOf(t.estado) + 1];
+          if (sig) acciones += '<button class="btn" style="background:#fff;border:1px solid #185FA5;color:#185FA5;padding:3px 9px;font-size:11px;margin-right:4px" onclick="avanzarEstadoTraslado(\'' + t.id + '\',\'' + sig + '\')">Marcar ' + ESTADO_TRASLADO[sig].label.toLowerCase() + '</button>';
+          acciones += '<button class="btn" style="background:#fff;border:1px solid #A32D2D;color:#A32D2D;padding:3px 9px;font-size:11px" onclick="revertirTraslado(\'' + t.id + '\')">Revertir</button>';
+        } else {
+          acciones = '<span style="font-size:11px;color:#A8A69E">' + (t.revertido_en ? 'el ' + dmy(t.revertido_en) : '') + '</span>';
+        }
         h += '<tr style="border-bottom:1px solid #F4F2EC">'
           + '<td style="padding:8px 10px">' + dmy(t.creado_en) + '</td>'
           + '<td style="padding:8px 10px">' + (proy ? proy.nombre : '—') + '</td>'
@@ -556,10 +564,34 @@
           + '<td style="text-align:right;padding:8px 10px;font-variant-numeric:tabular-nums">' + fmtMTraslados(t.valor_hora) + '</td>'
           + '<td style="text-align:right;padding:8px 10px;font-variant-numeric:tabular-nums;font-weight:600">' + fmtMTraslados(t.monto) + '</td>'
           + '<td style="text-align:right;padding:8px 10px"><span style="background:' + est.bg + ';color:' + est.color + ';border-radius:8px;padding:3px 9px;font-weight:600;font-size:11px">' + est.label + '</span></td>'
+          + '<td style="padding:8px 10px;white-space:nowrap">' + acciones + '</td>'
           + '</tr>';
       });
       h += '</tbody></table>';
       contenido.innerHTML = h;
+    }
+    // Progresión manual de estados (sin permisos por rol todavía: cualquiera que vea la
+    // pestaña puede operarla, igual que hoy con Personal y tarifas).
+    const ORDEN_ESTADO_TRASLADO = ["pendiente_aviso", "avisado", "contratado"];
+    async function avanzarEstadoTraslado(id, nuevoEstado) {
+      const { error } = await sb.from("traslados_compras").update({ estado: nuevoEstado }).eq("id", id);
+      if (error) return setEstado("Error: " + error.message, "err");
+      const t = traslados.find(x => x.id === id); if (t) t.estado = nuevoEstado;
+      setEstado("✓ Traslado marcado como " + ESTADO_TRASLADO[nuevoEstado].label.toLowerCase() + ".", "ok");
+      renderTraslados();
+    }
+    // Revertir: la plata vuelve porque disponibleCompras() suma solo los traslados
+    // con estado <> "revertido". No toca línea base ni costo real, ni deshace el
+    // swap de personal en Planificación (eso se hace aparte).
+    async function revertirTraslado(id) {
+      const t = traslados.find(x => x.id === id); if (!t) return;
+      if (!confirm("¿Revertir este traslado de " + fmtMTraslados(t.monto) + " (" + nombrePersona(t.persona_directo_id) + " → " + nombrePersona(t.persona_contratista_id) + ")?\n\nLa plata vuelve a estar disponible en el presupuesto de Compras. No se puede deshacer esta reversión.")) return;
+      const ahora = new Date().toISOString();
+      const { error } = await sb.from("traslados_compras").update({ estado: "revertido", revertido_en: ahora, revertido_por: miEmail }).eq("id", id);
+      if (error) return setEstado("Error: " + error.message, "err");
+      t.estado = "revertido"; t.revertido_en = ahora; t.revertido_por = miEmail;
+      setEstado("✓ Traslado revertido. Presupuesto liberado.", "ok");
+      renderTraslados();
     }
 
     /* ---- PERSONAL ---- */
