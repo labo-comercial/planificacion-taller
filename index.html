@@ -2109,7 +2109,123 @@
         + 'style="color:'+color+';text-decoration:underline;text-decoration-style:dotted;cursor:pointer" '
         + 'title="Ir a Planificación General y resaltar este conflicto">'+o.txt+'</a>';
     }
+    // ---- Correr planificación en bloque (fase 1: cálculo + vista previa, todavía no guarda nada) ----
+    let correrAbierto = false;
+    let correrModo = "proyecto";   // "proyecto" = todo el proyecto desde hoy | "estacion" = desde una estación puntual, con cascada
+    let correrProyectosSel = [];   // ids de proyecto (modo "proyecto", multi-selección)
+    let correrProyectoUno = "";    // id de proyecto (modo "estacion", uno solo)
+    let correrBloqueAncla = "";    // id de bloque ancla (modo "estacion")
+    let correrDias = 5;            // días hábiles a correr (positivo = atrasa, negativo = adelanta)
+    let correrPreview = null;      // resultado de calcularCorrida(), o null si no se generó vista previa
+    function abrirCorrer() { correrAbierto = true; correrPreview = null; renderPlani(); }
+    function cerrarCorrer() { correrAbierto = false; renderPlani(); }
+    function toggleCorrerProy(id) {
+      if (correrProyectosSel.includes(id)) correrProyectosSel = correrProyectosSel.filter(x => x !== id);
+      else correrProyectosSel.push(id);
+      correrPreview = null; renderPlani();
+    }
+    // Cómo se corre UN bloque dado un "corte" (fecha) y N días hábiles:
+    // - ya terminó antes del corte -> no se toca (pasado congelado).
+    // - no había arrancado al corte -> se corre completo (inicio y fin).
+    // - estaba en curso en el corte -> solo se estira el fin (el inicio ya pasó, queda congelado).
+    function corrimientoDeBloque(b, corte, dias) {
+      if (!b.fecha_desde || !b.fecha_hasta) return null;
+      if (b.fecha_hasta < corte) return null;
+      const noArrancoAlCorte = b.fecha_desde >= corte;
+      const nuevaDesde = noArrancoAlCorte ? sumarDiasHabiles(b.fecha_desde, dias) : b.fecha_desde;
+      const nuevaHasta = sumarDiasHabiles(b.fecha_hasta, dias);
+      if (nuevaDesde === b.fecha_desde && nuevaHasta === b.fecha_hasta) return null;
+      return { fecha_desde_actual: b.fecha_desde, fecha_hasta_actual: b.fecha_hasta, fecha_desde_nueva: nuevaDesde, fecha_hasta_nueva: nuevaHasta };
+    }
+    // Modo "proyecto": corte = hoy, aplicado a cada proyecto elegido.
+    // Modo "estacion": la ancla usa "hoy" para decidir si se corre completa o solo se estira;
+    // el resto del proyecto usa el FIN ORIGINAL de la ancla como corte de cascada (solo empuja
+    // lo que todavía no había arrancado cuando la ancla terminaba; no toca lo que ya estaba en curso en paralelo).
+    function calcularCorrida() {
+      const dias = Number(correrDias) || 0;
+      if (!dias) return [];
+      const resultado = [];
+      if (correrModo === "proyecto") {
+        const corte = hoyISO();
+        correrProyectosSel.forEach(proyId => {
+          plani.filter(b => b.proyecto_id === proyId).forEach(b => {
+            const r = corrimientoDeBloque(b, corte, dias);
+            if (r) resultado.push(Object.assign({ bloque: b }, r));
+          });
+        });
+      } else {
+        const ancla = plani.find(b => b.id === correrBloqueAncla);
+        if (!ancla || !ancla.fecha_hasta) return [];
+        const rAncla = corrimientoDeBloque(ancla, hoyISO(), dias);
+        if (rAncla) resultado.push(Object.assign({ bloque: ancla }, rAncla));
+        const corteCascada = ancla.fecha_hasta; // fin ORIGINAL de la ancla, antes de correrla
+        plani.filter(b => b.proyecto_id === ancla.proyecto_id && b.id !== ancla.id).forEach(b => {
+          if (!b.fecha_desde || b.fecha_desde < corteCascada) return; // solo cascada a lo que no había arrancado al corte
+          const r = corrimientoDeBloque(b, corteCascada, dias);
+          if (r) resultado.push(Object.assign({ bloque: b }, r));
+        });
+      }
+      return resultado;
+    }
+    function renderCorrerPanel() {
+      let h = '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:12px">'
+        + '<div><div style="font-size:15px;font-weight:600">Correr planificación en bloque</div><div style="font-size:12px;color:#888780;margin-top:2px">Corre fechas futuras en cascada, dentro de un proyecto. No toca lo ya ejecutado ni la línea base. Por ahora es solo vista previa: no guarda nada todavía.</div></div>'
+        + '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#2C2C2A;padding:6px 12px;white-space:nowrap" onclick="cerrarCorrer()">← Volver a Planificación</button>'
+        + '</div>';
+      h += '<div style="background:#FAFAF8;border:1px solid #EEECE4;border-radius:12px;padding:14px 16px;margin-bottom:16px">';
+      h += '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:12px">'
+        + '<label style="font-size:12.5px;display:flex;align-items:center;gap:6px"><input type="radio" name="correrModo" '+(correrModo==='proyecto'?'checked':'')+' onchange="correrModo=\'proyecto\';correrPreview=null;renderPlani()" style="width:auto">Todo el proyecto, desde hoy</label>'
+        + '<label style="font-size:12.5px;display:flex;align-items:center;gap:6px"><input type="radio" name="correrModo" '+(correrModo==='estacion'?'checked':'')+' onchange="correrModo=\'estacion\';correrPreview=null;renderPlani()" style="width:auto">Desde una estación puntual (con cascada)</label>'
+        + '</div>';
+      if (correrModo === 'proyecto') {
+        const proyEnPlanC = [...new Set(plani.map(b => b.proyecto_id).filter(Boolean))];
+        h += '<div style="font-size:12px;color:#888780;margin-bottom:6px">Proyecto(s) a correr:</div>';
+        h += '<div class="chips" style="margin-bottom:12px">' + proyectos.filter(p => proyEnPlanC.includes(p.id)).map(p => {
+          const on = correrProyectosSel.includes(p.id);
+          return '<button class="chip' + (on ? ' on' : '') + '" onclick="toggleCorrerProy(\'' + p.id + '\')">' + p.nombre + '</button>';
+        }).join('') + '</div>';
+      } else {
+        h += '<div style="font-size:12px;color:#888780;margin-bottom:6px">Proyecto:</div>';
+        h += '<select onchange="correrProyectoUno=this.value;correrBloqueAncla=\'\';correrPreview=null;renderPlani()" style="width:auto;margin-bottom:10px"><option value="">Elegí un proyecto…</option>' + proyectos.filter(p => plani.some(b => b.proyecto_id === p.id)).map(p => '<option value="' + p.id + '" ' + (p.id === correrProyectoUno ? 'selected' : '') + '>' + p.nombre + '</option>').join('') + '</select>';
+        if (correrProyectoUno) {
+          const bloquesProy = plani.filter(b => b.proyecto_id === correrProyectoUno && b.fecha_desde && b.fecha_hasta).sort((a, b) => (a.fecha_desde < b.fecha_desde ? -1 : 1));
+          h += '<div style="font-size:12px;color:#888780;margin-bottom:6px">Estación desde la que se corre:</div>';
+          h += '<select onchange="correrBloqueAncla=this.value;correrPreview=null;renderPlani()" style="width:auto;margin-bottom:12px"><option value="">Elegí una estación…</option>' + bloquesProy.map(b => { const st = STATIONS[b.estacion]; return '<option value="' + b.id + '" ' + (b.id === correrBloqueAncla ? 'selected' : '') + '>' + (st ? st.label : b.estacion) + ' (' + dm(b.fecha_desde) + '–' + dm(b.fecha_hasta) + ')</option>'; }).join('') + '</select>';
+        }
+      }
+      h += '<div style="display:flex;gap:10px;align-items:center">'
+        + '<label style="font-size:12px;color:#888780">Días hábiles a correr:</label>'
+        + '<input type="number" value="' + correrDias + '" onchange="correrDias=Number(this.value);correrPreview=null;renderPlani()" style="width:70px">'
+        + '<span style="font-size:11px;color:#A8A69E">(positivo = atrasa, negativo = adelanta)</span>'
+        + '</div>';
+      h += '</div>';
+      const listo = correrDias && (correrModo === 'proyecto' ? correrProyectosSel.length > 0 : !!correrBloqueAncla);
+      h += '<button class="btn btn-primary" ' + (listo ? '' : 'disabled') + ' onclick="correrPreview=calcularCorrida();renderPlani()">Ver vista previa</button>';
+      if (correrPreview) {
+        if (!correrPreview.length) {
+          h += '<p style="font-size:13px;color:#A8A69E;margin-top:16px">No hay bloques futuros para correr con estos parámetros.</p>';
+        } else {
+          h += '<table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-top:16px"><thead><tr>'
+            + ['Proyecto', 'Estación', 'Fechas actuales', 'Fechas nuevas'].map(c => '<th style="text-align:left;padding:8px 10px;border-bottom:1px solid #EEECE4;font-size:10.5px;color:#A8A69E;text-transform:uppercase;font-weight:600">' + c + '</th>').join('')
+            + '</tr></thead><tbody>';
+          correrPreview.forEach(r => {
+            const st = STATIONS[r.bloque.estacion];
+            const pr = proyectos.find(p => p.id === r.bloque.proyecto_id);
+            h += '<tr style="border-bottom:1px solid #F4F2EC">'
+              + '<td style="padding:8px 10px">' + (pr ? pr.nombre : '—') + '</td>'
+              + '<td style="padding:8px 10px">' + (st ? st.label : r.bloque.estacion) + '</td>'
+              + '<td style="padding:8px 10px;color:#A8A69E">' + dm(r.fecha_desde_actual) + ' – ' + dm(r.fecha_hasta_actual) + '</td>'
+              + '<td style="padding:8px 10px;font-weight:600">' + dm(r.fecha_desde_nueva) + ' – ' + dm(r.fecha_hasta_nueva) + '</td>'
+              + '</tr>';
+          });
+          h += '</tbody></table>';
+          h += '<p style="font-size:11.5px;color:#A8A69E;margin-top:10px">Vista previa. Todavía no se guarda nada — la aplicación real es la próxima fase.</p>';
+        }
+      }
+      contenido.innerHTML = h;
+    }
     function renderPlani() {
+      if (correrAbierto) return renderCorrerPanel();
       let h = '<p style="font-size:13px;color:#888780;margin-top:0">Agregá estaciones, asignalas a un proyecto, elegí tarea, fechas y gente. Para generar el detalle, cada día todo el personal directo disponible debe estar asignado a su jornada.</p>';
       if (!proyectos.length) h += '<div class="estado err">No hay proyectos. Creá al menos uno en la pestaña Proyectos antes de planificar.</div>';
       const val = validarCobertura();
@@ -2160,7 +2276,9 @@
       h += '<label style="font-size:12px;color:#888780;display:flex;align-items:center;gap:5px;margin-left:auto"><input type="checkbox" '+(planiVerTodo?'checked':'')+' onchange="planiVerTodo=this.checked;renderPlani()" style="width:auto">Ver todo</label>';
       if (planiOcultas > 0 && !planiVerTodo) h += '<span style="font-size:11.5px;color:#A8A69E;width:100%">'+planiOcultas+' estación(es) fuera del filtro (fecha o proyecto). Cambiá los filtros o tildá "Ver todo" para consultarlas.</span>';
       h += '</div>';
-      h += '<div class="no-print" style="display:flex;justify-content:flex-end;margin-bottom:10px">'+botonesExport("plani-print","planificacion")+'</div>';
+      h += '<div class="no-print" style="display:flex;justify-content:space-between;margin-bottom:10px">'
+        + '<button class="btn btn-sec btn-sm" onclick="abrirCorrer()">⏩ Correr en bloque…</button>'
+        + botonesExport("plani-print","planificacion") + '</div>';
       h += '<div id="plani-print">';
 
       // ---- Controles de expandir/colapsar todo (no en vista grilla) ----
