@@ -2219,10 +2219,36 @@
               + '</tr>';
           });
           h += '</tbody></table>';
-          h += '<p style="font-size:11.5px;color:#A8A69E;margin-top:10px">Vista previa. Todavía no se guarda nada — la aplicación real es la próxima fase.</p>';
+          h += '<button class="btn btn-ok" style="margin-top:14px" onclick="aplicarCorrida()">Confirmar y aplicar a ' + correrPreview.length + ' estación(es)</button>';
+          h += '<p style="font-size:11.5px;color:#A8A69E;margin-top:8px">Escribe las fechas nuevas directo en Planificación. No hay un botón de "deshacer" automático para esta acción — revisá bien la vista previa antes de confirmar.</p>';
         }
       }
       contenido.innerHTML = h;
+    }
+    // Aplica de verdad lo que muestra la vista previa: un update por bloque, en orden,
+    // deteniéndose ante el primer error para no dejar el corrimiento a mitad de camino
+    // sin que quede claro qué se aplicó y qué no.
+    async function aplicarCorrida() {
+      if (!correrPreview || !correrPreview.length) return;
+      const n = correrPreview.length;
+      const dias = Number(correrDias) || 0;
+      if (!confirm("¿Aplicar este corrimiento a " + n + " estación(es)? (" + dias + " día(s) hábil(es))\n\nEsto escribe las fechas nuevas directo en Planificación. No hay un botón de \"deshacer\" automático para esta acción — revisá bien la vista previa antes de confirmar.\n\n¿Confirmás?")) return;
+      setEstado("Aplicando corrimiento…", "cargando");
+      let ok = 0;
+      for (const r of correrPreview) {
+        const { error } = await sb.from("planificacion").update({ fecha_desde: r.fecha_desde_nueva, fecha_hasta: r.fecha_hasta_nueva }).eq("id", r.bloque.id);
+        if (error) {
+          setEstado("Se aplicaron " + ok + " de " + n + ". Error en \"" + (STATIONS[r.bloque.estacion] ? STATIONS[r.bloque.estacion].label : r.bloque.estacion) + "\": " + error.message, "err");
+          renderPlani();
+          return;
+        }
+        r.bloque.fecha_desde = r.fecha_desde_nueva; r.bloque.fecha_hasta = r.fecha_hasta_nueva;
+        ok++;
+      }
+      registrarLog("correr_bloque", "planificacion", n + " estación(es), " + dias + " día(s) hábil(es), modo " + correrModo);
+      setEstado("✓ Corrimiento aplicado a " + n + " estación(es).", "ok");
+      correrAbierto = false; correrPreview = null;
+      renderPlani();
     }
     function renderPlani() {
       if (correrAbierto) return renderCorrerPanel();
