@@ -585,7 +585,7 @@
     // swap de personal en Planificación (eso se hace aparte).
     async function revertirTraslado(id) {
       const t = traslados.find(x => x.id === id); if (!t) return;
-      if (!confirm("¿Revertir este traslado de " + fmtMTraslados(t.monto) + " (" + nombrePersona(t.persona_directo_id) + " → " + nombrePersona(t.persona_contratista_id) + ")?\n\nLa plata vuelve a estar disponible en el presupuesto de Compras. No se puede deshacer esta reversión.")) return;
+      if (!confirm("¿Revertir este traslado de " + fmtMTraslados(t.monto) + " (" + nombrePersona(t.persona_directo_id) + " → " + nombrePersona(t.persona_contratista_id) + ")?\n\nEsto solo deshace el registro contable: el monto deja de contarse como trasladado a Compras y vuelve a estar disponible. No toca lo que haya en Planificación — si el directo tiene que volver a esa estación (o el reemplazo es otro), esa parte se resuelve aparte. No se puede deshacer esta reversión.")) return;
       const ahora = new Date().toISOString();
       const { error } = await sb.from("traslados_compras").update({ estado: "revertido", revertido_en: ahora, revertido_por: miEmail }).eq("id", id);
       if (error) return setEstado("Error: " + error.message, "err");
