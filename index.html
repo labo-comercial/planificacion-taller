@@ -4674,13 +4674,63 @@
       h += '</div>'; // costos-print
       contenido.innerHTML = h;
     }
+    // ---- Disparador: traslado de presupuesto a Compras (fase 3) ----
+    // No hay forma de detectar el swap de forma at\u00f3mica: son dos clicks separados
+    // (sacar el directo, agregar el contratista), en cualquier orden. Se guarda en
+    // memoria (no persiste, se pierde al recargar) cu\u00e1l fue la \u00faltima baja de directo
+    // y la \u00faltima alta de contratista por bloque, y se dispara apenas se completan
+    // las dos puntas dentro de la ventana de tiempo. Es solo un gatillo de UI: si no
+    // llega a dispararse, no rompe nada, el traslado se puede evaluar m\u00e1s adelante.
+    let ultimoDirectoSacado = {};       // bloqueId -> { personaId, horas, ts }
+    let ultimoContratistaAgregado = {}; // bloqueId -> { personaId, ts }
+    const TRASLADO_TRIGGER_TTL_MS = 5 * 60 * 1000; // 5 minutos: m\u00e1s viejo que eso, se ignora
+
     async function toggleGente(planiId, personaId, estaba) {
+      const persona = personas.find(x => x.id === personaId);
+      const horasPrevias = (planiHoras[planiId] && planiHoras[planiId][personaId] != null) ? planiHoras[planiId][personaId] : 8;
       if (estaba) { const { error } = await sb.from("planificacion_personal").delete().eq("planificacion_id", planiId).eq("persona_id", personaId); if (error) return setEstado("Error: " + error.message, "err"); }
       else { const { error } = await sb.from("planificacion_personal").insert({ planificacion_id: planiId, persona_id: personaId, horas: 8 }); if (error) return setEstado("Error: " + error.message, "err"); }
       if (!planiPers[planiId]) { planiPers[planiId] = []; planiHoras[planiId] = {}; }
       if (estaba) { planiPers[planiId] = planiPers[planiId].filter(x => x !== personaId); delete planiHoras[planiId][personaId]; }
       else { planiPers[planiId].push(personaId); if(!planiHoras[planiId]) planiHoras[planiId]={}; planiHoras[planiId][personaId] = 8; }
       setEstado("\u2713 Guardado.", "ok"); renderPlani();
+
+      if (persona && persona.tipo === "Directo" && estaba) {
+        ultimoDirectoSacado[planiId] = { personaId, horas: horasPrevias, ts: Date.now() };
+        const pend = ultimoContratistaAgregado[planiId];
+        if (pend && (Date.now() - pend.ts) <= TRASLADO_TRIGGER_TTL_MS) await evaluarDisparadorTraslado(planiId, personaId, horasPrevias, pend.personaId);
+      } else if (persona && persona.tipo === "Contratista" && !estaba) {
+        ultimoContratistaAgregado[planiId] = { personaId, ts: Date.now() };
+        const pend = ultimoDirectoSacado[planiId];
+        if (pend && (Date.now() - pend.ts) <= TRASLADO_TRIGGER_TTL_MS) await evaluarDisparadorTraslado(planiId, pend.personaId, pend.horas, personaId);
+      }
+    }
+    // Calcula el monto (jornales futuros del directo en ese bloque \u00d7 su valor-hora vigente),
+    // pide confirmaci\u00f3n y, si se acepta, registra el traslado. "Futuro" = desde hoy inclusive
+    // (el pasado ya est\u00e1 congelado). No toca l\u00ednea base ni costo real.
+    async function evaluarDisparadorTraslado(bloqueId, personaDirectoId, horas, personaContratistaId) {
+      delete ultimoDirectoSacado[bloqueId]; delete ultimoContratistaAgregado[bloqueId];
+      const b = plani.find(x => x.id === bloqueId);
+      if (!b) return;
+      const dias = diasHabiles(b.fecha_desde, b.fecha_hasta).filter(f => f >= hoyISO());
+      if (!dias.length) return;
+      const horasFuturas = dias.length * (Number(horas) || 8);
+      const jornales = horasFuturas / 8;
+      const valorHora = costoHora(personaDirectoId, hoyISO());
+      const monto = horasFuturas * valorHora;
+      if (monto <= 0) return;
+      const proy = proyectos.find(p => p.id === b.proyecto_id);
+      const msg = "Se trasladar\u00edan " + fmtMTraslados(monto) + ", " + jornales.toFixed(1).replace(".", ",") + " jornal(es) de " + nombrePersona(personaDirectoId) + ".\n\nProyecto: " + (proy ? proy.nombre : "\u2014") + " \u00b7 Contratista: " + nombrePersona(personaContratistaId) + "\n\n\u00bfConfirm\u00e1s el traslado a Compras?";
+      if (!confirm(msg)) { setEstado("Traslado no registrado.", "cargando"); return; }
+      const { error } = await sb.from("traslados_compras").insert({
+        proyecto_id: b.proyecto_id, bloque_id: bloqueId,
+        persona_directo_id: personaDirectoId, persona_contratista_id: personaContratistaId,
+        jornales, horas_por_jornal: 8, valor_hora: valorHora, monto,
+        fecha_desde: dias[0], fecha_hasta: dias[dias.length - 1],
+        estado: "pendiente_aviso", creado_por: miEmail
+      });
+      if (error) return setEstado("Error al registrar el traslado: " + error.message, "err");
+      setEstado("\u2713 Traslado de " + fmtMTraslados(monto) + " registrado a Compras.", "ok");
     }
     // suma de horas de una persona en un día dado, entre las estaciones cuyo rango incluye ese día.
     // La supervisión vive en su propia tabla y corre en paralelo, así que no entra en esta suma.
