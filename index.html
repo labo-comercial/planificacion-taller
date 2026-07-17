@@ -3193,9 +3193,11 @@
       // Las filas de supervisión corren en paralelo: no se suman con el trabajo en estación.
       // Solo cuentan proyectos operativos y abiertos: cotizaciones, archivados y cerrados
       // no generan advertencia de sobreasignación (no consumen recursos reales).
+      // Tampoco los contratistas: es una denominación genérica, puede haber varias personas
+      // reales en simultáneo bajo la misma etiqueta, así que sumar sus horas no es un conflicto real.
       const proyOperAbierto = new Set(proyectosOperativos().filter(p=>p.estado!=="Cerrado").map(p=>p.id));
       const horasDia = {};
-      detalle.forEach(f => { if (f.ausente) return; if (f.estacion_real === SUP_MARK) return; if (!proyOperAbierto.has(f.proyecto_id)) return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
+      detalle.forEach(f => { if (f.ausente) return; if (f.estacion_real === SUP_MARK) return; if (!proyOperAbierto.has(f.proyecto_id)) return; if (!esDirecto(f.persona_real)) return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
       const exceso = (f) => !f.ausente && f.estacion_real !== SUP_MARK && horasDia[f.persona_real + "|" + f.fecha] > 8;
       const opcPersona = (sel) => personasHuella().map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
       const opcEst = (sel) => STKEYS.map(k => '<option value="'+k+'" '+(k===sel?'selected':'')+'>'+STATIONS[k].label+'</option>').join('');
@@ -3447,7 +3449,11 @@
     }
     // Revisa las filas futuras (de hoy en adelante) de una persona y detecta días con
     // solapamiento: 2+ tareas el mismo día O más de 8 horas. Supervisión NO cuenta.
+    // Un directo es una persona única; "Contratista" es una denominación genérica que puede
+    // representar a varias personas reales en simultáneo, así que no aplica este chequeo.
     function avisoSolapamiento(personaId){
+      const pChk = personas.find(x=>x.id===personaId);
+      if(pChk && pChk.tipo==="Contratista") return "";
       const hoy = hoyISO();
       const porDia = {};
       detalle.forEach(f=>{
