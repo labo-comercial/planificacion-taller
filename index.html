@@ -1858,9 +1858,19 @@
       const detalleTxt=hit.map(h=>"• "+h.estacion+" ("+h.proyecto+"): "+h.dias.map(dm).join(", ")).join("\n");
       return confirm("\u26a0 "+nom+" tiene tareas planificadas en ese rango:\n\n"+detalleTxt+"\n\nDeber\u00edas desafectarla de esas estaciones en Planificaci\u00f3n General antes de cargar la ausencia.\n\n\u00bfCargar la ausencia igual de todos modos?");
     }
-    // En blanco a propósito (sin persona ni fechas): así el aviso de "tareas planificadas en
-    // ese rango" no dispara al recién crear la fila, y elegís la persona vos sin que te frene.
-    async function agregarD(){if(!personas.length){setEstado("Cargá personal primero.","err");return;}const{error}=await sb.from("no_disponibilidad").insert({persona_id:null,tipo:"Vacaciones",desde:null,hasta:null});if(error)return setEstado("Error: "+error.message,"err");cargar();}
+    // "desde"/"hasta" son NOT NULL en la tabla, así que no pueden venir vacíos de verdad.
+    // En vez de eso, arrancan con un rango invertido (hasta antes que desde) a propósito:
+    // es un rango vacío, entonces avisarSiPlanificado nunca encuentra choques mientras elegís
+    // la persona y las fechas reales. En cuanto cargues un "hasta" válido (>= desde), el aviso
+    // vuelve a funcionar normal.
+    async function agregarD(){
+      if(!personas.length){setEstado("Cargá personal primero.","err");return;}
+      const hoy = hoyISO();
+      const ayer = fechaStr(new Date(Date.now() - 86400000));
+      const {error} = await sb.from("no_disponibilidad").insert({persona_id:null,tipo:"Vacaciones",desde:hoy,hasta:ayer});
+      if(error) return setEstado("Error: "+error.message,"err");
+      cargar();
+    }
     async function editarD(id,c,v){
       const d=dispo.find(x=>x.id===id);
       const sim = d ? { persona_id:d.persona_id, desde:d.desde, hasta:d.hasta } : {};
