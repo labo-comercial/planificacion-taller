@@ -2260,7 +2260,16 @@
       registrarLog("correr_bloque", "planificacion", n + " estación(es), " + dias + " día(s) hábil(es), modo " + correrModo);
       setEstado("✓ Corrimiento aplicado a " + n + " estación(es).", "ok");
       correrAbierto = false; correrPreview = null;
-      renderPlani();
+      // El corrimiento solo cambia planificacion (el plan). Gantt, Histograma, Detalle diario,
+      // Parte diario, Dashboard e Informe se calculan de detalle_diario, que no se actualiza
+      // solo — hace falta regenerarlo. Se lo ofrecemos ahí mismo, reusando generarDetalle() con
+      // sus propias validaciones (cobertura completa, aviso si pisa desvíos ya cargados).
+      if (confirm("Corrimiento aplicado a " + n + " estación(es).\n\nGantt, Histograma, Detalle diario y demás vistas no se actualizan solas — necesitan que se regenere el detalle diario para reflejar este cambio.\n\n¿Generar el detalle diario ahora?")) {
+        await generarDetalle();
+        if (tab === "plani") renderPlani(); // generarDetalle no llegó a completarse (canceló o no pasó validación)
+      } else {
+        renderPlani();
+      }
     }
     function renderPlani() {
       if (correrAbierto) return renderCorrerPanel();
