@@ -1823,7 +1823,7 @@
 
     /* ---- DISPONIBILIDAD ---- */
     function renderDispo() {
-      const oP=(s)=>personasHuella().map(p=>'<option value="'+p.id+'" '+(p.id===s?'selected':'')+'>'+p.nombre+'</option>').join('');
+      const oP=(s)=>'<option value=""'+(!s?' selected':'')+'>Elegí una persona…</option>'+personasHuella().map(p=>'<option value="'+p.id+'" '+(p.id===s?'selected':'')+'>'+p.nombre+'</option>').join('');
       const oT=(s)=>TIPOS.map(t=>'<option '+(t===s?'selected':'')+'>'+t+'</option>').join('');
       let h='<p style="font-size:13px;color:#888780;margin-top:0">Períodos en que una persona no está disponible.</p><table><thead><tr><th>Persona</th><th>Tipo</th><th>Desde</th><th>Hasta</th><th></th></tr></thead><tbody>';
       if(!dispo.length) h+='<tr><td colspan="5" style="color:#A8A69E;padding:14px">Sin períodos cargados.</td></tr>';
@@ -1858,7 +1858,9 @@
       const detalleTxt=hit.map(h=>"• "+h.estacion+" ("+h.proyecto+"): "+h.dias.map(dm).join(", ")).join("\n");
       return confirm("\u26a0 "+nom+" tiene tareas planificadas en ese rango:\n\n"+detalleTxt+"\n\nDeber\u00edas desafectarla de esas estaciones en Planificaci\u00f3n General antes de cargar la ausencia.\n\n\u00bfCargar la ausencia igual de todos modos?");
     }
-    async function agregarD(){if(!personas.length){setEstado("Cargá personal primero.","err");return;}const t=fechaStr(new Date());const{error}=await sb.from("no_disponibilidad").insert({persona_id:personas[0].id,tipo:"Vacaciones",desde:t,hasta:t});if(error)return setEstado("Error: "+error.message,"err");cargar();}
+    // En blanco a propósito (sin persona ni fechas): así el aviso de "tareas planificadas en
+    // ese rango" no dispara al recién crear la fila, y elegís la persona vos sin que te frene.
+    async function agregarD(){if(!personas.length){setEstado("Cargá personal primero.","err");return;}const{error}=await sb.from("no_disponibilidad").insert({persona_id:null,tipo:"Vacaciones",desde:null,hasta:null});if(error)return setEstado("Error: "+error.message,"err");cargar();}
     async function editarD(id,c,v){
       const d=dispo.find(x=>x.id===id);
       const sim = d ? { persona_id:d.persona_id, desde:d.desde, hasta:d.hasta } : {};
