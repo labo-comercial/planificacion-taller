@@ -3907,9 +3907,9 @@
           + '<div style="font-size:10.5px;color:#A8A69E;margin-top:4px">Cómo se calcula: días-proyecto planificados desde el inicio hasta hoy que tienen al menos una fila cargada en el detalle (trabajada o ausente) ÷ total de días-proyecto planificados hasta hoy.</div>'
           + '</div>';
       }
+      const fmtAR=(n)=>'$'+Math.round(n).toLocaleString("es-AR");
       if(vistaDash==='pm'){
         const usoPct = presup ? (real/presup*100) : 0;
-        const fmtAR=(n)=>'$'+Math.round(n).toLocaleString("es-AR");
         h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
           + card("Costo real acumulado",fmtAR(real),costoImprodD>0?("incluye "+fmtAR(costoImprodD)+" improductivo"):null,null,"Suma de (horas normales × valor-hora del mes) + (horas extra × valor-hora × 1,5 lun-sáb ó 2 dom/feriado) de las jornadas trabajadas, más las ausencias pagadas (personal mensualizado: se paga la jornada planificada aunque no se trabaje).")
           + card("Uso del presupuesto MO", presup?usoPct.toFixed(0)+"%":"s/presup", fmtAR(real)+" de "+fmtAR(presup), usoPct>100?'#A32D2D':usoPct>85?'#BA7517':'#3B6D11', "Costo real acumulado ÷ presupuesto de mano de obra cargado (La Huella + Montaje). Verde <85%, ámbar 85–100%, rojo >100%.")
