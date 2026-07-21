@@ -2153,6 +2153,17 @@
     // Modo "estacion": la ancla usa "hoy" para decidir si se corre completa o solo se estira;
     // el resto del proyecto usa el FIN ORIGINAL de la ancla como corte de cascada (solo empuja
     // lo que todavía no había arrancado cuando la ancla terminaba; no toca lo que ya estaba en curso en paralelo).
+    // La supervisión vive en su propia tabla, en paralelo a las estaciones (no depende de
+    // ninguna en particular), así que siempre se evalúa contra "hoy" — igual que la ancla,
+    // nunca con el corte de cascada de otro bloque.
+    function agregarSupervisionDeProy(proyId, dias, resultado) {
+      supervisiones.forEach(s => {
+        const ids = (s.proyectos || "").split(",").map(x => x.trim()).filter(Boolean);
+        if (!ids.includes(proyId)) return;
+        const r = corrimientoDeBloque(s, hoyISO(), dias);
+        if (r) resultado.push(Object.assign({ item: s, tabla: "supervision" }, r));
+      });
+    }
     function calcularCorrida() {
       const dias = Number(correrDias) || 0;
       if (!dias) return [];
@@ -2162,20 +2173,22 @@
         correrProyectosSel.forEach(proyId => {
           plani.filter(b => b.proyecto_id === proyId).forEach(b => {
             const r = corrimientoDeBloque(b, corte, dias);
-            if (r) resultado.push(Object.assign({ bloque: b }, r));
+            if (r) resultado.push(Object.assign({ item: b, tabla: "planificacion" }, r));
           });
+          agregarSupervisionDeProy(proyId, dias, resultado);
         });
       } else {
         const ancla = plani.find(b => b.id === correrBloqueAncla);
         if (!ancla || !ancla.fecha_hasta) return [];
         const rAncla = corrimientoDeBloque(ancla, hoyISO(), dias);
-        if (rAncla) resultado.push(Object.assign({ bloque: ancla }, rAncla));
+        if (rAncla) resultado.push(Object.assign({ item: ancla, tabla: "planificacion" }, rAncla));
         const corteCascada = ancla.fecha_hasta; // fin ORIGINAL de la ancla, antes de correrla
         plani.filter(b => b.proyecto_id === ancla.proyecto_id && b.id !== ancla.id).forEach(b => {
           if (!b.fecha_desde || b.fecha_desde < corteCascada) return; // solo cascada a lo que no había arrancado al corte
           const r = corrimientoDeBloque(b, corteCascada, dias);
-          if (r) resultado.push(Object.assign({ bloque: b }, r));
+          if (r) resultado.push(Object.assign({ item: b, tabla: "planificacion" }, r));
         });
+        agregarSupervisionDeProy(ancla.proyecto_id, dias, resultado);
       }
       return resultado;
     }
@@ -2221,17 +2234,20 @@
             + ['Proyecto', 'Estación', 'Fechas actuales', 'Fechas nuevas'].map(c => '<th style="text-align:left;padding:8px 10px;border-bottom:1px solid #EEECE4;font-size:10.5px;color:#A8A69E;text-transform:uppercase;font-weight:600">' + c + '</th>').join('')
             + '</tr></thead><tbody>';
           correrPreview.forEach(r => {
-            const st = STATIONS[r.bloque.estacion];
-            const pr = proyectos.find(p => p.id === r.bloque.proyecto_id);
+            const esSup = r.tabla === 'supervision';
+            const st = esSup ? null : STATIONS[r.item.estacion];
+            const pr = esSup ? proyectos.find(p => (r.item.proyectos||"").split(",").map(x=>x.trim()).includes(p.id)) : proyectos.find(p => p.id === r.item.proyecto_id);
+            const etiqueta = esSup ? (SUP_LABEL + ' — ' + nombrePersona(r.item.supervisor_id)) : (st ? st.label : r.item.estacion);
             h += '<tr style="border-bottom:1px solid #F4F2EC">'
-              + '<td style="padding:8px 10px">' + (pr ? pr.nombre : '—') + '</td>'
-              + '<td style="padding:8px 10px">' + (st ? st.label : r.bloque.estacion) + '</td>'
+              + '<td style="padding:8px 10px">' + (pr ? pr.nombre : (esSup ? '(varios proyectos)' : '—')) + '</td>'
+              + '<td style="padding:8px 10px">' + etiqueta + '</td>'
               + '<td style="padding:8px 10px;color:#A8A69E">' + dm(r.fecha_desde_actual) + ' – ' + dm(r.fecha_hasta_actual) + '</td>'
               + '<td style="padding:8px 10px;font-weight:600">' + dm(r.fecha_desde_nueva) + ' – ' + dm(r.fecha_hasta_nueva) + '</td>'
               + '</tr>';
           });
           h += '</tbody></table>';
-          h += '<button class="btn btn-ok" style="margin-top:14px" onclick="aplicarCorrida()">Confirmar y aplicar a ' + correrPreview.length + ' estación(es)</button>';
+          h += '<p style="font-size:11px;color:#A8A69E;margin-top:6px">Incluye supervisión: si abarca varios proyectos, se corre igual — revisá que no te desajuste algún otro proyecto que comparta esa supervisión.</p>';
+          h += '<button class="btn btn-ok" style="margin-top:14px" onclick="aplicarCorrida()">Confirmar y aplicar a ' + correrPreview.length + ' fila(s)</button>';
           h += '<p style="font-size:11.5px;color:#A8A69E;margin-top:8px">Escribe las fechas nuevas directo en Planificación. No hay un botón de "deshacer" automático para esta acción — revisá bien la vista previa antes de confirmar.</p>';
         }
       }
@@ -2244,21 +2260,22 @@
       if (!correrPreview || !correrPreview.length) return;
       const n = correrPreview.length;
       const dias = Number(correrDias) || 0;
-      if (!confirm("¿Aplicar este corrimiento a " + n + " estación(es)? (" + dias + " día(s) hábil(es))\n\nEsto escribe las fechas nuevas directo en Planificación. No hay un botón de \"deshacer\" automático para esta acción — revisá bien la vista previa antes de confirmar.\n\n¿Confirmás?")) return;
+      if (!confirm("¿Aplicar este corrimiento a " + n + " fila(s) (incluye supervisión)? (" + dias + " día(s) hábil(es))\n\nEsto escribe las fechas nuevas directo en Planificación. No hay un botón de \"deshacer\" automático para esta acción — revisá bien la vista previa antes de confirmar.\n\n¿Confirmás?")) return;
       setEstado("Aplicando corrimiento…", "cargando");
       let ok = 0;
       for (const r of correrPreview) {
-        const { error } = await sb.from("planificacion").update({ fecha_desde: r.fecha_desde_nueva, fecha_hasta: r.fecha_hasta_nueva }).eq("id", r.bloque.id);
+        const { error } = await sb.from(r.tabla).update({ fecha_desde: r.fecha_desde_nueva, fecha_hasta: r.fecha_hasta_nueva }).eq("id", r.item.id);
         if (error) {
-          setEstado("Se aplicaron " + ok + " de " + n + ". Error en \"" + (STATIONS[r.bloque.estacion] ? STATIONS[r.bloque.estacion].label : r.bloque.estacion) + "\": " + error.message, "err");
+          const etiqueta = r.tabla === 'supervision' ? SUP_LABEL + ' de ' + nombrePersona(r.item.supervisor_id) : (STATIONS[r.item.estacion] ? STATIONS[r.item.estacion].label : r.item.estacion);
+          setEstado("Se aplicaron " + ok + " de " + n + ". Error en \"" + etiqueta + "\": " + error.message, "err");
           renderPlani();
           return;
         }
-        r.bloque.fecha_desde = r.fecha_desde_nueva; r.bloque.fecha_hasta = r.fecha_hasta_nueva;
+        r.item.fecha_desde = r.fecha_desde_nueva; r.item.fecha_hasta = r.fecha_hasta_nueva;
         ok++;
       }
-      registrarLog("correr_bloque", "planificacion", n + " estación(es), " + dias + " día(s) hábil(es), modo " + correrModo);
-      setEstado("✓ Corrimiento aplicado a " + n + " estación(es).", "ok");
+      registrarLog("correr_bloque", "planificacion", n + " fila(s), " + dias + " día(s) hábil(es), modo " + correrModo);
+      setEstado("✓ Corrimiento aplicado a " + n + " fila(s).", "ok");
       correrAbierto = false; correrPreview = null;
       // El corrimiento solo cambia planificacion (el plan). Gantt, Histograma, Detalle diario,
       // Parte diario, Dashboard e Informe se calculan de detalle_diario, que no se actualiza
