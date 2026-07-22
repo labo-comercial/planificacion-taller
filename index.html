@@ -302,6 +302,9 @@
       rebuilding:    { label:"Rebuilding",    color:"#993556", bg:"#FBEAF0" }
     };
     const TRAILER_EST_KEYS = Object.keys(TRAILER_ESTADOS);
+    // Contenedores reservados para uso interno: quedan en el padrón pero NO computan
+    // en ningún indicador de rental (parque total, utilización, desglose por estado, etc.).
+    function esUsoInterno(t){ return !!(t && t.uso_interno); }
 
     function setEstado(m, c) { estado.textContent = m; estado.className = "estado " + c; }
     function fechaStr(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
@@ -1106,12 +1109,15 @@
     function renderDashNqn(){
       const hoy = hoyISO();
       const manana = sumarDiasHabiles(hoy, 1);
-      const total = trailers.length;
+      // Parque de rental = todos los trailers menos los de uso interno.
+      const parque = trailers.filter(t=> !esUsoInterno(t));
+      const internos = trailers.filter(esUsoInterno);
+      const total = parque.length;
       const conteo = {}; TRAILER_EST_KEYS.forEach(k=> conteo[k]=0);
-      trailers.forEach(t=>{ if(conteo[t.estado]!=null) conteo[t.estado]++; });
+      parque.forEach(t=>{ if(conteo[t.estado]!=null) conteo[t.estado]++; });
       const alquilados = conteo.alquilado||0;
       const utilPct = total ? Math.round(alquilados*100/total) : 0;
-      const fueraServicio = trailers.filter(t=> t.estado==="mantenimiento" || t.estado==="rebuilding");
+      const fueraServicio = parque.filter(t=> t.estado==="mantenimiento" || t.estado==="rebuilding");
 
       // Mantenimientos: en curso hoy / próximos 7 días naturales
       const en7 = (()=>{ let c=0; const lim=new Date(hoy+"T12:00:00").getTime()+7*86400000; mantTareas.forEach(t=>{ if(!t.fecha_desde) return; const ini=new Date(t.fecha_desde+"T12:00:00").getTime(); if(ini> new Date(hoy+"T12:00:00").getTime() && ini<=lim) c++; }); return c; })();
@@ -1128,7 +1134,7 @@
       const hace30 = fechaStr(new Date(new Date(hoy+"T12:00:00").getTime()-30*86400000));
       const conParteReciente = new Set();
       Object.keys(mantParte).forEach(k=>{ const [tid,f]=k.split("|"); if(f>=hace30){ const mt=mantTareas.find(x=>x.id===tid); if(mt&&mt.trailer_id) conParteReciente.add(mt.trailer_id); } });
-      const sinMantReciente = trailers.filter(t=> !conParteReciente.has(t.id));
+      const sinMantReciente = parque.filter(t=> !conParteReciente.has(t.id));
 
       const card = (num,label,color,extra)=> '<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 18px">'
         + '<div style="font-size:30px;font-weight:800;color:'+(color||'#2C2C2A')+';line-height:1">'+num+'</div>'
@@ -1140,7 +1146,7 @@
 
       // Fila 1 — KPIs principales
       h += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">';
-      h += card(total, "Trailers en el parque");
+      h += card(total, "Trailers en el parque", null, internos.length?(internos.length+" de uso interno, no computan"):"");
       h += card(utilPct+"%", "Utilización (alquilados)", utilPct>=70?'#3B6D11':utilPct>=40?'#854F0B':'#A32D2D', alquilados+" de "+total+" alquilados");
       h += card(enCurso.length, "Mantenimientos en curso hoy", enCurso.length?'#185FA5':'#888780', en7?("+"+en7+" en los próximos 7 días"):"");
       h += card(bajos.length, "Ítems bajo mínimo", bajos.length?'#A32D2D':'#3B6D11');
@@ -1211,9 +1217,12 @@
     function setTrailerFiltro(k){ trailerEstadoFiltro = (trailerEstadoFiltro===k ? "" : k); renderTrailers(); }
     function renderTrailers() {
       // Resumen por estado — indicadores grandes y clickeables (filtran la tabla de abajo)
+      // Los contenedores de uso interno no computan en ningún indicador.
+      const parque = trailers.filter(t=> !esUsoInterno(t));
+      const internos = trailers.filter(esUsoInterno);
       const conteo = {}; TRAILER_EST_KEYS.forEach(k=> conteo[k]=0);
-      trailers.forEach(t=>{ if(conteo[t.estado]!=null) conteo[t.estado]++; });
-      const total = trailers.length;
+      parque.forEach(t=>{ if(conteo[t.estado]!=null) conteo[t.estado]++; });
+      const total = parque.length;
       let resumen = '<div style="display:flex;gap:12px;flex-wrap:wrap;margin:0 0 18px">';
       // Tarjeta "Total" (deselecciona el filtro)
       const totalSel = trailerEstadoFiltro==="";
@@ -1226,10 +1235,18 @@
           + '<div style="font-size:34px;font-weight:800;color:'+e.color+';line-height:1">'+conteo[k]+'</div>'
           + '<div style="font-size:13px;color:'+e.color+';margin-top:4px">'+e.label+' <span style="opacity:.7;font-size:11px">('+pct+'%)</span>'+(sel?' <span style="font-weight:700">●</span>':'')+'</div></div>';
       });
+      // Chip aparte para uso interno: no es un indicador de rental, solo da acceso al padrón.
+      if(internos.length){ const selInt=trailerEstadoFiltro==="__interno";
+        resumen += '<div onclick="setTrailerFiltro(\'__interno\')" title="Reservados para uso interno (no computan)" style="cursor:pointer;flex:1;min-width:130px;background:#EEEDE6;border:2px solid '+(selInt?'#55544F':'transparent')+';border-radius:14px;padding:14px 18px;transition:border-color .15s">'
+          + '<div style="font-size:34px;font-weight:800;color:#55544F;line-height:1">'+internos.length+'</div>'
+          + '<div style="font-size:13px;color:#55544F;margin-top:4px">Uso interno <span style="opacity:.7;font-size:11px">(no computa)</span>'+(selInt?' <span style="font-weight:700">●</span>':'')+'</div></div>';
+      }
       resumen += '</div>';
       if(trailerEstadoFiltro) resumen += '<div style="margin:0 0 10px"><button class="btn btn-sec btn-sm" onclick="setTrailerFiltro(\''+trailerEstadoFiltro+'\')">✕ Quitar filtro · ver todos</button></div>';
 
-      const filtrados = trailerEstadoFiltro ? trailers.filter(t=>t.estado===trailerEstadoFiltro) : trailers;
+      const filtrados = trailerEstadoFiltro==="__interno" ? internos
+        : trailerEstadoFiltro ? parque.filter(t=>t.estado===trailerEstadoFiltro)
+        : trailers;
 
       let h = '<div class="no-print" style="display:flex;justify-content:flex-end;margin-bottom:10px">'+botonesExport("trailers-print","trailers")+'</div>';
       h += '<div id="trailers-print">' + resumen + '<table><thead><tr><th>Código (contenedor)</th><th>IF</th><th>Tipo</th><th>Med</th><th>Mod</th><th>Estado</th><th>Ubicación</th><th>Cliente</th><th>Obs.</th><th></th></tr></thead><tbody>';
@@ -1241,8 +1258,9 @@
           + TRAILER_EST_KEYS.map(k=>'<option value="'+k+'" '+(k===t.estado?'selected':'')+'>'+TRAILER_ESTADOS[k].label+'</option>').join('') + '</select>';
         const opac = alquilado ? '' : 'opacity:.55';
         const ro = (v,extra)=>'<span style="font-size:12.5px;color:#3A3A38;'+(extra||'')+'">'+((v==null||v==='')?'<span style="color:#C9C7BE">—</span>':String(v).replace(/</g,'&lt;'))+'</span>';
+        const badgeInterno = esUsoInterno(t) ? ' <span title="Reservado para uso interno · no computa en indicadores" style="background:#EEEDE6;color:#55544F;padding:1px 5px;border-radius:4px;font-size:9.5px;font-weight:700;white-space:nowrap;vertical-align:middle">uso interno</span>' : '';
         h += '<tr>'
-          + '<td style="width:130px">'+ro(t.codigo, "font-weight:600")+'</td>'
+          + '<td style="width:130px">'+ro(t.codigo, "font-weight:600")+badgeInterno+'</td>'
           + '<td style="width:100px">'+ro(t.if_codigo)+'</td>'
           + '<td style="width:120px">'+ro(t.tipo)+'</td>'
           + '<td style="width:50px;text-align:center">'+ro(t.medida)+'</td>'
